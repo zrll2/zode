@@ -1,1 +1,1 @@
-Follow your coding agent from your phone. Needs the free Zode relay on a Mac.
+Phone companion for ZCode. Connects to ZCode on your Mac through a relay.
