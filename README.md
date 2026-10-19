@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.svg" width="88" alt="Zode logo">
+  <img src="assets/logo.png" width="88" alt="Zode logo">
 </p>
 
 <h1 align="center">Zode</h1>
