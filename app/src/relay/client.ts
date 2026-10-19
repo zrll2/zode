@@ -6,6 +6,7 @@ import type {
   RelayServer,
   RpcRequestFrame,
 } from "./protocol";
+import { nextDelay } from "./backoff";
 
 export type RelayStatus = "connecting" | "ready" | "reconnecting" | "closed";
 
@@ -38,7 +39,6 @@ interface BufferedEvent {
   seq: number;
 }
 
-const MAX_BACKOFF_MS = 30_000;
 const AUTH_TIMEOUT_MS = 10_000;
 const CONNECT_TIMEOUT_MS = 30_000;
 const EVENT_BUFFER_LIMIT = 500;
@@ -47,6 +47,9 @@ export class RelayClient {
   status: RelayStatus = "closed";
   authFailed = false;
   servers: RelayServer[] = [];
+  // Epoch time of the next automatic reconnect while status is
+  // "reconnecting", else null. retryNow() skips the wait.
+  retryAt: number | null = null;
 
   private readonly url: string;
   private readonly token: string;
@@ -135,12 +138,24 @@ export class RelayClient {
     this.send({ type: "servers" });
   }
 
+  // User-triggered immediate reconnect: clears the pending timer and opens a
+  // socket now. Attempt counter and backoff schedule stay untouched.
+  retryNow() {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.retryAt = null;
+    if (!this.stopped && !this.socket) this.openSocket();
+  }
+
   close(): void {
     this.stopped = true;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    this.retryAt = null;
     if (this.connectGuard) {
       clearTimeout(this.connectGuard);
       this.connectGuard = null;
@@ -203,11 +218,13 @@ export class RelayClient {
       this.setStatus("closed");
       return;
     }
-    this.setStatus("reconnecting");
-    const delay = Math.min(1000 * 2 ** this.attempts, MAX_BACKOFF_MS);
+    const delay = nextDelay(this.attempts);
     this.attempts += 1;
+    this.retryAt = Date.now() + delay;
+    this.setStatus("reconnecting");
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
+      this.retryAt = null;
       if (!this.stopped) this.openSocket();
     }, delay);
   }

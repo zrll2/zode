@@ -1,0 +1,221 @@
+<title>Zode Home Redesign</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,500&family=Nunito:wght@800&display=swap">
+<style>
+/* Layout: two phones (light, dark) with one shared live state, notes beside them. Zode tokens: paper, ink, ZCode black accent. */
+:root{--bg:#F1EFE8;--fg:#141413;--mute:#6F6D66;--line:#DDD9CE;--card:#FFFFFF;--serif:'Source Serif 4',Georgia,'Songti SC',serif;--sans:-apple-system,BlinkMacSystemFont,'Helvetica Neue','PingFang SC',sans-serif;--mono:ui-monospace,Menlo,monospace}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#161514;--fg:#F5F4ED;--mute:#A8A59B;--line:#34322F;--card:#232220;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#161514;--fg:#F5F4ED;--mute:#A8A59B;--line:#34322F;--card:#232220;color-scheme:dark}
+body{background:var(--bg);color:var(--fg);font-family:var(--sans);padding-block:28px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));line-height:1.55;font-size:15px}
+main{max-width:1120px;margin:0 auto;display:flex;flex-direction:column;gap:28px}
+h1{font-family:var(--serif);font-weight:500;font-size:32px;margin:0;text-wrap:balance}
+h2{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--mute);margin:0 0 8px;font-weight:600}
+p{margin:0}
+.stage{display:flex;flex-wrap:wrap;gap:28px;justify-content:center;align-items:flex-start}
+.notes{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:18px}
+.note{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px 18px;min-width:0}
+.note b{display:block;margin-bottom:4px}
+.note span{color:var(--mute);font-size:14px}
+
+/* ---- the phone ---- */
+.phone{--p-bg:#FAF9F5;--p-surface:#FFFFFF;--p-muted:#F0EEE6;--p-border:#E8E5DA;--p-text:#141413;--p-sub:#6F6D66;--p-accent:#141413;--p-on:#FAF9F5;--p-ok:#4C8B5F;--p-warn:#B7791F;--p-danger:#B3261E;
+  width:372px;max-width:100%;height:780px;border-radius:44px;background:var(--p-bg);color:var(--p-text);border:10px solid #1C1C1B;position:relative;overflow:hidden;display:flex;flex-direction:column;font-family:var(--sans)}
+.phone[data-mode="dark"]{--p-bg:#1F1E1D;--p-surface:#2B2A28;--p-muted:#34332F;--p-border:#3A3935;--p-text:#F5F4ED;--p-sub:#A8A59B;--p-accent:#F5F4ED;--p-on:#1F1E1D;--p-ok:#7FC495;--p-warn:#E3B341;--p-danger:#F2958D;border-color:#0E0E0D}
+.scroll{flex:1;overflow-y:auto;padding:46px 18px 120px;scrollbar-width:none}
+.scroll::-webkit-scrollbar{display:none}
+.statusbar{position:absolute;top:0;left:0;right:0;height:40px;display:flex;justify-content:space-between;align-items:center;padding:0 26px;font-size:13px;font-weight:600;z-index:3;background:linear-gradient(var(--p-bg),transparent)}
+.island{position:absolute;top:8px;left:50%;transform:translateX(-50%);width:92px;height:26px;border-radius:14px;background:#000;z-index:4}
+.top{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+.title{display:flex;align-items:center;gap:9px;font-family:'Nunito','Varela Round',var(--sans);font-weight:800;font-size:29px;line-height:36px;letter-spacing:-.01em}
+.title svg{width:34px;height:34px;flex:none}
+.mac{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--p-sub);border:1px solid var(--p-border);border-radius:999px;padding:4px 10px;background:var(--p-surface)}
+.mac i{width:6px;height:6px;border-radius:50%;background:var(--p-ok)}
+.sec{font-size:13px;font-weight:600;color:var(--p-sub);margin:18px 0 8px;display:flex;justify-content:space-between}
+.sec em{font-style:normal;font-weight:500}
+.mono{width:34px;height:34px;border-radius:11px;display:grid;place-items:center;font-weight:700;font-size:14px;color:#fff;flex:none}
+.card{background:var(--p-surface);border:1px solid var(--p-border);border-radius:20px;padding:14px;margin-bottom:10px;transition:opacity .25s,transform .25s,max-height .3s;max-height:90px;overflow:hidden}
+.need{display:flex;align-items:center;gap:14px;padding:10px 10px 10px 16px;border-radius:18px;margin-bottom:8px}
+.need .body{flex:1;min-width:0}
+.need .t{font-weight:600;font-size:15px;line-height:20px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center;gap:6px}
+.need .m{font-size:12.5px;color:var(--p-sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sd{width:7px;height:7px;border-radius:50%;background:var(--p-warn);flex:none}.sd.er{background:var(--p-danger)}
+.ic{width:36px;height:36px;border-radius:50%;border:1px solid var(--p-border);background:transparent;color:var(--p-text);font:inherit;font-size:16px;cursor:pointer;flex:none;display:grid;place-items:center;transition:transform .15s}
+.ic:active{transform:scale(.96)}.ic.fill{background:var(--p-accent);color:var(--p-on);border-color:var(--p-accent)}
+.ic.txt{width:auto;padding:0 14px;border-radius:999px;font-size:14px;font-weight:600}
+.ic:focus-visible{outline:2px solid var(--p-accent);outline-offset:2px}
+.card.gone{opacity:0;transform:scale(.97);max-height:0;padding-block:0;margin-bottom:0;border-width:0}
+.card .hd{display:flex;gap:10px;align-items:center}
+.card .t{font-weight:600;font-size:16px;line-height:21px}
+.card .m{font-size:13px;color:var(--p-sub)}
+.ask{margin:10px 0 12px;background:var(--p-muted);border-radius:12px;padding:9px 11px;font-size:13.5px}
+.ask code{display:block;font-family:var(--mono);font-size:12.5px;color:var(--p-sub);margin-top:2px;overflow-wrap:anywhere}
+.btns{display:flex;gap:8px}
+.btn{flex:1;height:40px;border-radius:999px;font:inherit;font-weight:600;font-size:15px;border:1px solid var(--p-border);background:transparent;color:var(--p-text);cursor:pointer;transition:transform .15s}
+.btn:active{transform:scale(.98)}
+.btn.fill{background:var(--p-accent);color:var(--p-on);border-color:var(--p-accent)}
+.btn:focus-visible,.chip:focus-visible{outline:2px solid var(--p-accent);outline-offset:2px}
+.warnbar{height:3px;border-radius:2px;background:var(--p-warn);width:34px;margin-bottom:10px}
+.errbar{background:var(--p-danger)}
+.live .act{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:13.5px;color:var(--p-sub);min-height:22px}
+.dots{display:inline-flex;gap:3.5px}
+.dots s{width:3px;height:3px;border-radius:50%;background:var(--p-sub);animation:w 1.9s infinite cubic-bezier(.4,0,.2,1);text-decoration:none}
+.dots s:nth-child(2){animation-delay:.15s}.dots s:nth-child(3){animation-delay:.3s}
+@keyframes w{0%,60%,100%{opacity:.3}30%{opacity:1}}
+.sweep{height:3px;border-radius:2px;background:var(--p-muted);margin-top:10px;overflow:hidden;position:relative}
+.sweep:after{content:"";position:absolute;inset:0;width:38%;background:var(--p-accent);opacity:.85;border-radius:2px;animation:s 1.8s infinite ease-in-out}
+@keyframes s{0%{transform:translateX(-100%)}100%{transform:translateX(270%)}}
+.pulse{width:7px;height:7px;border-radius:50%;background:var(--p-accent);animation:p 1.2s infinite}
+@keyframes p{0%,100%{opacity:1}50%{opacity:.3}}
+.live .el{margin-left:auto;font-variant-numeric:tabular-nums;font-size:12.5px;color:var(--p-sub)}
+.chips{display:flex;gap:8px;overflow-x:auto;margin:6px -18px 6px;padding:0 18px;scrollbar-width:none}
+.chips::-webkit-scrollbar{display:none}
+.chip{flex:none;border:1px solid var(--p-border);background:transparent;color:var(--p-text);border-radius:999px;padding:6px 13px;font:inherit;font-size:13.5px;cursor:pointer;display:flex;align-items:center;gap:6px}
+.chip.on{background:var(--p-accent);color:var(--p-on);border-color:var(--p-accent)}
+.chip i{width:8px;height:8px;border-radius:3px}
+.row{display:flex;gap:12px;padding:12px 0;border-top:1px solid var(--p-border)}
+.row .body{flex:1;min-width:0}
+.row .t{font-weight:500;font-size:16px;line-height:21px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .pv{font-size:13.5px;color:var(--p-sub);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;margin-top:1px}
+.row .meta{display:flex;gap:8px;align-items:center;margin-top:5px;font-size:12px;color:var(--p-sub)}
+.diff{font-family:var(--mono);font-size:11.5px;background:var(--p-muted);border-radius:6px;padding:1px 6px}
+.diff b{font-weight:500;color:var(--p-ok)}.diff u{text-decoration:none;color:var(--p-danger)}
+.tick{width:18px;height:18px;border-radius:50%;border:1.5px solid var(--p-border);display:grid;place-items:center;flex:none;margin-top:2px;font-size:11px;color:var(--p-sub)}
+.compose{position:absolute;left:12px;right:12px;bottom:14px;background:var(--p-surface);border:1px solid var(--p-border);border-radius:26px;padding:8px 8px 8px 14px;z-index:5;box-shadow:0 8px 24px rgba(0,0,0,.08)}
+.compose .opts{display:flex;gap:6px;margin-bottom:5px}
+.pillx{font-size:12px;color:var(--p-sub);background:var(--p-muted);border-radius:999px;padding:2px 9px;display:flex;align-items:center;gap:5px}
+.pillx i{width:7px;height:7px;border-radius:2px}
+.compose .in{display:flex;align-items:center;gap:8px}
+.compose input{flex:1;border:0;outline:0;background:transparent;color:var(--p-text);font:inherit;font-size:15.5px;min-width:0;padding:6px 0}
+.compose input::placeholder{color:var(--p-sub)}
+.send{width:36px;height:36px;border-radius:50%;background:var(--p-accent);color:var(--p-on);border:0;display:grid;place-items:center;font-size:17px;cursor:pointer;flex:none}
+.toast{position:absolute;left:50%;bottom:112px;transform:translate(-50%,10px);background:var(--p-accent);color:var(--p-on);font-size:13px;padding:7px 14px;border-radius:999px;opacity:0;transition:.25s;z-index:6;white-space:nowrap}
+.toast.show{opacity:1;transform:translate(-50%,0)}
+.empty{font-family:var(--serif);font-size:20px;text-align:center;padding:26px 0 10px;color:var(--p-sub)}
+
+.hr{display:flex;align-items:center;gap:8px}
+.dots3{width:32px;height:32px;border-radius:50%;border:0;background:var(--p-muted);color:var(--p-text);font-size:18px;line-height:1;cursor:pointer;display:grid;place-items:center}
+.menu{position:absolute;right:16px;top:86px;z-index:7;background:var(--p-surface);border-radius:16px;padding:6px;width:250px;box-shadow:0 12px 32px rgba(0,0,0,.22)}
+.mi{width:100%;display:flex;justify-content:space-between;align-items:center;border:0;background:transparent;color:var(--p-text);font:inherit;font-size:15px;padding:10px 10px;border-radius:10px;cursor:pointer;text-align:left}
+.mi:hover{background:var(--p-muted)}.mi.dng{color:var(--p-danger)}
+.mh{font-size:12px;color:var(--p-sub);padding:0 10px 8px;margin-top:-4px}
+.sw{width:38px;height:22px;border-radius:999px;background:var(--p-muted);position:relative;flex:none;transition:background .2s}
+.sw i{position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:var(--p-sub);transition:transform .2s,background .2s}
+.sw.on{background:var(--p-accent)}.sw.on i{transform:translateX(16px);background:var(--p-on)}
+.hint{display:block;margin:10px auto 0;border:0;background:transparent;color:var(--p-sub);font:inherit;font-size:13px;cursor:pointer;padding:6px 10px}
+.dots3:focus-visible,.mi:focus-visible,.hint:focus-visible{outline:2px solid var(--p-accent);outline-offset:2px}
+/* no borders: surfaces and spacing do the separating */
+.card{border:0}
+.run{padding:10px 14px;border-radius:18px;margin-bottom:8px}
+.run .rt{display:flex;align-items:center;gap:9px}
+.run .rt .t{flex:1;min-width:0;font-weight:600;font-size:15px;line-height:20px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.run .el{font-variant-numeric:tabular-nums;font-size:12.5px;color:var(--p-sub)}
+.run .act{margin:2px 0 0 16px;font-size:12.5px;color:var(--p-sub);display:flex;align-items:center;gap:6px;min-height:18px;margin-top:2px}
+.row{border:0;padding:9px 2px;align-items:center;gap:14px}
+.lt{width:10px;height:10px;border-radius:50%;flex:none;background:var(--p-ok);box-shadow:0 0 0 3px color-mix(in srgb,var(--p-ok) 18%,transparent)}
+.lt.warn{background:var(--p-warn);box-shadow:0 0 0 3px color-mix(in srgb,var(--p-warn) 18%,transparent)}
+.lt.err{background:var(--p-danger);box-shadow:0 0 0 3px color-mix(in srgb,var(--p-danger) 18%,transparent)}
+.row .t{font-weight:500;font-size:16px}
+.row .pv{-webkit-line-clamp:1;font-size:13.5px}
+.row .side{display:flex;flex-direction:column;align-items:flex-end;gap:2px;font-size:12px;color:var(--p-sub);flex:none}
+.chip{border:0;background:var(--p-muted)}.chip.on{background:var(--p-accent)}
+.mac{border:0}
+.compose{border:0;box-shadow:0 6px 22px rgba(0,0,0,.14)}
+.ic{border:0;background:var(--p-muted)}.ic.fill{background:var(--p-accent)}
+.btn{border:0}
+
+/* one item style for every list: card, 10px light centred on the left, title over subtitle, time on the right */
+.item{display:flex;align-items:center;gap:14px;padding:11px 14px 11px 16px;border-radius:18px;margin-bottom:8px;max-height:90px}
+.item .body{flex:1;min-width:0}
+.item .t{font-weight:600;font-size:15px;line-height:20px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
+.item .m{font-size:12.5px;line-height:17px;color:var(--p-sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center;gap:6px}
+.item .el{font-variant-numeric:tabular-nums;font-size:12.5px;color:var(--p-sub);flex:none}
+.item .ic{margin-left:-4px}
+.lt{display:block;width:10px;height:10px;margin:0 3px}
+.lt.busy{background:var(--p-accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--p-accent) 16%,transparent);animation:p 1.2s infinite}
+@media (prefers-reduced-motion:reduce){.lt.busy{animation:none}}
+@media (prefers-reduced-motion:reduce){.dots s,.sweep:after,.pulse{animation:none}.card{transition:none}}
+</style>
+<main>
+<div><h1>Zode home, redesigned</h1><p style="color:var(--mute);margin-top:6px;max-width:62ch">A home that answers three questions in order: what needs me, what is working right now, what finished. Try it: approve or deny a card, tap a project chip, type in the bar at the bottom. Sample data only.</p></div>
+<div class="stage" id="stage"></div>
+<section><h2>What changed and why</h2>
+<div class="notes">
+<div class="note"><b>Answer the ask on the home screen</b><span>A waiting session shows exactly what it wants to do. A slim row with the project, the title and the file it wants to change. Tick to allow, cross to deny, without opening the chat.</span></div>
+<div class="note"><b>Running work shows its pulse</b><span>Each running card prints the live step ("Editing app/settings.tsx"), a ticking timer and a moving line. You see it is alive, not just "running".</span></div>
+<div class="note"><b>Work orders stay out of the way</b><span>Conversations that start with “#” are hidden by default, so history shows your real work. One switch in the ⋯ menu gives them their own “Work orders” section below the rest, and a quiet line tells you how many are hidden.</span></div>
+<div class="note"><b>Calm filters, no pills</b><span>The list is short enough to read without filters. Project names are the titles.</span></div>
+<div class="note"><b>History in plain words</b><span>Project as the title, status as the subtitle, and one light on the left: green done, amber stopped, red failed. Nothing to decode.</span></div>
+<div class="note"><b>The bottom bar replaces the floating button</b><span>Type the task right there. The project and mode (Plan or Edit) sit above the field. One thumb, no extra screen.</span></div>
+<div class="note"><b>The real logo, in the header</b><span>The app icon sits next to a rounded wordmark that echoes the rounded bars of the Z. The Mac connection is a quiet pill on the right.</span></div>
+</div>
+</section>
+</main>
+<script>
+const COL = {'shop-api':'#8A6F4E','web-app':'#5E7C8A','docs-site':'#7E6A8C','mobile-app':'#6B8A66'};
+let S = {
+  needs:[
+    {id:'a',project:'shop-api',title:'Fix login redirect loop',when:'2m',kind:'ask',what:'Wants to edit',target:'src/routes/login.ts',why:'Needed to fix the redirect.'},
+    {id:'b',project:'web-app',title:'Add rate limiting to the API',when:'3d',kind:'err',what:'Tests failed: 3 of 14',target:'npm test -- rate-limit',why:'The run stopped after the failure.'}
+  ],
+  running:[{id:'c',project:'web-app',title:'Port settings page to the new design',since:Date.now()-4*60000-12000,steps:['Reading app/settings.tsx','Editing app/_layout.tsx','Running npm test -- settings','Editing src/theme.ts'],i:0}],
+  done:[
+    {id:'d',project:'web-app',when:'2h',st:'ok',text:'Completed'},
+    {id:'e',project:'docs-site',when:'3h',st:'ok',text:'Completed'},
+    {id:'f',project:'mobile-app',when:'5h',st:'err',text:'Failed · build error'},
+    {id:'g',project:'shop-api',when:'1d',st:'warn',text:'Stopped by you'},
+    {id:'h',project:'mobile-app',when:'2h',st:'ok',text:'Completed',wo:true},
+    {id:'i',project:'web-app',when:'4h',st:'ok',text:'Completed',wo:true},
+    {id:'j',project:'docs-site',when:'6h',st:'err',text:'Failed · tests',wo:true}
+  ],
+  filter:'All', draft:'', showWO:false, menu:false
+};
+const LOGO=`<svg viewBox="0 0 512 512" aria-hidden="true"><defs><linearGradient id="lg-bg" x1="0.1" y1="0" x2="0.9" y2="1"><stop offset="0" stop-color="#4A4946"/><stop offset="1" stop-color="#0E0E0D"/></linearGradient><radialGradient id="lg-gl" cx="0.25" cy="0.12" r="0.7"><stop offset="0" stop-color="#fff" stop-opacity="0.16"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient><linearGradient id="lg-rb" gradientUnits="userSpaceOnUse" x1="344" y1="168" x2="168" y2="344"><stop offset="0" stop-color="#fff" stop-opacity="0.96"/><stop offset="1" stop-color="#fff" stop-opacity="0.34"/></linearGradient></defs><rect x="36" y="36" width="440" height="440" rx="108" fill="url(#lg-bg)"/><rect x="36" y="36" width="440" height="440" rx="108" fill="url(#lg-gl)"/><line x1="342" y1="170" x2="170" y2="342" stroke="url(#lg-rb)" stroke-width="56" stroke-linecap="round"/><rect x="140" y="140" width="232" height="56" rx="28" fill="#fff"/><rect x="140" y="316" width="232" height="56" rx="28" fill="#fff"/></svg>`;
+const projects=['shop-api','web-app','docs-site','mobile-app'];
+const esc=s=>s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const itemHtml=r=>`<div class="card item"><i class="lt ${r.st}"></i><div class="body"><div class="t">${esc(r.project)}</div><div class="m">${esc(r.text)}</div></div><span class="el">${r.when}</span></div>`;
+const mono=p=>`<div class="mono" style="background:${COL[p]}">${p[0].toUpperCase()}</div>`;
+const mm=ms=>{const s=Math.floor(ms/1000);return Math.floor(s/60)+':'+String(s%60).padStart(2,'0')};
+const word=n=>['No','One','Two','Three','Four'][n]??n;
+function view(mode){
+  const f=S.filter, ok=p=>f==='All'||p===f;
+  const needs=S.needs.filter(x=>ok(x.project)), run=S.running.filter(x=>ok(x.project)), done=S.done.filter(x=>!x.wo), wos=S.done.filter(x=>x.wo), hidden=S.showWO?0:wos.length;
+  return `<div class="phone" data-mode="${mode}"><div class="island"></div><div class="statusbar"><span>9:41</span><span>5G ▮▮▮</span></div>
+<div class="scroll">
+<div class="top"><div class="title">${LOGO}<span>Zode</span></div><div class="hr"><div class="mac"><i></i>Mac mini</div><button class="dots3" data-act="menu" aria-label="More" aria-expanded="${S.menu}">⋯</button></div></div>
+${S.menu?`<div class="menu" role="menu"><button class="mi" data-act="wo" role="menuitemcheckbox" aria-checked="${S.showWO}"><span>Show work orders</span><span class="sw ${S.showWO?'on':''}"><i></i></span></button><div class="mh">Hides conversations that start with “#”.</div><button class="mi dng" data-act="unpair" role="menuitem">Unpair this phone</button></div>`:''}
+${needs.length?`<div class="sec">Needs you <em>${needs.length}</em></div>`:''}
+${needs.map(c=>`<div class="card item" data-id="${c.id}"><i class="lt ${c.kind==='err'?'err':'warn'}"></i><div class="body"><div class="t">${esc(c.title)}</div><div class="m">${c.project} · ${c.kind==='err'?esc(c.what):'Edit '+esc(c.target)} · ${c.when}</div></div>${c.kind==='ask'?`<button class="ic" data-act="deny" data-id="${c.id}" aria-label="Deny" title="Deny">✕</button><button class="ic fill" data-act="allow" data-id="${c.id}" aria-label="Allow" title="Allow">✓</button>`:`<button class="ic txt" data-act="open" data-id="${c.id}">Open</button>`}</div>`).join('')}
+
+${run.length?`<div class="sec">Running <em>${run.length}</em></div>`:''}
+${run.map(c=>`<div class="card item" data-id="${c.id}"><i class="lt busy"></i><div class="body"><div class="t">${esc(c.title)}</div><div class="m"><span data-step="${c.id}">${esc(c.steps[c.i])}</span><span class="dots"><s></s><s></s><s></s></span></div></div><span class="el" data-el="${c.id}">${mm(Date.now()-c.since)}</span></div>`).join('')}
+<div class="sec">Earlier today</div>
+${done.length?done.map(itemHtml).join(''):`<div class="empty">Nothing here yet</div>`}
+${S.showWO&&wos.length?`<div class="sec">Work orders <em>${wos.length}</em></div>${wos.map(itemHtml).join('')}`:''}
+${hidden?`<button class="hint" data-act="wo">${hidden} work orders hidden · Show</button>`:''}
+</div>
+<div class="toast" id="toast-${mode}"></div>
+<div class="compose"><div class="opts"><span class="pillx"><i style="background:${COL[f==='All'?'shop-api':f]}"></i>${f==='All'?'shop-api':f}</span><span class="pillx">Plan</span></div>
+<div class="in"><input placeholder="Ask ZCode…" value="${esc(S.draft)}" data-input="${mode}" aria-label="Ask ZCode"><button class="send" data-act="send" aria-label="Send">↑</button></div></div></div>`}
+function toast(t){document.querySelectorAll('.toast').forEach(e=>{e.textContent=t;e.classList.add('show');clearTimeout(e._t);e._t=setTimeout(()=>e.classList.remove('show'),1600)})}
+function render(){const st=document.getElementById('stage');const y=[...st.querySelectorAll('.scroll')].map(e=>e.scrollTop);
+  st.innerHTML=view('light')+view('dark');st.querySelectorAll('.scroll').forEach((e,i)=>e.scrollTop=y[i]||0)}
+function remove(id,then){document.querySelectorAll(`.card[data-id="${id}"]`).forEach(e=>e.classList.add('gone'));setTimeout(()=>{then();render()},300)}
+document.addEventListener('click',e=>{
+  if(S.menu&&!e.target.closest('.menu')&&!e.target.closest('[data-act="menu"]')){S.menu=false;render()}
+  const c=e.target.closest('[data-chip]'); if(c){S.filter=c.dataset.chip;render();return}
+  const b=e.target.closest('[data-act]'); if(!b)return; const id=b.dataset.id, a=b.dataset.act;
+  const item=S.needs.find(x=>x.id===id);
+  if(a==='allow'&&item)remove(id,()=>{S.needs=S.needs.filter(x=>x.id!==id);S.running.unshift({id,project:item.project,title:item.title,since:Date.now(),steps:['Editing '+item.target,'Running npm test','Reading src/routes/index.ts'],i:0});toast('Allowed. ZCode continues.')});
+  if(a==='deny'&&item)remove(id,()=>{S.needs=S.needs.filter(x=>x.id!==id);S.done.unshift({id,project:item.project,when:'now',st:'warn',text:'Denied by you'});toast('Denied. Nothing changed.')});
+  if(a==='dismiss'&&item)remove(id,()=>{S.needs=S.needs.filter(x=>x.id!==id);toast('Dismissed')});
+  if(a==='open')toast('Opens the chat');
+  if(a==='menu'){S.menu=!S.menu;render();return}
+  if(a==='wo'){S.showWO=!S.showWO;S.menu=false;render();toast(S.showWO?'Showing work orders':'Work orders hidden');return}
+  if(a==='unpair'){S.menu=false;render();toast('Asks to confirm, then unpairs');return}
+  if(a==='send'){const v=(document.querySelector('[data-input]')||{}).value;toast(v&&v.trim()?'Started a new session':'Type a task first')}
+});
+document.addEventListener('input',e=>{if(e.target.dataset&&e.target.dataset.input){S.draft=e.target.value;document.querySelectorAll('[data-input]').forEach(i=>{if(i!==e.target)i.value=S.draft})}});
+setInterval(()=>{S.running.forEach(r=>{document.querySelectorAll(`[data-el="${r.id}"]`).forEach(e=>e.textContent=mm(Date.now()-r.since))})},1000);
+setInterval(()=>{S.running.forEach(r=>{r.i=(r.i+1)%r.steps.length;document.querySelectorAll(`[data-step="${r.id}"]`).forEach(e=>e.textContent=r.steps[r.i])})},2600);
+render();
+</script>

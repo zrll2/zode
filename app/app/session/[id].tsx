@@ -3,12 +3,12 @@ import {
   Alert,
   FlatList,
   KeyboardAvoidingView,
+  LayoutAnimation,
   Platform,
   Pressable,
   StyleSheet,
+  UIManager,
   View,
-  type NativeScrollEvent,
-  type NativeSyntheticEvent,
 } from "react-native";
 import { Stack, useLocalSearchParams } from "expo-router";
 import { Feather } from "@expo/vector-icons";
@@ -19,17 +19,26 @@ import {
   buildSessionSendParams,
   buildSessionSubscribeParams,
 } from "../../src/relay/params";
+import { retryInSeconds } from "../../src/relay/backoff";
 import {
   isSystemLikeUserText,
   mergeHistoryWithLive,
   messagesToItems,
 } from "../../src/history";
+import { useScrollPin } from "../../src/scrollPin";
 import { Composer } from "../../src/ui/Composer";
-import { Dot } from "../../src/ui/Dot";
+import { Dot, useReduceMotion } from "../../src/ui/Dot";
 import { Markdown } from "../../src/ui/Markdown";
 import { Pill } from "../../src/ui/Pill";
+import { Skeleton } from "../../src/ui/Skeleton";
 import { Text } from "../../src/ui/Text";
+import { ThinkingDots } from "../../src/ui/ThinkingDots";
 import { ToolRow } from "../../src/ui/ToolRow";
+
+// LayoutAnimation for expand/collapse needs the experimental flag on Android.
+if (Platform.OS === "android") {
+  UIManager.setLayoutAnimationEnabledExperimental?.(true);
+}
 
 function shortError(e: unknown): string {
   const message = e instanceof Error ? e.message : typeof e === "string" ? e : "request failed";
@@ -40,6 +49,41 @@ function formatElapsed(totalSeconds: number): string {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function ReconnectingLine({
+  retryAt,
+  showRetry,
+  onRetry,
+}: {
+  retryAt: number | null;
+  showRetry: boolean;
+  onRetry: () => void;
+}) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  return (
+    <View style={styles.reconnectRow}>
+      <Text variant="caption" color="warn" style={styles.flex}>
+        {retryAt ? `Reconnecting, next try in ${retryInSeconds(retryAt, now)} s` : "Reconnecting…"}
+      </Text>
+      {showRetry ? (
+        <Pressable
+          onPress={onRetry}
+          accessibilityRole="button"
+          accessibilityLabel="Retry now"
+          hitSlop={8}
+        >
+          <Text variant="caption" color="warn" style={{ fontWeight: "600" }}>
+            Retry now
+          </Text>
+        </Pressable>
+      ) : undefined}
+    </View>
+  );
 }
 
 export default function SessionScreen() {
@@ -53,7 +97,7 @@ export default function SessionScreen() {
   const autoFocusComposer = (Array.isArray(params.focus) ? params.focus[0] : params.focus) === "1";
 
   const t = useTheme();
-  const { status, rpc } = useRelay();
+  const { status, rpc, retryAt, reconnectAttempts, retryNow } = useRelay();
   const session = useSessionEvents(sessionId);
 
   const [draft, setDraft] = useState("");
@@ -159,20 +203,17 @@ export default function SessionScreen() {
     );
   }, [session.running, showSessionMenu, t]);
 
-  // Auto-scroll unless the user scrolled up; then offer jump-to-latest.
+  // Scroll pinning: stick to the bottom while streaming unless the user
+  // drags; offer "Jump to latest" when they scroll away.
   const listRef = useRef<FlatList<ChatItem>>(null);
-  const nearBottomRef = useRef(true);
-  const [showJump, setShowJump] = useState(false);
-  const onScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-    const near = contentOffset.y + layoutMeasurement.height >= contentSize.height - 120;
-    nearBottomRef.current = near;
-    setShowJump(!near);
-  };
-  const onContentSizeChange = useCallback(() => {
-    if (nearBottomRef.current) listRef.current?.scrollToEnd({ animated: false });
-  }, []);
-  const jumpToEnd = useCallback(() => listRef.current?.scrollToEnd({ animated: true }), []);
+  const {
+    onScroll,
+    onScrollBeginDrag,
+    onMomentumScrollEnd,
+    onContentSizeChange,
+    jumpToEnd,
+    showJump,
+  } = useScrollPin(listRef);
 
   const renderItem = useCallback(({ item }: { item: ChatItem }) => <ChatRow item={item} />, []);
   const keyExtractor = useCallback((item: ChatItem) => item.key, []);
@@ -188,9 +229,11 @@ export default function SessionScreen() {
       />
 
       {status === "reconnecting" ? (
-        <Text variant="caption" color="warn" style={styles.banner}>
-          Reconnecting…
-        </Text>
+        <ReconnectingLine
+          retryAt={retryAt}
+          showRetry={reconnectAttempts >= 3}
+          onRetry={retryNow}
+        />
       ) : undefined}
       {session.permissionRequest ? (
         <Text variant="caption" color="warn" numberOfLines={2} style={styles.banner}>
@@ -210,8 +253,10 @@ export default function SessionScreen() {
         windowSize={7}
         removeClippedSubviews={false}
         onScroll={onScroll}
-        scrollEventThrottle={100}
+        onScrollBeginDrag={onScrollBeginDrag}
+        onMomentumScrollEnd={onMomentumScrollEnd}
         onContentSizeChange={onContentSizeChange}
+        scrollEventThrottle={100}
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 12 }}
         ListEmptyComponent={
@@ -229,7 +274,11 @@ export default function SessionScreen() {
               <View style={styles.working}>
                 <Dot color={t.colors.accent} pulse />
                 <Text variant="rowSubtitle" color="subtext">
-                  Working… {formatElapsed(elapsed)}
+                  Working…
+                </Text>
+                <ThinkingDots />
+                <Text variant="rowSubtitle" color="subtext">
+                  {formatElapsed(elapsed)}
                 </Text>
               </View>
             ) : undefined}
@@ -395,11 +444,24 @@ const ReasoningRow = React.memo(function ReasoningRow({
   streaming?: boolean;
 }) {
   const t = useTheme();
+  const reduceMotion = useReduceMotion();
   const [open, setOpen] = useState(false);
   return (
     <View style={styles.reasoning}>
       <Pressable
-        onPress={() => setOpen(!open)}
+        onPress={() => {
+          if (!reduceMotion) {
+            LayoutAnimation.configureNext({
+              duration: 200,
+              update: { type: LayoutAnimation.Types.easeInEaseOut },
+              create: {
+                type: LayoutAnimation.Types.easeInEaseOut,
+                property: LayoutAnimation.Properties.opacity,
+              },
+            });
+          }
+          setOpen(!open);
+        }}
         accessibilityRole="button"
         accessibilityLabel="Reasoning"
         hitSlop={4}
@@ -411,8 +473,9 @@ const ReasoningRow = React.memo(function ReasoningRow({
           color={t.colors.subtext}
         />
         <Text variant="bodySmall" color="subtext">
-          {streaming ? "Thinking…" : "Thinking"}
+          Thinking
         </Text>
+        {streaming ? <ThinkingDots /> : undefined}
       </Pressable>
       {open ? (
         <Text variant="bodySmall" color="subtext" selectable style={styles.reasoningText}>
@@ -467,28 +530,15 @@ function firstLine(text: string): string {
   return line.length > 80 ? `${line.slice(0, 80)}…` : line;
 }
 
-function Skeleton() {
-  const t = useTheme();
-  return (
-    <View style={styles.skeleton} accessibilityLabel="Loading history">
-      {[90, 74, 58].map((width) => (
-        <View
-          key={width}
-          style={{
-            width: `${width}%` as const,
-            height: 14,
-            borderRadius: 7,
-            backgroundColor: t.colors.muted,
-            marginTop: 14,
-          }}
-        />
-      ))}
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
   flex: { flex: 1 },
+  reconnectRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingHorizontal: 20,
+    paddingTop: 6,
+  },
   banner: { paddingHorizontal: 20, paddingTop: 6 },
   userRow: { flexDirection: "row", justifyContent: "flex-end", marginVertical: 4 },
   bubble: {
@@ -501,7 +551,12 @@ const styles = StyleSheet.create({
   systemRow: { borderRadius: 12, padding: 10, marginVertical: 4, gap: 2 },
   assistant: { marginVertical: 4 },
   reasoning: { marginVertical: 4 },
-  reasoningHeader: { minHeight: 32, flexDirection: "row", alignItems: "center", gap: 4 },
+  reasoningHeader: {
+    minHeight: 32,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
   reasoningText: { paddingLeft: 18, marginTop: 2 },
   errorText: { marginVertical: 4 },
   noticeText: { textAlign: "center", marginVertical: 4 },
@@ -518,7 +573,6 @@ const styles = StyleSheet.create({
   },
   retry: { marginTop: 4 },
   empty: { textAlign: "center", marginTop: 64 },
-  skeleton: { paddingTop: 8 },
   jump: {
     position: "absolute",
     top: -46,

@@ -1,10 +1,21 @@
 import React, { useState } from "react";
-import { Pressable, StyleSheet, View } from "react-native";
+import { LayoutAnimation, Pressable, StyleSheet, View } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { radius, useTheme } from "../theme";
+import { useReduceMotion } from "./Dot";
 import { Text } from "./Text";
 
 const OUTPUT_LIMIT = 600;
+
+// Expand/collapse animates via LayoutAnimation (skipped under Reduce Motion).
+function configureExpand(reduceMotion: boolean) {
+  if (reduceMotion) return;
+  LayoutAnimation.configureNext({
+    duration: 200,
+    update: { type: LayoutAnimation.Types.easeInEaseOut },
+    create: { type: LayoutAnimation.Types.easeInEaseOut, property: LayoutAnimation.Properties.opacity },
+  });
+}
 
 interface ToolRowProps {
   name: string;
@@ -18,6 +29,7 @@ interface ToolRowProps {
 // muted mono block. Output is cut at 600 characters with a Show more toggle.
 export function ToolRow({ name, summary, input, output }: ToolRowProps) {
   const t = useTheme();
+  const reduceMotion = useReduceMotion();
   const [open, setOpen] = useState(false);
   const [showAllOutput, setShowAllOutput] = useState(false);
   const expandable = Boolean(input || output);
@@ -27,7 +39,10 @@ export function ToolRow({ name, summary, input, output }: ToolRowProps) {
     <View style={styles.wrap}>
       <Pressable
         disabled={!expandable}
-        onPress={() => setOpen(!open)}
+        onPress={() => {
+          configureExpand(reduceMotion);
+          setOpen(!open);
+        }}
         accessibilityRole={expandable ? "button" : "text"}
         accessibilityLabel={`Tool ${name}${summary ? `: ${summary}` : ""}`}
         style={styles.line}

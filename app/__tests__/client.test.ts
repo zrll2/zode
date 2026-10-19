@@ -122,9 +122,10 @@ it("reconnects with backoff and sends since = last seen seq", async () => {
   sockets[0].drop(1006);
   expect(client.status).toBe("reconnecting");
 
-  jest.advanceTimersByTime(999);
-  expect(sockets).toHaveLength(1); // first backoff step is 1000 ms
-  jest.advanceTimersByTime(1);
+  // first delay is jittered: 850 ms at minimum, 1150 ms at most
+  jest.advanceTimersByTime(800);
+  expect(sockets).toHaveLength(1);
+  jest.advanceTimersByTime(400);
   expect(sockets).toHaveLength(2);
 
   sockets[1].open();

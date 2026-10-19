@@ -1,3 +1,4 @@
+import { isWorkOrder } from "./sessionStatus";
 import type { SessionRow } from "./util";
 
 export interface SessionSection {
@@ -57,4 +58,53 @@ export function groupSessions(sessions: SessionRow[], now: number): SessionSecti
     { key: "earlier", title: "Earlier", items: earlier },
   ];
   return allSections.filter((section) => section.items.length > 0);
+}
+
+// Home screen sections (order 16): Needs you and Running first — urgent work
+// orders stay there like any other session — then the recency buckets, then
+// finished work orders, which are hidden (and counted) unless the setting is
+// on. Empty sections are dropped.
+export function buildHomeSections(
+  sessions: SessionRow[],
+  now: number,
+  showWorkOrders: boolean,
+): { sections: SessionSection[]; hiddenWorkOrders: number } {
+  const needsYou: SessionRow[] = [];
+  const running: SessionRow[] = [];
+  const rest: SessionRow[] = [];
+  const workOrders: SessionRow[] = [];
+  let hiddenWorkOrders = 0;
+
+  for (const session of sessions) {
+    if (session.status === "waiting" || session.status === "error") {
+      needsYou.push(session);
+      continue;
+    }
+    if (session.status === "running") {
+      running.push(session);
+      continue;
+    }
+    if (isWorkOrder(session.title)) {
+      if (showWorkOrders) workOrders.push(session);
+      else hiddenWorkOrders += 1;
+      continue;
+    }
+    rest.push(session);
+  }
+
+  const byRecency = (a: SessionRow, b: SessionRow) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
+  needsYou.sort(byRecency);
+  running.sort(byRecency);
+  workOrders.sort(byRecency);
+
+  const sections: SessionSection[] = [];
+  const push = (key: string, title: string, items: SessionRow[]) => {
+    if (items.length > 0) sections.push({ key, title, items });
+  };
+  push("needs-you", "Needs you", needsYou);
+  push("running", "Running", running);
+  sections.push(...groupSessions(rest, now));
+  push("work-orders", "Work orders", workOrders);
+
+  return { sections, hiddenWorkOrders };
 }

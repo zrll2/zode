@@ -18,6 +18,8 @@ export interface RelayClientLike {
   status: RelayStatus;
   servers: RelayServer[];
   authFailed: boolean;
+  retryAt: number | null;
+  retryNow(): void;
   connect(): Promise<void>;
   rpc<T = unknown>(method: string, params?: unknown, server?: string | number): Promise<T>;
   onEvent(cb: (msg: RelayMessage, seq: number) => void): () => void;
@@ -41,6 +43,9 @@ export class DemoClient implements RelayClientLike {
   status: RelayStatus = "connecting";
   servers: RelayServer[] = DEMO_SERVERS;
   authFailed = false;
+  retryAt: number | null = null; // the demo never reconnects
+
+  retryNow() {}
 
   private sessions: DemoSessionRecord[] = initialDemoSessions();
   private eventCbs = new Set<(msg: RelayMessage, seq: number) => void>();

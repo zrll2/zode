@@ -38,3 +38,27 @@ export async function clearCredentials(): Promise<void> {
     await SecureStore.deleteItemAsync(KEY);
   } catch {}
 }
+
+// UI preferences (not secret): JSON in SecureStore, defaults on any error.
+const PREFS_KEY = "zode.prefs.v1";
+
+export interface Prefs {
+  showWorkOrders: boolean;
+}
+
+export async function loadPrefs(): Promise<Prefs> {
+  try {
+    const raw = await SecureStore.getItemAsync(PREFS_KEY);
+    if (!raw) return { showWorkOrders: false };
+    const parsed = JSON.parse(raw);
+    return { showWorkOrders: parsed?.showWorkOrders === true };
+  } catch {
+    return { showWorkOrders: false };
+  }
+}
+
+export async function savePrefs(prefs: Prefs): Promise<void> {
+  try {
+    await SecureStore.setItemAsync(PREFS_KEY, JSON.stringify(prefs));
+  } catch {}
+}

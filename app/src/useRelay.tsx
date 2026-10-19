@@ -28,10 +28,13 @@ interface RelayContextValue {
   servers: RelayServer[];
   lastError: string | null;
   demo: boolean;
+  retryAt: number | null;
+  reconnectAttempts: number;
   connect(credentials: Credentials): void;
   startDemo(): void;
   exitDemo(): Promise<void>;
   unpair(): Promise<void>;
+  retryNow(): void;
   rpc<T = unknown>(method: string, params?: unknown, server?: string | number): Promise<T>;
 }
 
@@ -46,7 +49,38 @@ export function RelayProvider({ children }: { children: React.ReactNode }) {
   const [servers, setServers] = useState<RelayServer[]>([]);
   const [lastError, setLastError] = useState<string | null>(null);
   const [demo, setDemo] = useState(false);
+  const [retryAt, setRetryAt] = useState<number | null>(null);
+  const [reconnectAttempts, setReconnectAttempts] = useState(0);
   const clientRef = useRef<RelayClientLike | null>(null);
+
+  // While reconnecting, mirror the client's next-try time and count how many
+  // attempts in a row failed (the banner offers "Retry now" from the third).
+  const lastRetryAtRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (status !== "reconnecting") {
+      lastRetryAtRef.current = null;
+      setReconnectAttempts(0);
+      setRetryAt(null);
+      return;
+    }
+    const sync = () => {
+      const current = clientRef.current?.retryAt ?? null;
+      setRetryAt(current);
+      if (current !== null && current !== lastRetryAtRef.current) {
+        lastRetryAtRef.current = current;
+        setReconnectAttempts((count) => count + 1);
+      }
+      if (current === null) lastRetryAtRef.current = null;
+    };
+    sync();
+    const id = setInterval(sync, 500);
+    return () => clearInterval(id);
+  }, [status]);
+
+  const retryNow = useCallback(() => {
+    clientRef.current?.retryNow();
+    setRetryAt(clientRef.current?.retryAt ?? null);
+  }, []);
 
   const attachReal = useCallback((creds: Credentials) => {
     clientRef.current?.close();
@@ -163,10 +197,13 @@ export function RelayProvider({ children }: { children: React.ReactNode }) {
       servers,
       lastError,
       demo,
+      retryAt,
+      reconnectAttempts,
       connect,
       startDemo,
       exitDemo,
       unpair,
+      retryNow,
       rpc,
     }),
     [
@@ -178,10 +215,13 @@ export function RelayProvider({ children }: { children: React.ReactNode }) {
       servers,
       lastError,
       demo,
+      retryAt,
+      reconnectAttempts,
       connect,
       startDemo,
       exitDemo,
       unpair,
+      retryNow,
       rpc,
     ],
   );

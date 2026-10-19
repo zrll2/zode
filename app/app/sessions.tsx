@@ -1,7 +1,8 @@
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActionSheetIOS,
   Alert,
+  Image,
   Platform,
   Pressable,
   RefreshControl,
@@ -16,30 +17,98 @@ import * as Linking from "expo-linking";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRelay } from "../src/useRelay";
 import { useTheme } from "../src/theme";
+import { retryInSeconds } from "../src/relay/backoff";
 import { PRIVACY_URL, SUPPORT_URL } from "../src/config";
+import { buildHomeSections } from "../src/sessionGroups";
+import { projectName, statusInfo } from "../src/sessionStatus";
+import { loadPrefs, savePrefs } from "../src/storage";
 import { parseSessionList, timeAgo, type SessionRow } from "../src/util";
 import type { RelayStatus } from "../src/relay/client";
-import { groupSessions } from "../src/sessionGroups";
 import { Dot } from "../src/ui/Dot";
 import { Pill } from "../src/ui/Pill";
-import { Row } from "../src/ui/Row";
+import { PressScale } from "../src/ui/PressScale";
 import { Screen } from "../src/ui/Screen";
-import { SectionHeader } from "../src/ui/SectionHeader";
+import { SessionCard } from "../src/ui/SessionCard";
 import { Text } from "../src/ui/Text";
-import { buildMenuItems, type MenuItem } from "../src/ui/menu";
+import { buildMenuItems } from "../src/ui/menu";
 
 // App version comes from app.json (expo.version) for the sheet title.
 const APP_VERSION = Constants.expoConfig?.version;
+// Loaded in app/_layout.tsx; falls back to the system font until it is.
+const WORDMARK_FONT = "Nunito_800ExtraBold";
+
+function ReconnectingLine({
+  retryAt,
+  showRetry,
+  onRetry,
+}: {
+  retryAt: number | null;
+  showRetry: boolean;
+  onRetry: () => void;
+}) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  return (
+    <View style={styles.reconnectRow}>
+      <Text variant="caption" color="warn" style={styles.flex}>
+        {retryAt
+          ? `Reconnecting, next try in ${retryInSeconds(retryAt, now)} s`
+          : "Reconnecting…"}
+      </Text>
+      {showRetry ? (
+        <Pressable
+          onPress={onRetry}
+          accessibilityRole="button"
+          accessibilityLabel="Retry now"
+          hitSlop={8}
+        >
+          <Text variant="caption" color="warn" style={{ fontWeight: "600" }}>
+            Retry now
+          </Text>
+        </Pressable>
+      ) : undefined}
+    </View>
+  );
+}
 
 export default function SessionsScreen() {
   const t = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { status, authFailed, rpc, unpair, demo, exitDemo } = useRelay();
+  const {
+    status,
+    authFailed,
+    rpc,
+    unpair,
+    demo,
+    exitDemo,
+    retryAt,
+    reconnectAttempts,
+    retryNow,
+  } = useRelay();
   const [sessions, setSessions] = useState<SessionRow[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showStatusLine, setShowStatusLine] = useState(false);
+  const [showWorkOrders, setShowWorkOrders] = useState(false);
+
+  useEffect(() => {
+    void (async () => {
+      const prefs = await loadPrefs();
+      setShowWorkOrders(prefs.showWorkOrders);
+    })();
+  }, []);
+
+  const toggleWorkOrders = useCallback(() => {
+    setShowWorkOrders((value) => {
+      const next = !value;
+      void savePrefs({ showWorkOrders: next });
+      return next;
+    });
+  }, []);
 
   const load = useCallback(async () => {
     setRefreshing(true);
@@ -97,14 +166,23 @@ export default function SessionsScreen() {
   }, [exitDemo, router]);
 
   const showMenu = useCallback(() => {
-    const items = buildMenuItems({ demo });
+    const items: { key: string; label: string; destructive?: boolean }[] = [
+      {
+        key: "work-orders",
+        label: showWorkOrders ? "Hide work orders" : "Show work orders",
+      },
+      ...buildMenuItems({ demo }),
+    ];
     const labels = items.map((item) => item.label);
     const destructiveIndex = items.findIndex((item) => item.destructive);
     const cancelIndex = items.findIndex((item) => item.key === "cancel");
     const title = APP_VERSION ? `Zode ${APP_VERSION}` : "Zode";
-    const runItem = (item: MenuItem | undefined) => {
+    const runItem = (item: { key: string } | undefined) => {
       if (!item) return;
       switch (item.key) {
+        case "work-orders":
+          toggleWorkOrders();
+          break;
         case "privacy":
           void Linking.openURL(PRIVACY_URL).catch(() => {});
           break;
@@ -141,17 +219,20 @@ export default function SessionsScreen() {
         })),
       );
     }
-  }, [demo, confirmUnpair, confirmExitDemo]);
+  }, [demo, showWorkOrders, toggleWorkOrders, confirmUnpair, confirmExitDemo]);
 
-  // SectionList wants `data`; groupSessions speaks in `items`.
-  const sections = useMemo(
+  const { sections, hiddenWorkOrders } = useMemo(
+    () => buildHomeSections(sessions, Date.now(), showWorkOrders),
+    [sessions, showWorkOrders],
+  );
+  const listSections = useMemo(
     () =>
-      groupSessions(sessions, Date.now()).map((section) => ({
+      sections.map((section) => ({
         key: section.key,
         title: section.title,
         data: section.items,
       })),
-    [sessions],
+    [sections],
   );
 
   const statusText: Record<RelayStatus, string> = {
@@ -172,32 +253,69 @@ export default function SessionsScreen() {
     status === "ready" ? t.colors.ok : status === "closed" ? t.colors.subtext : t.colors.warn;
   const showLine = status !== "ready" || showStatusLine;
 
+  const renderItem = useCallback(
+    ({ item }: { item: SessionRow }) => {
+      const info = statusInfo(item.status);
+      return (
+        <SessionCard
+          folder={item.folder}
+          status={item.status}
+          timeLabel={timeAgo(item.updatedAt)}
+          showChevron={item.status === "waiting" || item.status === "error"}
+          onPress={() =>
+            router.push({
+              pathname: "/session/[id]",
+              params: { id: item.id, title: item.title },
+            })
+          }
+          accessibilityLabel={`${projectName(item.folder)}, ${info.word}, ${timeAgo(
+            item.updatedAt,
+          )}`}
+        />
+      );
+    },
+    [router],
+  );
+
   return (
     <Screen padded={false} style={styles.screen}>
       <Stack.Screen options={{ headerShown: false }} />
       <View style={[styles.header, { paddingHorizontal: 20 }]}>
-        <Text variant="display" style={styles.flex}>
-          Zode
-        </Text>
-        <Pressable
+        <Image
+          source={require("../assets/zode-mark.png")}
+          style={styles.mark}
+          resizeMode="contain"
+        />
+        <Text style={[styles.wordmark, { color: t.colors.text }]}>Zode</Text>
+        <PressScale
           onPress={() => setShowStatusLine((value) => !value)}
           accessibilityRole="button"
           accessibilityLabel={`Connection status: ${statusLabel[status]}`}
           hitSlop={8}
-          style={styles.dotWrap}
+          style={styles.macPill}
         >
-          <Dot color={dotColor} size={10} pulse={status === "reconnecting"} />
-        </Pressable>
-        <Pressable
+          <Dot color={dotColor} size={6} pulse={status === "reconnecting"} />
+          <Text color="subtext" style={styles.macText}>
+            Mac
+          </Text>
+        </PressScale>
+        <PressScale
           onPress={showMenu}
           accessibilityRole="button"
           accessibilityLabel="More options"
           hitSlop={8}
+          style={[styles.moreButton, { backgroundColor: t.colors.muted }]}
         >
-          <Feather name="more-horizontal" size={22} color={t.colors.text} />
-        </Pressable>
+          <Feather name="more-horizontal" size={18} color={t.colors.text} />
+        </PressScale>
       </View>
-      {showLine ? (
+      {status === "reconnecting" ? (
+        <ReconnectingLine
+          retryAt={retryAt}
+          showRetry={reconnectAttempts >= 3}
+          onRetry={retryNow}
+        />
+      ) : showLine ? (
         <Text variant="caption" color="subtext" style={styles.line}>
           {statusText[status]}
         </Text>
@@ -208,11 +326,20 @@ export default function SessionsScreen() {
         </Text>
       ) : undefined}
       <SectionList
-        sections={sections}
+        sections={listSections}
         keyExtractor={(row) => row.id}
-        renderItem={({ item }) => <SessionRowItem item={item} />}
-        renderSectionHeader={({ section }) => <SectionHeader>{section.title}</SectionHeader>}
-        ItemSeparatorComponent={Divider}
+        renderItem={renderItem}
+        renderSectionHeader={({ section }) => (
+          <View style={styles.sectionHeader}>
+            <Text variant="sectionHeader" color="subtext">
+              {section.title}
+            </Text>
+            <Text variant="sectionHeader" color="subtext">
+              {section.data.length}
+            </Text>
+          </View>
+        )}
+        ItemSeparatorComponent={CardGap}
         stickySectionHeadersEnabled={false}
         refreshControl={
           <RefreshControl
@@ -222,7 +349,18 @@ export default function SessionsScreen() {
           />
         }
         ListEmptyComponent={
-          !refreshing && status === "ready" && !error ? (
+          status !== "ready" ? (
+            <View style={styles.skeletonWrap}>
+              {[0, 1, 2].map((index) => (
+                <View
+                  key={index}
+                  style={[styles.skeletonCard, { backgroundColor: t.colors.surface }]}
+                >
+                  <View style={[styles.skeletonBar, { backgroundColor: t.colors.muted }]} />
+                </View>
+              ))}
+            </View>
+          ) : !error ? (
             <View style={styles.empty}>
               <Text variant="display" style={{ fontSize: 22, lineHeight: 28 }}>
                 No sessions yet
@@ -238,63 +376,44 @@ export default function SessionsScreen() {
             </View>
           ) : undefined
         }
-        contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: insets.bottom + 120 }}
+        ListFooterComponent={
+          hiddenWorkOrders > 0 && !showWorkOrders ? (
+            <Pressable
+              onPress={toggleWorkOrders}
+              accessibilityRole="button"
+              accessibilityLabel={`Show ${hiddenWorkOrders} hidden work orders`}
+              hitSlop={8}
+              style={styles.hiddenFooter}
+            >
+              <Text color="subtext" style={styles.hiddenText}>
+                {hiddenWorkOrders} work orders hidden · Show
+              </Text>
+            </Pressable>
+          ) : undefined
+        }
+        contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: insets.bottom + 108 }}
       />
-      <Pressable
-        onPress={() => router.push("/new")}
-        accessibilityRole="button"
-        accessibilityLabel="New session"
-        style={[styles.fab, { backgroundColor: t.colors.accent, bottom: insets.bottom + 20 }]}
-      >
-        <Feather name="edit-3" size={22} color={t.colors.onAccent} />
-      </Pressable>
+      <View style={[styles.barWrap, { bottom: insets.bottom + 12 }]}>
+        <PressScale
+          onPress={() => router.push("/new")}
+          accessibilityRole="button"
+          accessibilityLabel="Ask ZCode"
+          style={[styles.bar, { backgroundColor: t.colors.surface, shadowColor: "black" }]}
+        >
+          <Text color="subtext" style={styles.barText}>
+            Ask ZCode…
+          </Text>
+          <View style={[styles.sendCircle, { backgroundColor: t.colors.accent }]}>
+            <Feather name="arrow-up" size={18} color={t.colors.onAccent} />
+          </View>
+        </PressScale>
+      </View>
     </Screen>
   );
 }
 
-function SessionRowItem({ item }: { item: SessionRow }) {
-  const t = useTheme();
-  const router = useRouter();
-  const waiting = item.status === "waiting";
-  const failed = item.status === "error";
-  const running = item.status === "running";
-  const statusWord = running
-    ? "running"
-    : waiting
-      ? "waiting for approval"
-      : failed
-        ? "error"
-        : item.status !== "idle"
-          ? item.status
-          : "";
-  const subtitle = [item.folder || "No workspace", statusWord, timeAgo(item.updatedAt)]
-    .filter(Boolean)
-    .join(" · ");
-  const dotColor = waiting
-    ? t.colors.warn
-    : failed
-      ? t.colors.danger
-      : running
-        ? t.colors.accent
-        : undefined;
-  return (
-    <Row
-      title={item.title}
-      subtitle={subtitle}
-      onPress={() =>
-        router.push({ pathname: "/session/[id]", params: { id: item.id, title: item.title } })
-      }
-      accessibilityLabel={`Open session ${item.title}${running ? ", running" : ""}${
-        waiting ? ", waiting for approval" : ""
-      }`}
-      right={dotColor ? <Dot color={dotColor} pulse={running} /> : undefined}
-    />
-  );
-}
-
-function Divider() {
-  const t = useTheme();
-  return <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: t.colors.border }} />;
+function CardGap() {
+  return <View style={{ height: 8 }} />;
 }
 
 const styles = StyleSheet.create({
@@ -302,21 +421,84 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 16,
+    gap: 9,
     paddingTop: 12,
-    paddingBottom: 8,
+    paddingBottom: 4,
+  },
+  mark: { width: 34, height: 34 },
+  wordmark: {
+    flex: 1,
+    fontSize: 29,
+    lineHeight: 36,
+    letterSpacing: -0.3,
+    fontFamily: WORDMARK_FONT,
+  },
+  macPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    minHeight: 28,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+  },
+  macText: { fontSize: 12, lineHeight: 16 },
+  moreButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    marginLeft: 8,
   },
   flex: { flex: 1 },
-  dotWrap: { paddingHorizontal: 4 },
   line: { paddingHorizontal: 20, marginBottom: 4 },
+  reconnectRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingHorizontal: 20,
+    marginBottom: 4,
+  },
+  sectionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingTop: 18,
+    paddingBottom: 8,
+  },
+  skeletonWrap: { gap: 8 },
+  skeletonCard: {
+    height: 56,
+    borderRadius: 18,
+    alignItems: "flex-start",
+    justifyContent: "center",
+    paddingHorizontal: 16,
+  },
+  skeletonBar: { width: "60%", height: 12, borderRadius: 6 },
   empty: { alignItems: "center", marginTop: 96, paddingHorizontal: 20 },
   emptyLine: { textAlign: "center", marginTop: 8 },
-  fab: {
-    position: "absolute",
-    right: 20,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+  hiddenFooter: { alignItems: "center", paddingTop: 16 },
+  hiddenText: { fontSize: 13 },
+  barWrap: { position: "absolute", left: 20, right: 20 },
+  bar: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    borderRadius: 26,
+    paddingLeft: 20,
+    paddingRight: 10,
+    paddingVertical: 10,
+    minHeight: 56,
+    shadowOpacity: 0.12,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 6,
+  },
+  barText: { flex: 1, fontSize: 15, lineHeight: 20 },
+  sendCircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     alignItems: "center",
     justifyContent: "center",
   },

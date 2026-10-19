@@ -83,7 +83,7 @@ export default function NewSessionScreen() {
           <SectionHeader>Folder</SectionHeader>
           {servers.length === 0 ? (
             <Text variant="rowSubtitle" color="subtext">
-              No ZCode servers are running on the Mac. Start Zode.app, then try again.
+              No ZCode servers are running on the Mac. Start Zode.app on your Mac, then try again.
             </Text>
           ) : (
             servers.map((server, index) => (

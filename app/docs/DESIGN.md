@@ -47,30 +47,13 @@ Motion: 150-200 ms fades and presses only. A pressed row changes background to `
 ## 3. Screens
 
 ### 3.1 Sessions (home)
-```
- Zode                               ●  ⋯      <- serif title left; connection dot; overflow menu
-                                                 (no header bar background, no border)
- Needs you
- ┌────────────────────────────────────────┐
- │ Fix login redirect                  ●  │     row = title, subtitle, status dot at right
- │ shop-api · waiting for approval · 2m      │     no card, no icon, hairline divider inset 20
- └────────────────────────────────────────┘
- Running
-   Port React App to React Native      ◉ pulsing black dot
-   web-app · 4m
- Today
-   Create and verify a.txt
-   wt · 2h
- Yesterday / Previous 7 days / Earlier
- ...
-                                         ( ✎ )   <- floating new-session button, 56 px circle, `accent` fill, `onAccent` icon, bottom-right, 20 px margin
-```
-- Sections in this order: **Needs you** (status `waiting` or `error`), **Running** (`running`), then by `updatedAt`: **Today**, **Yesterday**, **Previous 7 days**, **Earlier**. Hide empty sections.
-- Row: title one line with ellipsis; subtitle `workspace folder · status text · relative time` (status text only when not `idle`). Status dot at the right: `warn` for waiting, `danger` for error, pulsing `accent` (black) for running; none for idle.
-- Pull to refresh. Empty state: centered serif "No sessions yet", one muted line, and the new-session button.
-- Connection dot (next to `⋯`): `ok` connected, `warn` reconnecting, `subtext` offline. Tapping it shows a small text line under the title ("Reconnecting...", "Offline: check that the relay is running").
-- `⋯` opens an action sheet: "Unpair this phone" (destructive, with a confirm alert), "Cancel".
-- Pure function `groupSessions(sessions, now)` in `src/sessionGroups.ts` returns `[{key, title, items}]`. Unit-test the boundaries (midnight, 7 days, missing `updatedAt`, unknown status).
+The home answers three questions in order: **Needs you** (waiting or error), **Running**, then **Today / Yesterday / Previous 7 days / Earlier** (via `groupSessions`), and — when the "Show work orders" setting is on — **Work orders** below the rest. Empty sections are hidden; every section header carries its count.
+
+Every row is one card: `surface` fill, radius 18, no border or shadow, 8 px between cards, min height 56. Left: a 10 px status light with a 3 px ring of the same color at 18 % opacity — green (`ok`) done or idle, amber (`warn`) waiting, red (`danger`) failed, pulsing `accent` for running. Middle: the project name (last path segment of the workspace, 15/20, weight 600, one line) over the status in plain words (12.5/17, `subtext`: "Waiting for you", "Failed", "Working" with the three thinking dots, "Completed", "Stopped"). Right: the relative time in tabular numbers; needs-you rows also show a chevron. Cards are `PressScale` buttons that open the chat, with labels like "shop-api, Waiting for you, 2 minutes ago".
+
+Header: the Zode mark (34 px) next to "Zode" in Nunito 800 (29/36, tracking −0.3); on the right the "Mac" connection pill (dot `ok`/`warn`/`subtext`; tapping it shows the connection line) and a 32 px `muted` "…" button for the action sheet. The sheet offers the work-orders toggle, privacy policy, support, and unpair (destructive, confirm first).
+
+Bottom: an "Ask ZCode…" bar fixed above the safe area — `surface`, radius 26, soft shadow, a 36 px `accent` circle with an arrow-up — one button that opens the new-session screen. Conversations titled with a leading "#" are work orders: urgent ones never hide, finished ones leave the normal sections unless the setting is on (stored under `zode.prefs.v1`, default off, with a quiet "N work orders hidden · Show" line when hidden). Pull to refresh, the empty state and loading skeleton cards stay.
 
 ### 3.2 Chat (session)
 ```
@@ -119,3 +102,12 @@ A bottom sheet over the Chat screen (dimmed background, `surface` fill, top radi
 
 ## 5. Visual reference
 `design-preview.html` (in the orders folder) shows all screens in light and dark. When this document and the preview differ, this document wins.
+
+## 6. Motion and scroll
+- Running dot: opacity 0.35 → 1 loop, 1.2 s period. Working/Thinking indicator (ThinkingDots): three 3 px dots, 3.5 px apart, 0.3 → 1 fade over 1.9 s, staggered 0.15 s.
+- History skeleton: three muted bars with a translucent band sweeping left to right every 2 s.
+- Press feedback: spring scale to 0.98 on press, back on release (stiffness 600, damping 30, mass 1).
+- Tool and Thinking expand/collapse: LayoutAnimation, 200 ms, easeInEaseOut, created rows fade in.
+- Reconnect backoff: exponential with 0.85–1.15 jitter, capped at 30 s. The banner counts down to the next try; "Retry now" appears after the 3rd failed attempt in a row.
+- Scroll pinning: pinned within 40 px of the bottom; "Jump to latest" beyond 120 px; streaming re-pins only 150 ms after the last user drag.
+- All loops, springs and the sweep are skipped while Reduce Motion is on.

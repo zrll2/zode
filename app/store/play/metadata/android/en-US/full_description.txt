@@ -1,26 +1,24 @@
-Zode is a companion app for ZCode, the AI coding app. It lets you follow and control your ZCode coding sessions from your phone. Your Mac stays the host: it runs ZCode and a small free relay that bridges your phone to ZCode.
-
-WHAT YOU NEED
-1. ZCode installed on a Mac.
-2. The free, open-source Zode relay running on that same Mac (set up with one command: https://github.com/zrll2/zode).
-3. This app on your phone.
-
-HOW IT CONNECTS
-Phone  ->  Zode relay on your Mac  ->  ZCode
-You pair your phone once by scanning a QR code that the relay shows on your Mac. After that, Zode reaches your Mac over your home network, or over a private network such as Tailscale when you are away. Nothing goes through our servers, because there are none.
+Zode is the phone companion for ZCode, the AI coding app. Start a task in ZCode on your Mac, then keep an eye on it from the couch, the kitchen, or the train.
 
 WHAT YOU CAN DO
-• See at a glance what needs you, what is running, and what finished, grouped by day.
-• Read the agent's work like a document: Markdown, code blocks, tables, and tool calls folded into one quiet line.
-• Send a message, stop a running turn, or start a new session in a folder you choose.
-• Catch up after a dropped connection. Zode replays what you missed.
-• Light and dark appearance that follows your phone.
+• See what needs you. Sessions waiting for your answer sit at the top. Running ones come next. Finished ones are grouped by day.
+• Read the work like a document. Text, code and tables look clean, and tool steps fold into one quiet line.
+• Reply, stop, or start. Answer a question, stop a task that went the wrong way, or start a new one in the folder you choose.
+• Catch up after a bad connection. Zode shows what you missed.
+• Light and dark look that follow your phone.
 
-NO MAC HANDY?
-Tap "Try the demo" on the first screen to explore the whole app with sample data. No account or network needed.
+HOW IT CONNECTS
+Zode is a companion, so ZCode keeps running on your Mac. A small free relay on the same Mac passes messages between your phone and ZCode:
+Phone  ->  Zode relay on your Mac  ->  ZCode
+Install the relay with one command, then pair once by scanning a QR code. At home Zode uses your Wi-Fi. Away from home, use a private network such as Tailscale.
+
+BEFORE YOU START
+You need ZCode on a Mac and the free, open-source Zode relay: https://github.com/zrll2/zode
+
+NO MAC NEARBY?
+Tap "Try the demo" on the first screen to explore everything with sample data. No account or network needed.
 
 PRIVATE BY DESIGN
-• No account, no ads, no analytics, no tracking.
-• Pairing uses a one-time code, and your phone keeps its own revocable token in the secure store.
+No account, no ads, no analytics, no tracking. Your messages go between your phone and your Mac only. We have no servers.
 
 Zode is an independent project. It is not affiliated with, endorsed by, or sponsored by Z.AI or Anthropic. ZCode and Claude Code are trademarks of their respective owners.

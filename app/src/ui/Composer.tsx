@@ -1,9 +1,10 @@
 import React from "react";
-import { Pressable, StyleSheet, TextInput, View } from "react-native";
+import { StyleSheet, TextInput, View } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { radius, useTheme } from "../theme";
+import { PressScale } from "./PressScale";
 
 interface ComposerProps {
   value: string;
@@ -49,7 +50,7 @@ export function Composer({
           multiline
           autoFocus={autoFocus}
         />
-        <Pressable
+        <PressScale
           onPress={() => {
             if (running) {
               onStop();
@@ -71,7 +72,7 @@ export function Composer({
           ]}
         >
           <Feather name={running ? "square" : "arrow-up"} size={18} color={t.colors.onAccent} />
-        </Pressable>
+        </PressScale>
       </View>
     </View>
   );

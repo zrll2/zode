@@ -1,6 +1,7 @@
 import React from "react";
-import { Pressable, StyleSheet, type StyleProp, type ViewStyle } from "react-native";
+import { StyleSheet, type StyleProp, type ViewStyle } from "react-native";
 import { useTheme } from "../theme";
+import { PressScale } from "./PressScale";
 import { Text } from "./Text";
 
 interface PillProps {
@@ -12,8 +13,8 @@ interface PillProps {
   style?: StyleProp<ViewStyle>;
 }
 
-// Rounded-999 button. Primary: `text` fill with `bg` label; quiet: bordered,
-// accent label.
+// Rounded-999 button. Primary: `accent` fill with `onAccent` label; quiet:
+// bordered, accent label. Springs on press.
 export function Pill({
   label,
   onPress,
@@ -25,7 +26,7 @@ export function Pill({
   const t = useTheme();
   const primary = variant === "primary";
   return (
-    <Pressable
+    <PressScale
       onPress={onPress}
       disabled={disabled}
       accessibilityRole="button"
@@ -43,7 +44,7 @@ export function Pill({
       <Text variant="button" color={primary ? "onAccent" : "accent"}>
         {label}
       </Text>
-    </Pressable>
+    </PressScale>
   );
 }
 

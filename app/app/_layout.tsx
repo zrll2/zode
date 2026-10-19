@@ -2,9 +2,12 @@ import React from "react";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import {
+  Nunito_800ExtraBold,
+  useFonts,
+} from "@expo-google-fonts/nunito";
+import {
   SourceSerif4_400Regular,
   SourceSerif4_500Medium,
-  useFonts,
 } from "@expo-google-fonts/source-serif-4";
 import { RelayProvider } from "../src/useRelay";
 import { FontsLoadedProvider, useTheme } from "../src/theme";
@@ -13,6 +16,7 @@ export default function RootLayout() {
   const [fontsLoaded] = useFonts({
     SourceSerif4_400Regular,
     SourceSerif4_500Medium,
+    Nunito_800ExtraBold,
   });
   return (
     <FontsLoadedProvider value={!!fontsLoaded}>

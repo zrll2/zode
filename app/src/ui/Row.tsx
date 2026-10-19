@@ -1,6 +1,7 @@
 import React, { useRef } from "react";
-import { Animated, Pressable, StyleSheet, View } from "react-native";
+import { Animated, StyleSheet, View } from "react-native";
 import { useTheme } from "../theme";
+import { PressScale } from "./PressScale";
 import { Text } from "./Text";
 
 interface RowProps {
@@ -12,14 +13,15 @@ interface RowProps {
 }
 
 // List row: title + optional subtitle + optional right node (status dot,
-// check icon). The pressed state fades to the muted background in 150 ms.
+// check icon). The pressed state fades to the muted background in 150 ms and
+// the content springs to 0.98.
 export function Row({ title, subtitle, right, onPress, accessibilityLabel }: RowProps) {
   const t = useTheme();
   const fade = useRef(new Animated.Value(0)).current;
   const animate = (toValue: number) =>
     Animated.timing(fade, { toValue, duration: 150, useNativeDriver: true }).start();
   return (
-    <Pressable
+    <PressScale
       onPress={onPress}
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel ?? title}
@@ -45,7 +47,7 @@ export function Row({ title, subtitle, right, onPress, accessibilityLabel }: Row
         ) : undefined}
       </View>
       {right}
-    </Pressable>
+    </PressScale>
   );
 }
 
