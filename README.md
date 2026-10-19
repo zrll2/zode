@@ -21,7 +21,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/hero.png" width="860" alt="Zode: sessions, chat and approval screens, light and dark">
+  <img src="docs/images/hero.png" width="860" alt="Zode on iPhone: follow sessions, read the work, how it connects, private by design">
 </p>
 
 ---

@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/hero.png" width="860" alt="Zode：会话、聊天、审批界面，浅色和深色">
+  <img src="docs/images/hero.png" width="860" alt="iPhone 上的 Zode：跟进会话、阅读工作成果、连接方式、隐私优先">
 </p>
 
 ---
