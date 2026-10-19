@@ -85,7 +85,7 @@ for (const loc of ['en-US', 'zh-CN']) {
 
 // ---------------------------------------------------------------- screenshots
 section('Screenshots');
-const IOS = new Set(['1320x2868', '1290x2796', '1284x2778', '1242x2688']);
+const IOS = new Set(['1206x2622', '1179x2556', '1320x2868', '1290x2796', '1284x2778', '1242x2688']);
 const shotsDir = 'store/screenshots/ios';
 const ios = exists(shotsDir) ? fs.readdirSync(path.join(root, shotsDir)).filter((f) => f.endsWith('.png')) : [];
 ios.length >= 1 && ios.length <= 10 ? ok(`${ios.length} iPhone screenshot(s)`) : err('need 1 to 10 iPhone screenshots in store/screenshots/ios');
