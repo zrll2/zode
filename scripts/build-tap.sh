@@ -27,6 +27,8 @@ xattr -cr "$DST"
 PLIST="$DST/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName Zode" "$PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string Zode" "$PLIST"
 [ -f "$ROOT/assets/Zode.icns" ] && cp "$ROOT/assets/Zode.icns" "$DST/Contents/Resources/icon.icns"
+# ZCode also sets its Dock icon from icon.png at runtime, so replace that too.
+[ -f "$ROOT/assets/logo.png" ] && sips -z 1024 1024 "$ROOT/assets/logo.png" --out "$DST/Contents/Resources/icon.png" >/dev/null 2>&1 || true
 
 # Keep the real CLI, put a small shim in its place.
 mv "$GLM/zcode.cjs" "$GLM/zcode.real.cjs"
