@@ -138,7 +138,7 @@ Read [docs/SECURITY.md](docs/SECURITY.md) before you expose the relay beyond you
 
 ## Documentation
 
-[Setup](docs/SETUP.md) · [Workflow](docs/WORKFLOW.md) · [Phone and remote access](docs/PHONE.md) · [Architecture](docs/ARCHITECTURE.md) · [Protocol notes](docs/PROTOCOL.md) · [Security](docs/SECURITY.md) · [Contributing](CONTRIBUTING.md)
+[Setup](docs/SETUP.md) · [Workflow](docs/WORKFLOW.md) · [Phone and remote access](docs/PHONE.md) · [Architecture](docs/ARCHITECTURE.md) · [Protocol notes](docs/PROTOCOL.md) · [App Store and Google Play](docs/STORE_SUBMISSION.md) · [Privacy](docs/PRIVACY.md) · [Security](docs/SECURITY.md) · [Contributing](CONTRIBUTING.md)
 
 ## License
 

@@ -11,9 +11,12 @@ import {
 } from "react-native";
 import { Stack, useFocusEffect, useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
+import Constants from "expo-constants";
+import * as Linking from "expo-linking";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRelay } from "../src/useRelay";
 import { useTheme } from "../src/theme";
+import { PRIVACY_URL, SUPPORT_URL } from "../src/config";
 import { parseSessionList, timeAgo, type SessionRow } from "../src/util";
 import type { RelayStatus } from "../src/relay/client";
 import { groupSessions } from "../src/sessionGroups";
@@ -23,6 +26,10 @@ import { Row } from "../src/ui/Row";
 import { Screen } from "../src/ui/Screen";
 import { SectionHeader } from "../src/ui/SectionHeader";
 import { Text } from "../src/ui/Text";
+import { buildMenuItems, type MenuItem } from "../src/ui/menu";
+
+// App version comes from app.json (expo.version) for the sheet title.
+const APP_VERSION = Constants.expoConfig?.version;
 
 export default function SessionsScreen() {
   const t = useTheme();
@@ -90,24 +97,49 @@ export default function SessionsScreen() {
   }, [exitDemo, router]);
 
   const showMenu = useCallback(() => {
-    const destructiveLabel = demo ? "Exit demo" : "Unpair this phone";
-    const onDestructive = demo ? confirmExitDemo : confirmUnpair;
+    const items = buildMenuItems({ demo });
+    const labels = items.map((item) => item.label);
+    const destructiveIndex = items.findIndex((item) => item.destructive);
+    const cancelIndex = items.findIndex((item) => item.key === "cancel");
+    const title = APP_VERSION ? `Zode ${APP_VERSION}` : "Zode";
+    const runItem = (item: MenuItem | undefined) => {
+      if (!item) return;
+      switch (item.key) {
+        case "privacy":
+          void Linking.openURL(PRIVACY_URL).catch(() => {});
+          break;
+        case "support":
+          void Linking.openURL(SUPPORT_URL).catch(() => {});
+          break;
+        case "unpair":
+          confirmUnpair();
+          break;
+        case "exit-demo":
+          confirmExitDemo();
+          break;
+      }
+    };
     if (Platform.OS === "ios") {
       ActionSheetIOS.showActionSheetWithOptions(
         {
-          options: [destructiveLabel, "Cancel"],
-          destructiveButtonIndex: 0,
-          cancelButtonIndex: 1,
+          title,
+          options: labels,
+          cancelButtonIndex: cancelIndex,
+          destructiveButtonIndex: destructiveIndex === -1 ? undefined : destructiveIndex,
         },
-        (index) => {
-          if (index === 0) onDestructive();
-        },
+        (index) => runItem(items[index]),
       );
     } else {
-      Alert.alert("Options", undefined, [
-        { text: destructiveLabel, style: "destructive", onPress: onDestructive },
-        { text: "Cancel", style: "cancel" },
-      ]);
+      Alert.alert(
+        title,
+        undefined,
+        items.map((item) => ({
+          text: item.label,
+          style:
+            item.key === "cancel" ? "cancel" : item.destructive ? "destructive" : "default",
+          onPress: () => runItem(item),
+        })),
+      );
     }
   }, [demo, confirmUnpair, confirmExitDemo]);
 

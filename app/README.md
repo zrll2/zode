@@ -2,7 +2,7 @@
 
 Zode is an unofficial companion for the ZCode desktop app. It is an Expo (SDK 58)
 app with expo-router that controls ZCode sessions on a Mac through the
-[`relay`](RELAY_PROTOCOL.md).
+[`relay`](../relay/README.md).
 
 ## Design
 
@@ -25,15 +25,15 @@ Press `i` to open the iOS simulator (or scan the QR code with Expo Go on a devic
 
 ## Pair
 
-On the Mac, in the directory that runs the relay:
+On the Mac, in the Zode folder:
 
 ```bash
-node relay.mjs pair
+./zode pair
 ```
 
 Scan the printed QR code in the app (camera permission prompt), or paste the pairing
 text `{"u":…,"w":…,"c":…}` into the text box. Pairing codes work once and expire in
-5 minutes. `node relay.mjs devices` lists paired phones, `node relay.mjs revoke <id>`
+5 minutes. `./zode devices` lists paired phones, `./zode revoke <id>`
 removes one.
 
 The device token is stored in the iOS Keychain / Android Keystore via

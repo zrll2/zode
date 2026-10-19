@@ -84,9 +84,9 @@ export function parsePairingPayload(text: string): PairingPayload {
     if (sawIncomplete) throw new Error("Pairing text is missing u, w or c.");
     throw new Error("The relay URL must start with ws:// or wss://.");
   }
-  throw new Error(
-    "That is not valid JSON. Paste the pairing text shown by `node relay.mjs pair`.",
-  );
+    throw new Error(
+      "That is not valid JSON. Paste the pairing text shown by `./zode pair`.",
+    );
 }
 
 function toHttpBase(url: string): string {

@@ -103,7 +103,7 @@ Motion: 150-200 ms fades and presses only. A pressed row changes background to `
 - Back button is the arrow only (`headerBackButtonDisplayMode: "minimal"`, `headerBackTitle: ""`).
 
 ### 3.3 Pair
-Centered column, generous whitespace: a 64 px serif "Z" in `accent`, serif title "Connect to your Mac", one muted paragraph ("Run `node relay.mjs pair` on your Mac, then scan the code."), primary pill button (`accent` fill, `onAccent` text) "Scan QR code", secondary text button "Paste pairing text" which reveals a multiline field with the existing smart-quote-safe settings and a "Connect" pill. Errors appear inline in `danger`, below the control. No header bar.
+Centered column, generous whitespace: a 64 px serif "Z" in `accent`, serif title "Connect to your Mac", one muted paragraph ("Run `./zode pair` in the Zode folder on your Mac, then scan the code."), primary pill button (`accent` fill, `onAccent` text) "Scan QR code", secondary text button "Paste pairing text" which reveals a multiline field with the existing smart-quote-safe settings and a "Connect" pill. Errors appear inline in `danger`, below the control. No header bar.
 
 ### 3.4 New session
 Simple page, title serif "New session". Section "Folder": list of workspaces (folder name 17/500, full path 13 `subtext`), single choice shown with a check icon. Section "Mode": two segmented options **Plan** ("Reads and proposes, changes nothing") and **Edit** ("Can change files"). Primary pill "Start" fixed above the keyboard/safe area. After start, go to the Chat screen with the composer focused. Only `plan` and `edit`; never offer other modes.

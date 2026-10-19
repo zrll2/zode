@@ -1,0 +1,1 @@
+First release. Pair your Mac, follow your sessions, read the agent's work, and start new sessions. Includes a demo mode with sample data.

@@ -11,8 +11,10 @@ import { CameraView, useCameraPermissions } from "expo-camera";
 import { useRouter } from "expo-router";
 import Constants from "expo-constants";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import * as Linking from "expo-linking";
 import { useRelay } from "../src/useRelay";
 import { parsePairingPayload, pair } from "../src/pairing";
+import { PRIVACY_URL } from "../src/config";
 import { radius, useTheme } from "../src/theme";
 import { Pill } from "../src/ui/Pill";
 import { Screen } from "../src/ui/Screen";
@@ -75,7 +77,7 @@ export default function PairScreen() {
           <Text style={[styles.mark, { color: t.colors.accent, fontFamily: t.fonts.serif }]}>Z</Text>
           <Text variant="display">Connect to your Mac</Text>
           <Text variant="body" color="subtext" style={styles.paragraph}>
-            Run `node relay.mjs pair` on your Mac, then scan the code.
+            Run `./zode pair` in the Zode folder on your Mac, then scan the code.
           </Text>
         </View>
         <View style={styles.actions}>
@@ -126,6 +128,9 @@ export default function PairScreen() {
               Try the demo
             </Text>
           </Pressable>
+          <Text variant="caption" color="subtext" style={styles.hint}>
+            No Mac handy? Try the demo to look around.
+          </Text>
           {showPaste ? (
             <View style={styles.pasteBox}>
               <TextInput
@@ -163,6 +168,17 @@ export default function PairScreen() {
               {error}
             </Text>
           ) : undefined}
+          <Pressable
+            onPress={() => void Linking.openURL(PRIVACY_URL).catch(() => {})}
+            accessibilityRole="link"
+            accessibilityLabel="Privacy policy"
+            hitSlop={8}
+            style={styles.privacyLink}
+          >
+            <Text variant="caption" color="subtext">
+              Privacy policy
+            </Text>
+          </Pressable>
         </View>
       </KeyboardAvoidingView>
     </Screen>
@@ -193,4 +209,6 @@ const styles = StyleSheet.create({
     textAlignVertical: "top",
   },
   error: { textAlign: "center" },
+  hint: { textAlign: "center" },
+  privacyLink: { alignSelf: "center", marginTop: 8, padding: 8 },
 });

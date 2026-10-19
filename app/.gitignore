@@ -2,3 +2,12 @@ node_modules/
 .expo/
 dist/
 *.log
+# generated native projects and signing material (never commit)
+/ios
+/android
+*.keystore
+*.jks
+*.p8
+*.p12
+*.mobileprovision
+play-service-account*.json

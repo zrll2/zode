@@ -116,7 +116,7 @@ flowchart LR
 
 ## 文档
 
-[安装](docs/SETUP.md) · [工作流](docs/WORKFLOW.md) · [手机与远程访问](docs/PHONE.md) · [架构](docs/ARCHITECTURE.md) · [协议笔记](docs/PROTOCOL.md) · [安全](docs/SECURITY.md) · [参与贡献](CONTRIBUTING.md)
+[安装](docs/SETUP.md) · [工作流](docs/WORKFLOW.md) · [手机与远程访问](docs/PHONE.md) · [架构](docs/ARCHITECTURE.md) · [协议笔记](docs/PROTOCOL.md) · [上架 App Store 和 Google Play](docs/STORE_SUBMISSION.md) · [隐私](docs/PRIVACY.md) · [安全](docs/SECURITY.md) · [参与贡献](CONTRIBUTING.md)
 
 ## 许可证
 

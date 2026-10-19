@@ -1,0 +1,26 @@
+Zode is the phone companion for the ZCode desktop app on your Mac.
+
+Your coding agent works on your Mac. Zode lets you follow it from the sofa, the train or the next room.
+
+WHAT YOU CAN DO
+• See at a glance what needs you, what is running, and what finished, grouped by day.
+• Read the agent's work like a document: Markdown, code blocks, tables, and tool calls folded into one quiet line.
+• Send a message, stop a running turn, or start a new session in a folder you choose.
+• Catch up after a dropped connection. Zode replays what you missed.
+• Light and dark appearance that follows your phone.
+
+HOW IT WORKS
+Zode talks to a small open-source relay that runs on your own Mac. You pair your phone once by scanning a QR code. Nothing goes through our servers, because there are none. Your conversations stay between your phone and your Mac.
+
+NO MAC HANDY?
+Tap "Try the demo" on the first screen to explore the whole app with sample data.
+
+PRIVATE BY DESIGN
+• No account, no ads, no analytics, no tracking.
+• Pairing uses a one-time code, and your phone keeps its own revocable token in the Android Keystore-backed secure store.
+• Use Tailscale or another private network to reach your Mac when you are away from home.
+
+SETUP
+Zode needs the free open-source Zode relay on a Mac. Instructions: https://github.com/zrll2/zode
+
+Zode is an independent project. It is not affiliated with, endorsed by, or sponsored by Z.AI or Anthropic. ZCode and Claude Code are trademarks of their respective owners.
