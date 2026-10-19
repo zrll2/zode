@@ -13,6 +13,6 @@
   "description": "Drive ZCode from Claude Code: MCP server and CLI tools",
   "license": "MIT",
   "scripts": {
-    "test": "node --test test/"
+    "test": "node --test test/*.test.mjs"
   }
 }
