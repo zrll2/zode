@@ -22,11 +22,10 @@ rm -rf "$DST"
 ditto "$SRC" "$DST"
 xattr -cr "$DST"
 
-# Name and icon: it shows up as "Zode" in the Dock and the menu bar, with the Zode logo.
+# Name and icon: Finder and the Dock show "Zode", with the Zode logo.
+# Leave CFBundleName as it is: Electron uses it to find its helper processes, and the app crashes on launch without it.
 PLIST="$DST/Contents/Info.plist"
-for k in CFBundleName CFBundleDisplayName; do
-  /usr/libexec/PlistBuddy -c "Set :$k Zode" "$PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :$k string Zode" "$PLIST"
-done
+/usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName Zode" "$PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string Zode" "$PLIST"
 [ -f "$ROOT/assets/Zode.icns" ] && cp "$ROOT/assets/Zode.icns" "$DST/Contents/Resources/icon.icns"
 
 # Keep the real CLI, put a small shim in its place.
