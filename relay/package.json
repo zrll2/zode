@@ -6,6 +6,9 @@
   "bin": {
     "zode-relay": "relay.mjs"
   },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
   "dependencies": {
     "qrcode-terminal": "^0.12.0",
     "ws": "^8.22.0"

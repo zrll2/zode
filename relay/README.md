@@ -18,6 +18,25 @@ node relay.mjs revoke <id>  # remove a phone
 Set `RELAY_HOST` to the Tailscale or WireGuard address of this Mac. Set `RELAY_PUBLIC_URL` to the URL the phone uses (for example `ws://100.x.y.z:8787`).
 The relay has no TLS. Do not bind it to `0.0.0.0` on an untrusted network. Do not forward the port on your router.
 
+## Module API
+
+Zode.app runs the relay inside its own process; the CLI above is a thin wrapper over it.
+
+```js
+import { createRelay } from './relay/service.mjs';
+
+const relay = createRelay({ host, port, publicUrl, stateDir, tapDir, log });
+await relay.start();            // -> {host, port}; rejects with the listen error (.code 'EADDRINUSE', ...)
+await relay.stop();             // closes the http server, websockets, upstream sockets and timers; safe to call twice
+relay.status();                 // {running, host, port, publicUrl, upstreams, clients, devices}
+relay.createPairing();          // -> {code, expiresAt, publicUrl, payload}; payload is the QR text, override publicUrl per call
+relay.listDevices();            // -> [{id, name, pairedAt}]
+relay.revokeDevice(id);         // -> boolean; also closes that phone's live websocket
+relay.on('status', fn);         // emitted when status() changes, at most one per 250 ms (relay.off to unsubscribe)
+```
+
+Every option is optional: `host` 127.0.0.1, `port` 8787, `publicUrl` `ws://host:port`, `stateDir` `~/.zode/relay`, `tapDir` `~/.zcode-tap`, `log` `console`, `codeTtlMs` 5 minutes (pairing-code lifetime). All state is per instance: two relays with different ports and state dirs can run in one process. `checkPolicy(method, params)` is also exported for callers that want the allow-list themselves. Run the tests with `npm test` in this directory.
+
 ## Protocol (JSON text frames)
 
 | Direction | Frame |
