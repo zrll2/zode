@@ -93,7 +93,7 @@ for (const f of ios) { const i = pngInfo(`${shotsDir}/${f}`); IOS.has(`${i?.w}x$
 const pdir = `${play}/phoneScreenshots`;
 const ps = exists(pdir) ? fs.readdirSync(path.join(root, pdir)).filter((f) => f.endsWith('.png')) : [];
 ps.length >= 2 && ps.length <= 8 ? ok(`${ps.length} Play phone screenshot(s)`) : err('Play needs 2 to 8 phone screenshots');
-for (const f of ps) { const i = pngInfo(`${pdir}/${f}`); const okSize = i && Math.min(i.w, i.h) >= 320 && Math.max(i.w, i.h) <= 3840 && Math.max(i.w, i.h) <= 2 * Math.min(i.w, i.h); okSize ? ok(`${f} ${i.w}x${i.h}`) : err(`${f} breaks Play size rules (320 to 3840 px, long side at most 2x the short side)`); }
+for (const f of ps) { const i = pngInfo(`${pdir}/${f}`); const ratio = i ? Math.max(i.w, i.h) / Math.min(i.w, i.h) : 0; const okSize = i && Math.min(i.w, i.h) >= 320 && Math.max(i.w, i.h) <= 3840 && Math.abs(ratio - 16 / 9) < 0.02; okSize ? ok(`${f} ${i.w}x${i.h}`) : err(`${f} breaks Play size rules (320 to 3840 px, exactly 16:9 or 9:16)`); }
 
 // ---------------------------------------------------------------- source hygiene
 section('Source hygiene');

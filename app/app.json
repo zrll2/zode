@@ -7,7 +7,7 @@
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "bundleIdentifier": "dev.zode.app",
+      "bundleIdentifier": "com.zode.app",
       "buildNumber": "1",
       "supportsTablet": false,
       "requireFullScreen": false,
@@ -51,7 +51,7 @@
       }
     },
     "android": {
-      "package": "dev.zode.app",
+      "package": "com.zode.app",
       "permissions": [
         "android.permission.CAMERA"
       ],
@@ -104,6 +104,17 @@
     "icon": "./assets/icon.png",
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "extra": {
+      "router": {
+        "asyncRoutes": {
+          "web": true
+        }
+      },
+      "eas": {
+        "projectId": "c2be34e6-2350-4e75-b619-55f5d6474b06"
+      }
+    },
+    "owner": "zrll2"
   }
 }

@@ -2,7 +2,7 @@
 
 The app is ready to build. Everything that needs **your** accounts is listed here. Run `cd app && npm run store:check` at any time: it must say `0 error(s)`.
 
-Bundle id and package: `dev.zode.app`. Change them in `app/app.json` if you publish your own build (they must be unique in each store).
+Bundle id and package: `com.zode.app`. Change them in `app/app.json` if you publish your own build (they must be unique in each store).
 
 ## What you need once
 
@@ -23,7 +23,7 @@ npx eas-cli init            # writes extra.eas.projectId into app.json
 
 ## 2. App Store (iOS)
 
-1. **Create the app** in App Store Connect: New App, platform iOS, name `Zode`, bundle id `dev.zode.app`, SKU `zode-app`.
+1. **Create the app** in App Store Connect: New App, platform iOS, name `Zode for ZCode`, bundle id `com.zode.app`, SKU `zode-app`.
 2. **Fill in your review contact** in `app/store.config.json` (`apple.review`: name, email, phone). Replace every `REPLACE_ME`.
 3. **Build and upload:**
    ```bash
@@ -54,7 +54,7 @@ npx eas-cli init            # writes extra.eas.projectId into app.json
 
 ## 3. Google Play (Android)
 
-1. **Create the app** in Play Console: name `Zode`, default language English (United States), App, Free.
+1. **Create the app** in Play Console: name `Zode for ZCode`, default language English (United States), App, Free.
 2. **Create a service account** for uploads (one time): Play Console, Setup, API access, create a service account, grant "Release manager". Download the JSON key and save it as `app/play-service-account.json`. It is already ignored by git. **Never commit it.**
 3. **The first release must be uploaded by hand.** Google does not allow the API for a brand-new app:
    ```bash
@@ -67,7 +67,7 @@ npx eas-cli init            # writes extra.eas.projectId into app.json
 4. **Store listing:** copy the text from `app/store/play/metadata/android/en-US/` and `zh-CN/`. Upload:
    - Icon: `images/icon.png` (512 x 512)
    - Feature graphic: `images/featureGraphic.png` (1024 x 500)
-   - Phone screenshots: `images/phoneScreenshots/` (4 files)
+   - Phone screenshots: `images/phoneScreenshots/` (4 files, 1080 x 1920; Play requires exactly 16:9 or 9:16)
 5. **App content forms** (all by hand in Play Console, Policy and programs, App content):
    - **Privacy policy:** `https://github.com/zrll2/zode/blob/main/docs/PRIVACY.md`
    - **Data safety:** "No data collected", "No data shared". Data in transit is encrypted: answer **No** (plain `ws://` on a private network), or **Yes** only if you front the relay with TLS.
@@ -93,3 +93,7 @@ npx eas-cli init            # writes extra.eas.projectId into app.json
 | `store/screenshots/ios/` | App Store screenshots, 1320 x 2868 |
 | `scripts/store-check.mjs` | `npm run store:check`, the pre-flight |
 | `../assets/make-store-graphics.py` | Re-renders the Play icon and feature graphic |
+
+## Why the store name is "Zode for ZCode"
+
+The name "Zode" alone was already taken in App Store Connect (names are unique worldwide). "for ZCode" states compatibility; it does not claim to be the ZCode app. Keep the "not affiliated with Z.AI or Anthropic" line in the description, and never use their logos.
