@@ -24,7 +24,7 @@ echo "Building Zode.app ..."
 cat <<NEXT
 
 Done. Next:
-  1. Quit ZCode if it is open, then:  open ~/Applications/Zode.app   (log in once, open any project)
+  1. Quit ZCode if it is open, then:  open /Applications/Zode.app   (log in once, open any project)
   2. ./zode doctor
   3. In Claude Code, say: "Delegate this to ZCode: <your task>"
 NEXT

@@ -2,13 +2,14 @@
 # Build "Zode.app": a copy of your ZCode app whose agent can also be reached over a local socket.
 # The original ZCode is not touched. Nothing from ZCode is stored in this repository.
 #   ZCODE_APP   source app   (default /Applications/ZCode.app)
-#   ZODE_TAP_APP destination (default ~/Applications/Zode.app)
+#   ZODE_TAP_APP destination (default /Applications/Zode.app, or ~/Applications if /Applications is not writable)
 set -euo pipefail
 SRC="${ZCODE_APP:-/Applications/ZCode.app}"
-DST="${ZODE_TAP_APP:-$HOME/Applications/Zode.app}"
+if [ -w /Applications ]; then DEFAULT_DST="/Applications/Zode.app"; else DEFAULT_DST="$HOME/Applications/Zode.app"; fi
+DST="${ZODE_TAP_APP:-$DEFAULT_DST}"
 GLM="$DST/Contents/Resources/glm"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-LEGACY="$HOME/Applications/ZCode-Tap.app"   # name used before the app was called Zode
+LEGACY="$HOME/Applications/ZCode-Tap.app"; LEGACY2="$HOME/Applications/Zode.app"   # name used before the app was called Zode
 
 [ -d "$SRC" ] || { echo "ZCode not found at $SRC. Install ZCode first, or set ZCODE_APP." >&2; exit 1; }
 [ -f "$SRC/Contents/Resources/glm/zcode.cjs" ] || { echo "$SRC does not look like ZCode (no Resources/glm/zcode.cjs)." >&2; exit 1; }
@@ -26,6 +27,8 @@ xattr -cr "$DST"
 # Leave CFBundleName as it is: Electron uses it to find its helper processes, and the app crashes on launch without it.
 PLIST="$DST/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName Zode" "$PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string Zode" "$PLIST"
+# Own bundle id, so the Dock does not merge Zode.app with the original ZCode (which would show ZCode's icon).
+/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier dev.zode.app" "$PLIST"
 [ -f "$ROOT/assets/Zode.icns" ] && cp "$ROOT/assets/Zode.icns" "$DST/Contents/Resources/icon.icns"
 # ZCode also sets its Dock icon from icon.png at runtime, so replace that too.
 [ -f "$ROOT/assets/logo.png" ] && sips -z 1024 1024 "$ROOT/assets/logo.png" --out "$DST/Contents/Resources/icon.png" >/dev/null 2>&1 || true
@@ -58,6 +61,8 @@ chmod +x "$GLM/zcode.cjs"
 echo "Signing (ad hoc) ..."
 codesign --force --deep -s - "$DST" >/dev/null 2>&1
 codesign --verify --deep "$DST" 2>/dev/null && echo "Built $DST"
-if [ -d "$LEGACY" ] && ! pgrep -f "$LEGACY/Contents/Frameworks" >/dev/null 2>&1; then
-  rm -rf "$LEGACY" && echo "Removed the old ZCode-Tap.app (replaced by Zode.app)."
-fi
+for OLD in "$LEGACY" "$LEGACY2"; do
+  if [ "$OLD" != "$DST" ] && [ -d "$OLD" ] && ! pgrep -f "$OLD/Contents/Frameworks" >/dev/null 2>&1; then
+    rm -rf "$OLD" && echo "Removed the old copy at $OLD (replaced by $DST)."
+  fi
+done

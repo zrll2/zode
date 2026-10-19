@@ -23,13 +23,13 @@ cd zode
 
 1. Checks the tools above.
 2. Runs `npm install` for `bridge/` and `relay/`.
-3. Builds **Zode.app** at `~/Applications/Zode.app` (see below).
+3. Builds **Zode.app** at `/Applications/Zode.app` (see below).
 4. Installs the `delegate-to-zcode` skill into `~/.claude/skills` and remembers where Zode lives (`~/.zode/home`).
 
 Then:
 
 ```bash
-open ~/Applications/Zode.app    # quit the original ZCode first; log in once; open any project
+open /Applications/Zode.app    # quit the original ZCode first; log in once; open any project
 ./zode doctor                        # every line should say OK
 ```
 
@@ -59,14 +59,14 @@ When ZCode updates, rebuild the copy:
 ## Uninstall
 
 ```bash
-rm -rf ~/Applications/Zode.app ~/.zode ~/.zcode-tap ~/.claude/skills/delegate-to-zcode
+rm -rf /Applications/Zode.app ~/.zode ~/.zcode-tap ~/.claude/skills/delegate-to-zcode
 ```
 
 ## Troubleshooting
 
 | Problem | Fix |
 |---|---|
-| `doctor` says Zode.app is not running | Quit ZCode, then `open ~/Applications/Zode.app`. |
+| `doctor` says Zode.app is not running | Quit ZCode, then `open /Applications/Zode.app`. |
 | `doctor` says no tap sockets | Open a project in Zode.app. The sockets appear when ZCode starts an agent. |
 | `doctor --models` says no models | Log in inside Zode.app (it may ask once). |
 | `install` says Zode.app is running | Quit it (Cmd+Q) and run `./zode install` again. |

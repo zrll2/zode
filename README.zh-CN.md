@@ -45,7 +45,7 @@ Zode 把两者连起来，让它们各做自己最擅长的事：
 ```bash
 git clone https://github.com/zrll2/zode.git && cd zode
 ./zode install        # 基于你的 ZCode 构建 "Zode.app" 副本，并安装技能
-open ~/Applications/Zode.app   # 登录一次，打开任意项目
+open /Applications/Zode.app   # 登录一次，打开任意项目
 ./zode doctor         # 全部通过了吗？
 ```
 

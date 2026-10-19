@@ -14,7 +14,7 @@ Zode lives in `__ZODE_HOME__` (installed by `zode install`). The tools are in `_
 node __ZODE_HOME__/bridge/doctor.mjs <worktree>          # add --models to also check the login
 ```
 It checks: Zode.app running, server sockets present, branch is `zcode/*`, separate worktree.
-- Not running: tell the user to quit the original ZCode (Cmd+Q) and run `open ~/Applications/Zode.app`. Only the Tap copy can be driven. Do not start it yourself while the user has unsaved work in ZCode.
+- Not running: tell the user to quit the original ZCode (Cmd+Q) and run `open /Applications/Zode.app`. Only the Tap copy can be driven. Do not start it yourself while the user has unsaved work in ZCode.
 - The project must be open in Zode.app, or any open project's server is used (sessions are not tied to one server).
 
 ## 1. One worktree per task

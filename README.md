@@ -52,7 +52,7 @@ You need: a Mac, [ZCode](https://z.ai) (logged in), [Claude Code](https://claude
 ```bash
 git clone https://github.com/zrll2/zode.git && cd zode
 ./zode install        # builds a "Zode.app" copy of your ZCode, installs the skill
-open ~/Applications/Zode.app   # log in once, open any project
+open /Applications/Zode.app   # log in once, open any project
 ./zode doctor         # everything green?
 ```
 
