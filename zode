@@ -1,0 +1,31 @@
+#!/bin/bash
+# Zode command line.  ./zode help
+ZODE_HOME="$(cd "$(dirname "$0")" && pwd)"
+cmd="${1:-help}"; [ $# -gt 0 ] && shift
+case "$cmd" in
+  install)   exec "$ZODE_HOME/scripts/install.sh" "$@" ;;
+  doctor)    exec node "$ZODE_HOME/bridge/doctor.mjs" "$@" ;;
+  relay)     exec node "$ZODE_HOME/relay/relay.mjs" serve "$@" ;;
+  pair)      exec node "$ZODE_HOME/relay/relay.mjs" pair "$@" ;;
+  devices)   exec node "$ZODE_HOME/relay/relay.mjs" devices "$@" ;;
+  revoke)    exec node "$ZODE_HOME/relay/relay.mjs" revoke "$@" ;;
+  task)      exec node "$ZODE_HOME/bridge/zcode-task.mjs" "$@" ;;
+  stop)      exec node "$ZODE_HOME/bridge/zcode-stop.mjs" "$@" ;;
+  skill)     exec "$ZODE_HOME/scripts/install-skill.sh" "$@" ;;
+  scan)      exec node "$ZODE_HOME/scripts/scan-secrets.mjs" "$@" ;;
+  help|-h|--help|*)
+    cat <<HELP
+Zode: Claude Code decides, ZCode writes, you watch from your phone.
+
+  zode install            build ZCode-Tap from your ZCode, install the skill
+  zode doctor [worktree]  check that everything is ready (add --models to test the login)
+  zode relay              start the phone relay on this Mac
+  zode pair               print a QR code to pair a phone
+  zode devices | revoke <id>   list or remove paired phones
+  zode task --worktree W --order file.md   send one work order to ZCode
+  zode stop <sessionId>   stop a running ZCode turn
+  zode skill              reinstall the Claude Code skill
+  zode scan               scan this repo for personal data before you share it
+HELP
+    ;;
+esac

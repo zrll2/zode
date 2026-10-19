@@ -1,0 +1,15 @@
+{
+  "name": "zode-relay",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "zode-relay": "relay.mjs"
+  },
+  "dependencies": {
+    "qrcode-terminal": "^0.12.0",
+    "ws": "^8.22.0"
+  },
+  "description": "WebSocket gateway between the Zode phone app and ZCode on your Mac",
+  "license": "MIT"
+}

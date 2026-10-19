@@ -1,0 +1,14 @@
+node_modules/
+.expo/
+dist/
+build/
+*.log
+.DS_Store
+# never publish these
+*.events.jsonl
+.zcode-session-*
+zcode.cjs
+zcode.real.cjs
+*.asar
+.env
+.env.*

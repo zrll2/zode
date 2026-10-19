@@ -1,0 +1,18 @@
+{
+  "name": "zode-bridge",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "zode-bridge": "server.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "zod": "^3.25.76"
+  },
+  "description": "Drive ZCode from Claude Code: MCP server and CLI tools",
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test test/"
+  }
+}
