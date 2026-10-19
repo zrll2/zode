@@ -1,0 +1,34 @@
+{
+  "expo": {
+    "name": "Zode",
+    "slug": "zode",
+    "version": "1.0.0",
+    "scheme": "zode",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "bundleIdentifier": "dev.zode.app",
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true
+        },
+        "NSCameraUsageDescription": "Zode scans the pairing QR code shown by the relay on your Mac."
+      }
+    },
+    "android": {
+      "package": "dev.zode.app",
+      "usesCleartextTraffic": true,
+      "permissions": ["android.permission.CAMERA"]
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Zode scans the pairing QR code shown by the relay on your Mac."
+        }
+      ],
+      "expo-secure-store"
+    ]
+  }
+}
