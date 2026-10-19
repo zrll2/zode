@@ -51,8 +51,8 @@ You need: a Mac, [ZCode](https://z.ai) (logged in), [Claude Code](https://claude
 
 ```bash
 git clone https://github.com/zrll2/zode.git && cd zode
-./zode install        # builds a "ZCode-Tap" copy of your ZCode, installs the skill
-open ~/Applications/ZCode-Tap.app   # log in once, open any project
+./zode install        # builds a "Zode.app" copy of your ZCode, installs the skill
+open ~/Applications/Zode.app   # log in once, open any project
 ./zode doctor         # everything green?
 ```
 
@@ -69,7 +69,7 @@ That is all. Claude Code creates a worktree, writes the order, sends it to ZCode
 ./zode pair           # prints a QR code
 ```
 
-Open the Zode app, tap **Scan QR code**. Done. See [docs/PHONE.md](docs/PHONE.md) to reach your Mac when you are away from home.
+Open Zode on your phone, tap **Scan QR code**. Done. See [docs/PHONE.md](docs/PHONE.md) to reach your Mac when you are away from home.
 
 ## How it works
 
@@ -130,7 +130,7 @@ Read [docs/SECURITY.md](docs/SECURITY.md) before you expose the relay beyond you
 
 **Do I need an API key?** No. Zode uses the login of your ZCode app.
 
-**Why a "ZCode-Tap" copy of the app?** ZCode keeps your login inside the app, so another program cannot reuse it. The copy adds a tiny shim that shares the app's own agent over a local socket. It is built from your own installation, on your own Mac. Your original app is not changed.
+**Why does Zode.app exist?** ZCode keeps your login inside the app, so another program cannot reuse it. The copy adds a tiny shim that shares the app's own agent over a local socket. It is built from your own installation, on your own Mac. Your original app is not changed.
 
 **Windows or Linux?** Not yet. Zode is built and tested on macOS.
 

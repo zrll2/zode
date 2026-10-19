@@ -1,12 +1,14 @@
 #!/bin/bash
-# Build "ZCode-Tap": a copy of your ZCode app whose agent can also be reached over a local socket.
+# Build "Zode.app": a copy of your ZCode app whose agent can also be reached over a local socket.
 # The original ZCode is not touched. Nothing from ZCode is stored in this repository.
 #   ZCODE_APP   source app   (default /Applications/ZCode.app)
-#   ZODE_TAP_APP destination (default ~/Applications/ZCode-Tap.app)
+#   ZODE_TAP_APP destination (default ~/Applications/Zode.app)
 set -euo pipefail
 SRC="${ZCODE_APP:-/Applications/ZCode.app}"
-DST="${ZODE_TAP_APP:-$HOME/Applications/ZCode-Tap.app}"
+DST="${ZODE_TAP_APP:-$HOME/Applications/Zode.app}"
 GLM="$DST/Contents/Resources/glm"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+LEGACY="$HOME/Applications/ZCode-Tap.app"   # name used before the app was called Zode
 
 [ -d "$SRC" ] || { echo "ZCode not found at $SRC. Install ZCode first, or set ZCODE_APP." >&2; exit 1; }
 [ -f "$SRC/Contents/Resources/glm/zcode.cjs" ] || { echo "$SRC does not look like ZCode (no Resources/glm/zcode.cjs)." >&2; exit 1; }
@@ -19,6 +21,13 @@ mkdir -p "$(dirname "$DST")"
 rm -rf "$DST"
 ditto "$SRC" "$DST"
 xattr -cr "$DST"
+
+# Name and icon: it shows up as "Zode" in the Dock and the menu bar, with the Zode logo.
+PLIST="$DST/Contents/Info.plist"
+for k in CFBundleName CFBundleDisplayName; do
+  /usr/libexec/PlistBuddy -c "Set :$k Zode" "$PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :$k string Zode" "$PLIST"
+done
+[ -f "$ROOT/assets/Zode.icns" ] && cp "$ROOT/assets/Zode.icns" "$DST/Contents/Resources/icon.icns"
 
 # Keep the real CLI, put a small shim in its place.
 mv "$GLM/zcode.cjs" "$GLM/zcode.real.cjs"
@@ -48,3 +57,6 @@ chmod +x "$GLM/zcode.cjs"
 echo "Signing (ad hoc) ..."
 codesign --force --deep -s - "$DST" >/dev/null 2>&1
 codesign --verify --deep "$DST" 2>/dev/null && echo "Built $DST"
+if [ -d "$LEGACY" ] && ! pgrep -f "$LEGACY/Contents/Frameworks" >/dev/null 2>&1; then
+  rm -rf "$LEGACY" && echo "Removed the old ZCode-Tap.app (replaced by Zode.app)."
+fi

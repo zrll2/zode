@@ -7,7 +7,7 @@ flowchart TB
   subgraph Mac["Your Mac"]
     CC["Claude Code<br/>+ delegate-to-zcode skill"]
     BR["bridge/<br/>zode task, MCP server"]
-    subgraph TAP["ZCode-Tap.app (copy of ZCode)"]
+    subgraph TAP["Zode.app (copy of ZCode)"]
       GUI["ZCode window"]
       W["agent-wrapper<br/>(tee)"]
       AG["ZCode agent"]
@@ -36,7 +36,7 @@ flowchart TB
 
 **app.** An Expo app. A small client (`src/relay/client.ts`) handles pairing, authentication, request matching, reconnect and replay. A reducer (`src/relay/reducer.ts`) turns events into chat items. Screens follow [`app/docs/DESIGN.md`](../app/docs/DESIGN.md).
 
-**ZCode-Tap.** Built by `scripts/build-tap.sh`: copy the app, move `glm/zcode.cjs` to `glm/zcode.real.cjs`, add a shim as `zcode.cjs`, sign ad hoc. The shim loads the wrapper from the Zode folder (path in `~/.zode/home`).
+**Zode.app.** Built by `scripts/build-tap.sh`: copy the app, move `glm/zcode.cjs` to `glm/zcode.real.cjs`, add a shim as `zcode.cjs`, sign ad hoc. The shim loads the wrapper from the Zode folder (path in `~/.zode/home`).
 
 ## Why this design
 

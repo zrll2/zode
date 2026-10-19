@@ -1,5 +1,5 @@
 #!/bin/bash
-# zode install: check prerequisites, install dependencies, build ZCode-Tap, install the Claude Code skill.
+# zode install: check prerequisites, install dependencies, build Zode.app, install the Claude Code skill.
 set -euo pipefail
 ZODE_HOME="$(cd "$(dirname "$0")/.." && pwd)"
 ok(){ printf '  \033[32m✓\033[0m %s\n' "$1"; }; bad(){ printf '  \033[31m✗\033[0m %s\n' "$1" >&2; exit 1; }
@@ -17,14 +17,14 @@ echo "Installing dependencies ..."
 ( cd "$ZODE_HOME/bridge" && npm install --omit=dev --no-audit --no-fund --silent ) && ok "bridge"
 ( cd "$ZODE_HOME/relay"  && npm install --omit=dev --no-audit --no-fund --silent ) && ok "relay"
 
-echo "Building ZCode-Tap ..."
+echo "Building Zode.app ..."
 "$ZODE_HOME/scripts/build-tap.sh"
 "$ZODE_HOME/scripts/install-skill.sh"
 
 cat <<NEXT
 
 Done. Next:
-  1. Quit ZCode if it is open, then:  open ~/Applications/ZCode-Tap.app   (log in once, open any project)
+  1. Quit ZCode if it is open, then:  open ~/Applications/Zode.app   (log in once, open any project)
   2. ./zode doctor
   3. In Claude Code, say: "Delegate this to ZCode: <your task>"
 NEXT

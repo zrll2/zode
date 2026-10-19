@@ -9,17 +9,18 @@ import path from 'node:path';
 const ok = (m) => console.log('OK   ' + m), bad = (m) => { console.log('FAIL ' + m); failed++; }; let failed = 0;
 const sh = (c, a) => { try { return execFileSync(c, a, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { return ''; } };
 
-// 1. ZCode-Tap.app (the signed copy with the tee wrapper) must be running
-const tapApp = path.join(os.homedir(), 'Applications/ZCode-Tap.app');
-if (!fs.existsSync(tapApp)) bad('ZCode-Tap.app missing at ~/Applications. Run `zode install`.');
-else if (!sh('pgrep', ['-f', 'ZCode-Tap.app/Contents/Frameworks'])) bad('ZCode-Tap.app is not running. Start it:  open ~/Applications/ZCode-Tap.app   (quit the original ZCode first)');
-else ok('ZCode-Tap.app is running');
+// 1. Zode.app (the signed copy with the tee wrapper) must be running
+let tapApp = path.join(os.homedir(), 'Applications/Zode.app');
+if (!fs.existsSync(tapApp)) { const old = path.join(os.homedir(), 'Applications/ZCode-Tap.app'); if (fs.existsSync(old)) tapApp = old; }  // pre-rename install
+if (!fs.existsSync(tapApp)) bad('Zode.app missing at ~/Applications. Run `zode install`.');
+else if (!sh('pgrep', ['-f', path.basename(tapApp) + '/Contents/Frameworks'])) bad('Zode.app is not running. Start it:  open ~/Applications/Zode.app   (quit the original ZCode first)');
+else ok('Zode.app is running');
 
 // 2. tap sockets
 const dir = path.join(os.homedir(), '.zcode-tap');
 let metas = [];
 try { metas = fs.readdirSync(dir).filter(f => f.endsWith('.json')).map(f => JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'))).filter(m => { try { process.kill(m.pid, 0); return true; } catch { return false; } }); } catch {}
-metas.length ? ok(`${metas.length} ZCode server socket(s)`) : bad('no tap sockets in ~/.zcode-tap (open a project in ZCode-Tap first)');
+metas.length ? ok(`${metas.length} ZCode server socket(s)`) : bad('no tap sockets in ~/.zcode-tap (open a project in Zode.app first)');
 
 // 3. model available (opt-in: creates and closes one probe session, which stays in the ZCode list)
 if (metas.length && process.argv.includes('--models')) {
@@ -34,7 +35,7 @@ if (metas.length && process.argv.includes('--models')) {
   if (res?.result?.session?.sessionId) {                       // do not leave the probe session behind
     const c = net.connect(m.sock); c.on('connect', () => { c.write(JSON.stringify({ id: 2, method: 'session/close', params: { sessionId: res.result.session.sessionId } }) + '\n'); setTimeout(() => c.destroy(), 500); });
   }
-  av.length ? ok('models: ' + av.map(a => a.ref.modelId).filter((v, i, a) => a.indexOf(v) === i).join(', ')) : bad('no models available (is ZCode-Tap logged in?)');
+  av.length ? ok('models: ' + av.map(a => a.ref.modelId).filter((v, i, a) => a.indexOf(v) === i).join(', ')) : bad('no models available (is Zode.app logged in?)');
 }
 
 // 4. worktree rules

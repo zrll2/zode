@@ -13,7 +13,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const CLI = process.env.ZCODE_TAP_CLI;           // set by the shim that `zode install` puts into ZCode-Tap
+const CLI = process.env.ZCODE_TAP_CLI;           // set by the shim that `zode install` puts into Zode.app
 if (!CLI) { console.error('agent-wrapper: ZCODE_TAP_CLI is not set. Run `zode install`.'); process.exit(2); }
 const DIR = path.join(os.homedir(), '.zcode-tap');
 fs.mkdirSync(DIR, { recursive: true, mode: 0o700 });

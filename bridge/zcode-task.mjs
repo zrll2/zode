@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Supervisor CLI: send one work order to ZCode (through zcode-mcp + ZCode-Tap), wait for the turn to end, print a summary.
+// Supervisor CLI: send one work order to ZCode (through zcode-mcp + Zode.app), wait for the turn to end, print a summary.
 //   node zcode-task.mjs --worktree W --order order.md [--session sess_...] [--mode edit|plan] [--events out.jsonl] [--timeout 1500]
 // The session id is saved to <worktree>/../.zcode-session-<branch> so the next call can continue the same session.
 import { spawn, execFileSync } from 'node:child_process';

@@ -23,19 +23,19 @@ cd zode
 
 1. Checks the tools above.
 2. Runs `npm install` for `bridge/` and `relay/`.
-3. Builds **ZCode-Tap** at `~/Applications/ZCode-Tap.app` (see below).
+3. Builds **Zode.app** at `~/Applications/Zode.app` (see below).
 4. Installs the `delegate-to-zcode` skill into `~/.claude/skills` and remembers where Zode lives (`~/.zode/home`).
 
 Then:
 
 ```bash
-open ~/Applications/ZCode-Tap.app    # quit the original ZCode first; log in once; open any project
+open ~/Applications/Zode.app    # quit the original ZCode first; log in once; open any project
 ./zode doctor                        # every line should say OK
 ```
 
 Add `--models` to `doctor` to also check that your login gives you models. (This creates one empty probe session in the ZCode list.)
 
-## What is ZCode-Tap?
+## What is Zode.app (the Mac app)?
 
 ZCode keeps your login inside the app, so another program cannot start its own agent and reuse the login. Zode needs to talk to the app's **own** agent. So `zode install` makes a copy of your ZCode app and replaces one small file inside the copy with a shim:
 
@@ -45,29 +45,29 @@ ZCode keeps your login inside the app, so another program cannot start its own a
 
 The copy is made from your own installation on your own Mac. Nothing from ZCode is stored in this repository, and your original app is not changed. The copy is signed with an ad hoc signature, so it is yours only; it cannot be shared.
 
-Only one ZCode can run at a time (they share one data folder). Use ZCode-Tap for your daily work while you use Zode.
+Only one ZCode can run at a time (they share one data folder). Use Zode.app for your daily work while you use Zode.
 
 ## Update
 
 When ZCode updates, rebuild the copy:
 
 ```bash
-# quit ZCode-Tap first
+# quit Zode.app first
 ./zode install
 ```
 
 ## Uninstall
 
 ```bash
-rm -rf ~/Applications/ZCode-Tap.app ~/.zode ~/.zcode-tap ~/.claude/skills/delegate-to-zcode
+rm -rf ~/Applications/Zode.app ~/.zode ~/.zcode-tap ~/.claude/skills/delegate-to-zcode
 ```
 
 ## Troubleshooting
 
 | Problem | Fix |
 |---|---|
-| `doctor` says ZCode-Tap is not running | Quit ZCode, then `open ~/Applications/ZCode-Tap.app`. |
-| `doctor` says no tap sockets | Open a project in ZCode-Tap. The sockets appear when ZCode starts an agent. |
-| `doctor --models` says no models | Log in inside ZCode-Tap (it may ask once). |
-| `install` says ZCode-Tap is running | Quit it (Cmd+Q) and run `./zode install` again. |
+| `doctor` says Zode.app is not running | Quit ZCode, then `open ~/Applications/Zode.app`. |
+| `doctor` says no tap sockets | Open a project in Zode.app. The sockets appear when ZCode starts an agent. |
+| `doctor --models` says no models | Log in inside Zode.app (it may ask once). |
+| `install` says Zode.app is running | Quit it (Cmd+Q) and run `./zode install` again. |
 | `zcode/*` branch error | Use a separate worktree: `git worktree add ../x-wt -b zcode/my-task`. |

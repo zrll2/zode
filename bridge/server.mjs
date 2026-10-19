@@ -12,8 +12,8 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-// The ZCode-Tap copy that `zode install` builds. Override with ZODE_TAP_APP.
-const TAP_APP = process.env.ZODE_TAP_APP || path.join(os.homedir(), 'Applications', 'ZCode-Tap.app');
+// The Zode.app copy that `zode install` builds. Override with ZODE_TAP_APP.
+const TAP_APP = process.env.ZODE_TAP_APP || [path.join(os.homedir(), 'Applications', 'Zode.app'), path.join(os.homedir(), 'Applications', 'ZCode-Tap.app')].find(p => fs.existsSync(p)) || path.join(os.homedir(), 'Applications', 'Zode.app');
 const ELECTRON = path.join(TAP_APP, 'Contents', 'MacOS', 'ZCode');
 const CLI = process.env.ZCODE_CLI || path.join(TAP_APP, 'Contents', 'Resources', 'glm', 'zcode.real.cjs');
 const DEFAULT_MODEL = {

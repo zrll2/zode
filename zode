@@ -17,7 +17,7 @@ case "$cmd" in
     cat <<HELP
 Zode: Claude Code decides, ZCode writes, you watch from your phone.
 
-  zode install            build ZCode-Tap from your ZCode, install the skill
+  zode install            build Zode.app from your ZCode, install the skill
   zode doctor [worktree]  check that everything is ready (add --models to test the login)
   zode relay              start the phone relay on this Mac
   zode pair               print a QR code to pair a phone

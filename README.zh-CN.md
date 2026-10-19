@@ -44,8 +44,8 @@ Zode 把两者连起来，让它们各做自己最擅长的事：
 
 ```bash
 git clone https://github.com/zrll2/zode.git && cd zode
-./zode install        # 基于你的 ZCode 构建 "ZCode-Tap" 副本，并安装技能
-open ~/Applications/ZCode-Tap.app   # 登录一次，打开任意项目
+./zode install        # 基于你的 ZCode 构建 "Zode.app" 副本，并安装技能
+open ~/Applications/Zode.app   # 登录一次，打开任意项目
 ./zode doctor         # 全部通过了吗？
 ```
 
@@ -108,7 +108,7 @@ flowchart LR
 
 **需要 API Key 吗？** 不需要。Zode 用的是 ZCode 应用里的登录。
 
-**为什么要一个 "ZCode-Tap" 副本？** ZCode 把登录保存在应用内部，别的程序无法复用。副本里只多一个很小的垫片文件，用本地套接字共享应用自己的 agent。副本由你自己的安装在你自己的 Mac 上构建，原应用不会被改动。
+**为什么需要 Zode.app（ZCode 的副本）？** ZCode 把登录保存在应用内部，别的程序无法复用。副本里只多一个很小的垫片文件，用本地套接字共享应用自己的 agent。副本由你自己的安装在你自己的 Mac 上构建，原应用不会被改动。
 
 **支持 Windows 或 Linux 吗？** 暂时不支持，目前只在 macOS 上构建和测试。
 

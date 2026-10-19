@@ -13,7 +13,7 @@ Zode lets a process (and a phone) start and steer a coding agent on your Mac. Tr
 
 ## Your ZCode login
 
-Zode never reads, copies or sends your ZCode credentials. ZCode-Tap is a copy of your own app that keeps its own login on your Mac, exactly like the original. The only change inside the copy is one shim file (`Resources/glm/zcode.cjs`).
+Zode never reads, copies or sends your ZCode credentials. Zode.app is a copy of your own app that keeps its own login on your Mac, exactly like the original. The only change inside the copy is one shim file (`Resources/glm/zcode.cjs`).
 
 ## The relay
 

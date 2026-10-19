@@ -3,7 +3,7 @@
 The phone app talks to a small **relay** on your Mac. The relay talks to ZCode.
 
 ```
-phone ──WebSocket──▶ relay (your Mac) ──local socket──▶ ZCode-Tap ──▶ ZCode agent
+phone ──WebSocket──▶ relay (your Mac) ──local socket──▶ Zode.app ──▶ ZCode agent
 ```
 
 ## Start the relay and pair

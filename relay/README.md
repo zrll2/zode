@@ -1,9 +1,9 @@
 # zcode-relay
 
-WebSocket gateway on the Mac. It lets a phone use the ZCode sessions of the running **ZCode-Tap.app** (see `../zcode-mcp`).
+WebSocket gateway on the Mac. It lets a phone use the ZCode sessions of the running **Zode.app** (see `../zcode-mcp`).
 
 ```
-phone (Expo app) --ws--> zcode-relay --unix socket--> agent-wrapper (inside ZCode-Tap) --stdio--> zcode app-server
+phone (Expo app) --ws--> zcode-relay --unix socket--> agent-wrapper (inside Zode.app) --stdio--> zcode app-server
 ```
 
 ## Run
@@ -41,4 +41,4 @@ The relay has no TLS. Do not bind it to `0.0.0.0` on an untrusted network. Do no
 
 - Permission requests (`guarded` mode) go to the desktop window only. The phone sees them as events but cannot answer. Use `edit` mode until a claim step is added to the wrapper.
 - Turn end: watch for a `session/event` whose `payload.response` is set. Telemetry events are filtered out.
-- The relay needs ZCode-Tap running. Without it, `rpc` returns `no ZCode server`.
+- The relay needs Zode.app running. Without it, `rpc` returns `no ZCode server`.

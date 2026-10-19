@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // zcode-relay: WebSocket gateway on this Mac for the ZCode mobile client.
-// Upstream : unix sockets from ZCode-Tap (~/.zcode-tap/*.json), one per workspace server.
+// Upstream : unix sockets from Zode.app (~/.zcode-tap/*.json), one per workspace server.
 // Downstream: paired phones over WebSocket. Pair with `relay.mjs pair`; list/revoke with `devices` / `revoke <id>`.
 // Transport security is the network's job: bind to a Tailscale/WireGuard address (RELAY_HOST). Default is 127.0.0.1.
 import net from 'node:net';
@@ -175,7 +175,7 @@ function serve() {
         const bad = checkPolicy(m.method, m.params);
         if (bad) return send(c, { type: 'rpc-result', id: m.id, error: { code: -32001, message: bad } });
         const u = (m.server && upstream.get(m.server)) || [...upstream.values()].find(x => x.meta.cwd === m.params?.workspace?.workspacePath) || [...upstream.values()][0];
-        if (!u) return send(c, { type: 'rpc-result', id: m.id, error: { code: -32002, message: 'no ZCode server (is ZCode-Tap running?)' } });
+        if (!u) return send(c, { type: 'rpc-result', id: m.id, error: { code: -32002, message: 'no ZCode server (is Zode.app running?)' } });
         const id = ++relayId; routes.set(id, { client: c, clientId: m.id, pid: u.meta.pid, method: m.method });
         console.log(`rpc ${c.device.id} ${m.method} -> ${u.meta.pid}`);
         u.sock.write(JSON.stringify({ id, method: m.method, params: m.params }) + '\n');
