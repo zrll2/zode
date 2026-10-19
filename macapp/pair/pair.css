@@ -1,0 +1,39 @@
+/* Pairing window. Warm paper in light mode, charcoal in dark; the QR itself stays on white. */
+:root {
+  --bg: #FAF9F5; --ink: #141413; --muted: #6F6D66; --line: #E8E5DA; --accent: #141413;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #1F1E1D; --ink: #F5F4ED; --muted: #A8A59B; --line: #3A3935; --accent: #F5F4ED; }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 18px 22px 26px; background: var(--bg); color: var(--ink);
+  font: 13px/1.5 -apple-system, 'Helvetica Neue', sans-serif;
+  -webkit-user-select: none; user-select: none;
+}
+h1 { font: 600 22px/1.2 ui-serif, 'New York', Georgia, serif; margin: 2px 0 4px; }
+h2 { font: 600 14px/1.2 ui-serif, 'New York', Georgia, serif; margin: 20px 0 4px; padding-top: 12px; border-top: 1px solid var(--line); }
+.muted { color: var(--muted); }
+.hidden { display: none; }
+.relay-message { margin: 14px 0; padding: 14px; border: 1px solid var(--line); border-radius: 10px; }
+.qr-card {
+  margin: 14px auto 12px; width: 240px; padding: 12px; background: #FFFFFF;
+  border-radius: 14px; box-shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
+}
+.qr-card.expired { opacity: 0.35; }
+.qr svg { display: block; width: 100%; height: auto; }
+.code-row { display: flex; align-items: baseline; justify-content: center; gap: 10px; margin: 4px 0 12px; }
+.code { font: 600 20px ui-monospace, 'SF Mono', Menlo, monospace; letter-spacing: 2px; }
+.buttons { display: flex; gap: 8px; justify-content: center; }
+button {
+  font: 500 13px -apple-system, 'Helvetica Neue', sans-serif; padding: 6px 12px;
+  border-radius: 8px; border: 1px solid var(--line); background: transparent; color: var(--ink); cursor: pointer;
+}
+button:hover { border-color: var(--muted); }
+button.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+button.primary:hover { opacity: 0.9; }
+.relay-line { text-align: center; margin: 12px 0 0; font: 12px ui-monospace, 'SF Mono', Menlo, monospace; }
+#devices { list-style: none; margin: 0; padding: 0; }
+#devices li { display: flex; align-items: center; gap: 8px; padding: 7px 0; border-bottom: 1px solid var(--line); }
+#devices li span:first-child { flex: 1; }
+#devices button { padding: 2px 8px; font-size: 12px; }

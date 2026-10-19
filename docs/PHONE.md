@@ -6,19 +6,23 @@ The phone app talks to a small **relay** on your Mac. The relay talks to ZCode.
 phone ──WebSocket──▶ relay (your Mac) ──local socket──▶ Zode.app ──▶ ZCode agent
 ```
 
-## Start the relay and pair
+## Pair
 
-```bash
-./zode relay      # listens on 127.0.0.1:8787
-./zode pair       # prints a QR code and a one-time code (valid 5 minutes)
-```
+After `./zode install` the relay runs inside Zode.app — there is nothing to start.
 
-In the app, tap **Scan QR code** (or paste the pairing text). The phone gets its own token.
+1. Click the **Zode icon in the menu bar** of your Mac.
+2. Choose **Pair a phone…**. A window shows a QR code and an 8 character code.
+3. In Zode on your phone, tap **Scan QR code** and point it here (or paste the pairing text). The phone gets its own token.
 
-```bash
-./zode devices    # list paired phones
-./zode revoke <id>
-```
+The same menu shows whether the relay is running, which address it is reachable on, and the paired phones (`Revoke …` removes one). `Relay on` turns the relay off and on.
+
+## Reach your Mac from outside your home
+
+The relay has **no TLS** by design. Do not put it on the open internet. Do not forward the port on your router.
+
+- **Tailscale** is the safe choice away from home: encrypted, and only your devices are in the network. Install it on the Mac and the phone, then pick `Tailscale (100.x.y.z)` under **Reachable from** in the menu.
+- **Wi-Fi / local network** works at home but is **unencrypted**. Use it only on a network you trust.
+- `This Mac only` (`127.0.0.1`) is for the iOS simulator on the same Mac.
 
 ## Run the app
 
@@ -33,20 +37,16 @@ Try it without a Mac connection: on the Pair screen tap **Try the demo**. It use
 
 For a real device build see the [Expo docs](https://docs.expo.dev/build/introduction/). Android works the same way.
 
-## Reach your Mac from outside your home
+## Headless use (terminal only)
 
-The relay has **no TLS** by design. Do not put it on the open internet. Use a private network:
+You can run the same relay without the app window, for example over SSH:
 
-1. Install [Tailscale](https://tailscale.com) on the Mac and the phone.
-2. Start the relay on the Tailscale address:
-   ```bash
-   RELAY_HOST=100.x.y.z RELAY_PUBLIC_URL=ws://100.x.y.z:8787 ./zode relay
-   ```
-3. `./zode pair` now prints a QR code with that address.
-
-Other private networks (WireGuard, a VPN) work the same way. Do not forward the port on your router.
-
-## Relay settings
+```bash
+./zode relay      # RELAY_HOST (default 127.0.0.1), RELAY_PORT (default 8787)
+./zode pair       # prints a QR code and a one-time code (valid 5 minutes)
+./zode devices    # list paired phones
+./zode revoke <id>
+```
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -54,6 +54,8 @@ Other private networks (WireGuard, a VPN) work the same way. Do not forward the 
 | `RELAY_PORT` | `8787` | Port. |
 | `RELAY_PUBLIC_URL` | `ws://HOST:PORT` | The address the phone uses (put in the QR code). |
 | `RELAY_STATE_DIR` | `~/.zode/relay` | Where paired devices are stored (tokens are hashed). |
+
+The app and the terminal relay share `~/.zode/relay`, so a phone paired with one works with the other. Run only one of them at a time (they would fight over the port).
 
 ## What the phone can do
 

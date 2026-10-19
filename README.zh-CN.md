@@ -57,12 +57,9 @@ open /Applications/Zode.app   # 登录一次，打开任意项目
 
 ### 加上手机应用（可选）
 
-```bash
-./zode relay          # 在 Mac 上启动中继
-./zode pair           # 打印二维码
-```
+`./zode install` 之后，中继已经内置在 Zode.app 里运行。点**菜单栏上的 Zode 图标**，选择 **Pair a phone…**，用手机上的 Zode 扫描二维码即可。出门在外怎么连回家里的 Mac，见 [docs/PHONE.md](docs/PHONE.md)。
 
-打开 Zode 应用，点 **Scan QR code**。完成。出门在外怎么连回家里的 Mac，见 [docs/PHONE.md](docs/PHONE.md)。
+只在终端里跑（比如 SSH）？`./zode relay` 和 `./zode pair` 是同一个中继的命令行版本，见 [docs/PHONE.md](docs/PHONE.md) 的无界面说明。
 
 ## 工作原理
 

@@ -22,8 +22,8 @@ cd zode
 `zode install` does four things:
 
 1. Checks the tools above.
-2. Runs `npm install` for `bridge/` and `relay/`.
-3. Builds **Zode.app** at `/Applications/Zode.app` (see below).
+2. Runs `npm install` for `bridge/`, `relay/` and `macapp/`.
+3. Builds **Zode.app** at `/Applications/Zode.app` (see below) — the phone relay runs inside it.
 4. Installs the `delegate-to-zcode` skill into `~/.claude/skills` and remembers where Zode lives (`~/.zode/home`).
 
 Then:
@@ -34,6 +34,8 @@ open /Applications/Zode.app    # quit the original ZCode first; log in once; ope
 ```
 
 Add `--models` to `doctor` to also check that your login gives you models. (This creates one empty probe session in the ZCode list.)
+
+To use the phone app: click the **Zode icon in the menu bar** of Zode.app → **Pair a phone…** → scan the QR code with Zode on your phone. Details in [PHONE.md](PHONE.md).
 
 ## What is Zode.app (the Mac app)?
 
@@ -56,6 +58,13 @@ When ZCode updates, rebuild the copy:
 ./zode install
 ```
 
+Changed something in this repo, or copied ZCode by hand, and only want to (re-)apply the integration to your existing Zode.app?
+
+```bash
+./zode app                 # installs macapp/dist into the app, patches it, re-signs
+./zode app --uninstall     # back to a plain ZCode copy
+```
+
 ## Uninstall
 
 ```bash
@@ -70,4 +79,5 @@ rm -rf /Applications/Zode.app ~/.zode ~/.zcode-tap ~/.claude/skills/delegate-to-
 | `doctor` says no tap sockets | Open a project in Zode.app. The sockets appear when ZCode starts an agent. |
 | `doctor --models` says no models | Log in inside Zode.app (it may ask once). |
 | `install` says Zode.app is running | Quit it (Cmd+Q) and run `./zode install` again. |
+| The menu says the relay could not start | Another relay is using the port (an old `./zode relay` in a terminal, or a second Zode.app). Quit it, then tick `Relay on` in the menu. |
 | `zcode/*` branch error | Use a separate worktree: `git worktree add ../x-wt -b zcode/my-task`. |

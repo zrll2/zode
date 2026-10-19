@@ -64,12 +64,9 @@ That is all. Claude Code creates a worktree, writes the order, sends it to ZCode
 
 ### Add the phone app (optional)
 
-```bash
-./zode relay          # starts the relay on your Mac
-./zode pair           # prints a QR code
-```
+After `./zode install` the relay already runs inside Zode.app. Click the **Zode icon in the menu bar**, choose **Pair a phone…**, and scan the QR code with Zode on your phone. Done. See [docs/PHONE.md](docs/PHONE.md) to reach your Mac when you are away from home.
 
-Open Zode on your phone, tap **Scan QR code**. Done. See [docs/PHONE.md](docs/PHONE.md) to reach your Mac when you are away from home.
+Running the Mac headless (SSH only)? `./zode relay` and `./zode pair` are the same relay in a terminal — see the headless note in [docs/PHONE.md](docs/PHONE.md).
 
 ## How it works
 

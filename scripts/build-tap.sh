@@ -58,6 +58,12 @@ if (wrapper && args[0] === 'app-server' && !args.includes('--prepare-storage') &
 SHIM
 chmod +x "$GLM/zcode.cjs"
 
+# The Zode integration inside the app: the phone relay, menu bar icon and pairing window.
+# Installs macapp/dist into $DST/Contents/Resources/zode and patches the asar's main to boot.cjs.
+npm install --prefix "$ROOT/macapp" --no-fund --no-audit
+npm install --prefix "$ROOT/relay" --no-fund --no-audit
+node "$ROOT/macapp/install.mjs" "$DST"
+
 echo "Signing (ad hoc) ..."
 codesign --force --deep -s - "$DST" >/dev/null 2>&1
 codesign --verify --deep "$DST" 2>/dev/null && echo "Built $DST"
