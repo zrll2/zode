@@ -10,6 +10,16 @@ interface PressScaleProps extends Omit<PressableProps, "style" | "children"> {
 // Pressable wrapper that springs the content to 0.98 on press and back on
 // release (stiffness 600, damping 30, mass 1). Reduce Motion keeps the
 // pressed background change but skips the scale.
+// Layout props that must live on the outer Pressable so rows can size the control.
+const OUTER_KEYS = ["flex", "flexGrow", "flexShrink", "flexBasis", "alignSelf"] as const;
+
+function outerLayout(style: unknown): Record<string, unknown> {
+  const flat = StyleSheet.flatten(style as any) ?? {};
+  const out: Record<string, unknown> = {};
+  for (const key of OUTER_KEYS) if ((flat as any)[key] !== undefined) out[key] = (flat as any)[key];
+  return out;
+}
+
 export function PressScale({ children, style, onPressIn, onPressOut, ...rest }: PressScaleProps) {
   const reduceMotion = useReduceMotion();
   const scale = useRef(new Animated.Value(1)).current;
@@ -25,6 +35,7 @@ export function PressScale({ children, style, onPressIn, onPressOut, ...rest }: 
   return (
     <Pressable
       {...rest}
+      style={outerLayout(typeof style === "function" ? style({ pressed: false }) : style) as any}
       onPressIn={(event) => {
         if (!reduceMotion) spring(0.98);
         onPressIn?.(event);

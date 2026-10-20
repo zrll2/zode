@@ -10,16 +10,35 @@ import {
   UIManager,
   View,
 } from "react-native";
-import { Stack, useLocalSearchParams } from "expo-router";
+import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
+import * as Haptics from "expo-haptics";
 import { useRelay, useSessionEvents } from "../../src/useRelay";
 import { useTheme } from "../../src/theme";
 import type { ChatItem } from "../../src/relay/reducer";
 import {
   buildSessionSendParams,
   buildSessionSubscribeParams,
+  buildSessionUsageParams,
+  buildUsageStatsParams,
 } from "../../src/relay/params";
 import { retryInSeconds } from "../../src/relay/backoff";
+import {
+  buildRenameParams,
+  buildSetModelParams,
+  buildSetThoughtLevelParams,
+  emptyChatSettings,
+  parseChatSettings,
+  type ChatSettings,
+  type ModelOption,
+} from "../../src/chatSettings";
+import {
+  addArchived,
+  deleteSession,
+  isArchived,
+  removeArchived,
+} from "../../src/sessionActions";
+import { loadPrefs, savePrefs } from "../../src/storage";
 import {
   isSystemLikeUserText,
   mergeHistoryWithLive,
@@ -29,11 +48,14 @@ import { useScrollPin } from "../../src/scrollPin";
 import { Composer } from "../../src/ui/Composer";
 import { Dot, useReduceMotion } from "../../src/ui/Dot";
 import { Markdown } from "../../src/ui/Markdown";
+import { ModelSheet } from "../../src/ui/ModelSheet";
 import { Pill } from "../../src/ui/Pill";
+import { RenameModal } from "../../src/ui/RenameModal";
 import { Skeleton } from "../../src/ui/Skeleton";
 import { Text } from "../../src/ui/Text";
 import { ThinkingDots } from "../../src/ui/ThinkingDots";
 import { ToolRow } from "../../src/ui/ToolRow";
+import { UsageSheet } from "../../src/ui/UsageSheet";
 
 // LayoutAnimation for expand/collapse needs the experimental flag on Android.
 if (Platform.OS === "android") {
@@ -97,12 +119,26 @@ export default function SessionScreen() {
   const autoFocusComposer = (Array.isArray(params.focus) ? params.focus[0] : params.focus) === "1";
 
   const t = useTheme();
-  const { status, rpc, retryAt, reconnectAttempts, retryNow } = useRelay();
+  const router = useRouter();
+  const { status, client, rpc, retryAt, reconnectAttempts, retryNow } = useRelay();
   const session = useSessionEvents(sessionId);
 
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  const [archived, setArchived] = useState(false);
+  const [renamedTitle, setRenamedTitle] = useState<string | null>(null);
+  const [renameVisible, setRenameVisible] = useState(false);
+  const [modelSheetVisible, setModelSheetVisible] = useState(false);
+  const [usageSheetVisible, setUsageSheetVisible] = useState(false);
+  const [chatSettings, setChatSettings] = useState<ChatSettings>(() => emptyChatSettings());
+
+  useEffect(() => {
+    void (async () => {
+      const prefs = await loadPrefs();
+      setArchived(isArchived(prefs.archivedIds, sessionId));
+    })();
+  }, [sessionId]);
 
   const [historyState, setHistoryState] = useState<"loading" | "ready" | "error">("loading");
   const [historyItems, setHistoryItems] = useState<ChatItem[]>([]);
@@ -118,7 +154,10 @@ export default function SessionScreen() {
     setResumeError(null);
     let resumeFailure: string | null = null;
     try {
-      await rpc("session/resume", { sessionId });
+      const resumeResult = await rpc("session/resume", { sessionId });
+      if (attempt === bootAttempt.current) {
+        setChatSettings(parseChatSettings(resumeResult));
+      }
     } catch (e: unknown) {
       resumeFailure = shortError(e);
     }
@@ -166,6 +205,111 @@ export default function SessionScreen() {
     } catch {}
   }, [rpc, sessionId]);
 
+  // Archive is local to this phone; delete removes it on the Mac. Both
+  // return to the home screen on success.
+  const toggleArchive = useCallback(async () => {
+    const prefs = await loadPrefs();
+    const archivedIds = archived
+      ? removeArchived(prefs.archivedIds, sessionId)
+      : addArchived(prefs.archivedIds, sessionId);
+    await savePrefs({ ...prefs, archivedIds });
+    setArchived(!archived);
+    router.back();
+  }, [archived, sessionId, router]);
+
+  const applyRename = useCallback(
+    async (next: string) => {
+      setRenameVisible(false);
+      if (!client) {
+        Alert.alert("Could not rename", "Not connected.", [{ text: "OK" }]);
+        return;
+      }
+      try {
+        const result = await client.rpc("session/rename", buildRenameParams(sessionId, next));
+        if ((result as { status?: unknown } | null)?.status !== "accepted") {
+          throw new Error("The rename was not accepted.");
+        }
+        void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        setRenamedTitle(next.trim().slice(0, 120));
+      } catch (e: unknown) {
+        Alert.alert("Could not rename", shortError(e), [{ text: "OK" }]);
+      }
+    },
+    [client, sessionId],
+  );
+
+  const applyModel = useCallback(
+    async (option: ModelOption, reasoningLevel?: string) => {
+      setModelSheetVisible(false);
+      if (!client) return;
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      try {
+        await client.rpc("session/setModel", buildSetModelParams(sessionId, option, reasoningLevel));
+        setChatSettings((current) => ({
+          ...current,
+          model: {
+            providerId: option.providerId,
+            modelId: option.modelId,
+            label: option.modelId,
+            reasoningLevel: reasoningLevel ?? current.model?.reasoningLevel ?? null,
+          },
+        }));
+      } catch (e: unknown) {
+        Alert.alert("Could not change the model", shortError(e), [{ text: "OK" }]);
+      }
+    },
+    [client, sessionId],
+  );
+
+  const applyLevel = useCallback(
+    async (level: string) => {
+      setModelSheetVisible(false);
+      if (level === chatSettings.thoughtLevel) return;
+      if (!client) return;
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      try {
+        await client.rpc("session/setThoughtLevel", buildSetThoughtLevelParams(sessionId, level));
+        setChatSettings((current) => ({ ...current, thoughtLevel: level }));
+      } catch (e: unknown) {
+        Alert.alert("Could not change the thinking level", shortError(e), [{ text: "OK" }]);
+      }
+    },
+    [chatSettings.thoughtLevel, client, sessionId],
+  );
+
+  const fetchSessionUsage = useCallback(
+    () => rpc("session/usage", buildSessionUsageParams(sessionId)),
+    [rpc, sessionId],
+  );
+
+  const fetchAccountUsage = useCallback(
+    (range: "7d" | "30d" | "all") => rpc("usage/stats", buildUsageStatsParams(range)),
+    [rpc],
+  );
+
+  const deleteConversation = useCallback(async () => {
+    if (session.running) {
+      Alert.alert("Stop it first", undefined, [{ text: "OK" }]);
+      return;
+    }
+    if (!client) {
+      Alert.alert("Could not delete", "Not connected.", [{ text: "OK" }]);
+      return;
+    }
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    try {
+      await deleteSession(client, sessionId);
+      const prefs = await loadPrefs();
+      await savePrefs({
+        ...prefs,
+        archivedIds: removeArchived(prefs.archivedIds, sessionId),
+      });
+      router.back();
+    } catch (e: unknown) {
+      Alert.alert("Could not delete", shortError(e), [{ text: "OK" }]);
+    }
+  }, [client, sessionId, session.running, router]);
+
   const send = useCallback(async () => {
     const text = draft.trim();
     if (!text || sending || !sessionId) return;
@@ -181,16 +325,41 @@ export default function SessionScreen() {
     }
   }, [draft, sending, sessionId, rpc]);
 
-  const showSessionMenu = useCallback(() => {
-    Alert.alert("Session", undefined, [
-      { text: "Stop session", style: "destructive", onPress: () => void stop() },
-      { text: "Cancel", style: "cancel" },
-    ]);
-  }, [stop]);
+  const currentTitle = renamedTitle ?? session.title ?? routeTitle ?? "";
 
-  const headerRight = useCallback(() => {
-    if (!session.running) return undefined;
-    return (
+  const showSessionMenu = useCallback(() => {
+    void Alert.alert(
+      "Session",
+      undefined,
+      [
+        { text: "Rename", onPress: () => setRenameVisible(true) },
+        { text: "Model and thinking", onPress: () => setModelSheetVisible(true) },
+        { text: "Usage", onPress: () => setUsageSheetVisible(true) },
+        ...(session.running
+          ? [
+              {
+                text: "Stop session",
+                style: "destructive" as const,
+                onPress: () => void stop(),
+              },
+            ]
+          : []),
+        {
+          text: archived ? "Unarchive" : "Archive",
+          onPress: () => void toggleArchive(),
+        },
+        {
+          text: "Delete conversation",
+          style: "destructive" as const,
+          onPress: () => void deleteConversation(),
+        },
+        { text: "Cancel", style: "cancel" as const },
+      ],
+    );
+  }, [session.running, archived, toggleArchive, deleteConversation, stop]);
+
+  const headerRight = useCallback(
+    () => (
       <Pressable
         onPress={showSessionMenu}
         accessibilityRole="button"
@@ -200,8 +369,9 @@ export default function SessionScreen() {
       >
         <Feather name="more-horizontal" size={22} color={t.colors.text} />
       </Pressable>
-    );
-  }, [session.running, showSessionMenu, t]);
+    ),
+    [showSessionMenu, t],
+  );
 
   // Scroll pinning: stick to the bottom while streaming unless the user
   // drags; offer "Jump to latest" when they scroll away.
@@ -225,7 +395,7 @@ export default function SessionScreen() {
       keyboardVerticalOffset={88}
     >
       <Stack.Screen
-        options={{ title: session.title || routeTitle || "Session", headerRight }}
+        options={{ title: currentTitle || "Session", headerRight }}
       />
 
       {status === "reconnecting" ? (
@@ -234,6 +404,12 @@ export default function SessionScreen() {
           showRetry={reconnectAttempts >= 3}
           onRetry={retryNow}
         />
+      ) : undefined}
+      {chatSettings.model ? (
+        <Text variant="caption" color="subtext" numberOfLines={1} style={styles.subtitleLine}>
+          {chatSettings.model.modelId}
+          {chatSettings.thoughtLevel ? ` · ${chatSettings.thoughtLevel}` : ""}
+        </Text>
       ) : undefined}
       {session.permissionRequest ? (
         <Text variant="caption" color="warn" numberOfLines={2} style={styles.banner}>
@@ -346,6 +522,34 @@ export default function SessionScreen() {
           autoFocus={autoFocusComposer}
         />
       </View>
+
+      <RenameModal
+        visible={renameVisible}
+        title={currentTitle}
+        onClose={() => setRenameVisible(false)}
+        onSave={(next) => void applyRename(next)}
+      />
+      <ModelSheet
+        visible={modelSheetVisible}
+        onClose={() => setModelSheetVisible(false)}
+        running={session.running}
+        models={chatSettings.models}
+        currentModelId={chatSettings.model?.modelId ?? null}
+        currentLevel={chatSettings.thoughtLevel}
+        thoughtLevels={chatSettings.thoughtLevels}
+        onPickModel={(option, level) => void applyModel(option, level)}
+        onPickLevel={(level) => void applyLevel(level)}
+      />
+      <UsageSheet
+        visible={usageSheetVisible}
+        onClose={() => setUsageSheetVisible(false)}
+        conversation={{
+          contextUsed: chatSettings.contextUsed,
+          contextWindow: chatSettings.contextWindow,
+        }}
+        fetchSessionUsage={fetchSessionUsage}
+        fetchAccountUsage={fetchAccountUsage}
+      />
     </KeyboardAvoidingView>
   );
 }
@@ -532,6 +736,7 @@ function firstLine(text: string): string {
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },
+  subtitleLine: { paddingHorizontal: 20, paddingTop: 2 },
   reconnectRow: {
     flexDirection: "row",
     alignItems: "center",

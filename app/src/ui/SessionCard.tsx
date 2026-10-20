@@ -1,5 +1,5 @@
 import React from "react";
-import { StyleSheet, View } from "react-native";
+import { StyleSheet, View, type PressableProps } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { useTheme } from "../theme";
 import { projectName, statusInfo } from "../sessionStatus";
@@ -14,17 +14,24 @@ interface SessionCardProps {
   timeLabel: string;
   showChevron?: boolean;
   onPress: () => void;
+  onLongPress?: () => void;
+  accessibilityActions?: PressableProps["accessibilityActions"];
+  onAccessibilityAction?: PressableProps["onAccessibilityAction"];
   accessibilityLabel: string;
 }
 
 // One home card: status light, project name over the plain-words status,
-// relative time on the right — plus a chevron on needs-you rows.
+// relative time on the right — plus a chevron on needs-you rows. Long press
+// opens the archive/delete sheet (see the home screen).
 export function SessionCard({
   folder,
   status,
   timeLabel,
   showChevron = false,
   onPress,
+  onLongPress,
+  accessibilityActions,
+  onAccessibilityAction,
   accessibilityLabel,
 }: SessionCardProps) {
   const t = useTheme();
@@ -33,6 +40,9 @@ export function SessionCard({
   return (
     <PressScale
       onPress={onPress}
+      onLongPress={onLongPress}
+      accessibilityActions={accessibilityActions}
+      onAccessibilityAction={onAccessibilityAction}
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
       style={[styles.card, { backgroundColor: t.colors.surface }]}

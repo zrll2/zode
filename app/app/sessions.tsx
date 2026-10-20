@@ -13,15 +13,23 @@ import {
 import { Stack, useFocusEffect, useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import Constants from "expo-constants";
+import * as Haptics from "expo-haptics";
 import * as Linking from "expo-linking";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRelay } from "../src/useRelay";
 import { useTheme } from "../src/theme";
 import { retryInSeconds } from "../src/relay/backoff";
+import { buildUsageStatsParams } from "../src/relay/params";
 import { PRIVACY_URL, SUPPORT_URL } from "../src/config";
 import { buildHomeSections } from "../src/sessionGroups";
 import { projectName, statusInfo } from "../src/sessionStatus";
-import { loadPrefs, savePrefs } from "../src/storage";
+import {
+  addArchived,
+  deleteSession,
+  isArchived,
+  removeArchived,
+} from "../src/sessionActions";
+import { loadPrefs, savePrefs, type Prefs } from "../src/storage";
 import { parseSessionList, timeAgo, type SessionRow } from "../src/util";
 import type { RelayStatus } from "../src/relay/client";
 import { Dot } from "../src/ui/Dot";
@@ -30,6 +38,7 @@ import { PressScale } from "../src/ui/PressScale";
 import { Screen } from "../src/ui/Screen";
 import { SessionCard } from "../src/ui/SessionCard";
 import { Text } from "../src/ui/Text";
+import { UsageSheet } from "../src/ui/UsageSheet";
 import { buildMenuItems } from "../src/ui/menu";
 
 // App version comes from app.json (expo.version) for the sheet title.
@@ -81,6 +90,7 @@ export default function SessionsScreen() {
   const {
     status,
     authFailed,
+    client,
     rpc,
     unpair,
     demo,
@@ -93,22 +103,30 @@ export default function SessionsScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showStatusLine, setShowStatusLine] = useState(false);
-  const [showWorkOrders, setShowWorkOrders] = useState(false);
+  const [usageVisible, setUsageVisible] = useState(false);
+  const [prefs, setPrefs] = useState<Prefs>({
+    showWorkOrders: false,
+    archivedIds: [],
+    showArchived: false,
+  });
 
   useEffect(() => {
     void (async () => {
-      const prefs = await loadPrefs();
-      setShowWorkOrders(prefs.showWorkOrders);
+      setPrefs(await loadPrefs());
     })();
   }, []);
 
-  const toggleWorkOrders = useCallback(() => {
-    setShowWorkOrders((value) => {
-      const next = !value;
-      void savePrefs({ showWorkOrders: next });
+  const updatePrefs = useCallback((patch: Partial<Prefs>) => {
+    setPrefs((current) => {
+      const next = { ...current, ...patch };
+      void savePrefs(next);
       return next;
     });
   }, []);
+
+  const toggleWorkOrders = useCallback(() => {
+    updatePrefs({ showWorkOrders: !prefs.showWorkOrders });
+  }, [prefs.showWorkOrders, updatePrefs]);
 
   const load = useCallback(async () => {
     setRefreshing(true);
@@ -169,8 +187,13 @@ export default function SessionsScreen() {
     const items: { key: string; label: string; destructive?: boolean }[] = [
       {
         key: "work-orders",
-        label: showWorkOrders ? "Hide work orders" : "Show work orders",
+        label: prefs.showWorkOrders ? "Hide work orders" : "Show work orders",
       },
+      {
+        key: "archived",
+        label: prefs.showArchived ? "Hide archived" : "Show archived",
+      },
+      { key: "usage", label: "Usage" },
       ...buildMenuItems({ demo }),
     ];
     const labels = items.map((item) => item.label);
@@ -182,6 +205,12 @@ export default function SessionsScreen() {
       switch (item.key) {
         case "work-orders":
           toggleWorkOrders();
+          break;
+        case "archived":
+          updatePrefs({ showArchived: !prefs.showArchived });
+          break;
+        case "usage":
+          setUsageVisible(true);
           break;
         case "privacy":
           void Linking.openURL(PRIVACY_URL).catch(() => {});
@@ -219,11 +248,16 @@ export default function SessionsScreen() {
         })),
       );
     }
-  }, [demo, showWorkOrders, toggleWorkOrders, confirmUnpair, confirmExitDemo]);
+  }, [demo, prefs.showWorkOrders, prefs.showArchived, updatePrefs, toggleWorkOrders, confirmUnpair, confirmExitDemo]);
 
-  const { sections, hiddenWorkOrders } = useMemo(
-    () => buildHomeSections(sessions, Date.now(), showWorkOrders),
-    [sessions, showWorkOrders],
+  const fetchAccountUsage = useCallback(
+    (range: "7d" | "30d" | "all") => rpc("usage/stats", buildUsageStatsParams(range)),
+    [rpc],
+  );
+
+  const { sections, hiddenWorkOrders, hiddenArchived } = useMemo(
+    () => buildHomeSections(sessions, Date.now(), prefs),
+    [sessions, prefs],
   );
   const listSections = useMemo(
     () =>
@@ -253,9 +287,104 @@ export default function SessionsScreen() {
     status === "ready" ? t.colors.ok : status === "closed" ? t.colors.subtext : t.colors.warn;
   const showLine = status !== "ready" || showStatusLine;
 
+  // Archive is local to this phone; delete removes it on the Mac.
+  const toggleArchive = useCallback(
+    (session: SessionRow) => {
+      updatePrefs({
+        archivedIds: isArchived(prefs.archivedIds, session.id)
+          ? removeArchived(prefs.archivedIds, session.id)
+          : addArchived(prefs.archivedIds, session.id),
+      });
+    },
+    [prefs.archivedIds, updatePrefs],
+  );
+
+  const requestDelete = useCallback(
+    (session: SessionRow) => {
+      if (session.status === "running") {
+        Alert.alert("Stop it first", undefined, [{ text: "OK" }]);
+        return;
+      }
+      if (!client) {
+        Alert.alert("Could not delete", "Not connected.", [{ text: "OK" }]);
+        return;
+      }
+      Alert.alert(
+        "Delete this conversation?",
+        "It is removed from ZCode on your Mac. This cannot be undone.",
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Delete",
+            style: "destructive",
+            onPress: () => {
+              void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              void (async () => {
+                try {
+                  await deleteSession(client, session.id);
+                  // Drop it from the list at once; also forget an archive.
+                  setSessions((current) =>
+                    current.filter((entry) => entry.id !== session.id),
+                  );
+                  setPrefs((current) => ({
+                    ...current,
+                    archivedIds: removeArchived(current.archivedIds, session.id),
+                  }));
+                } catch (e: any) {
+                  Alert.alert("Could not delete", e?.message ?? "Delete failed.", [
+                    { text: "OK" },
+                  ]);
+                }
+              })();
+            },
+          },
+        ],
+      );
+    },
+    [client],
+  );
+
+  const showCardActions = useCallback(
+    (session: SessionRow) => {
+      const archived = isArchived(prefs.archivedIds, session.id);
+      const items = [
+        { key: "archive", label: archived ? "Unarchive" : "Archive" },
+        { key: "delete", label: "Delete", destructive: true },
+        { key: "cancel", label: "Cancel" },
+      ];
+      const runItem = (item: { key: string } | undefined) => {
+        if (!item) return;
+        if (item.key === "archive") toggleArchive(session);
+        if (item.key === "delete") requestDelete(session);
+      };
+      if (Platform.OS === "ios") {
+        ActionSheetIOS.showActionSheetWithOptions(
+          {
+            options: items.map((item) => item.label),
+            destructiveButtonIndex: 1,
+            cancelButtonIndex: 2,
+          },
+          (index) => runItem(items[index]),
+        );
+      } else {
+        Alert.alert(
+          session.title,
+          undefined,
+          items.map((item) => ({
+            text: item.label,
+            style: item.key === "cancel" ? ("cancel" as const) : item.destructive ? ("destructive" as const) : ("default" as const),
+            onPress: () => runItem(item),
+          })),
+        );
+      }
+    },
+    [prefs.archivedIds, toggleArchive, requestDelete],
+  );
+
   const renderItem = useCallback(
     ({ item }: { item: SessionRow }) => {
       const info = statusInfo(item.status);
+      const archived = isArchived(prefs.archivedIds, item.id);
       return (
         <SessionCard
           folder={item.folder}
@@ -268,13 +397,22 @@ export default function SessionsScreen() {
               params: { id: item.id, title: item.title },
             })
           }
+          onLongPress={() => showCardActions(item)}
+          accessibilityActions={[
+            { name: "archive", label: archived ? "Unarchive" : "Archive" },
+            { name: "delete", label: "Delete" },
+          ]}
+          onAccessibilityAction={(event) => {
+            if (event.nativeEvent.actionName === "archive") toggleArchive(item);
+            if (event.nativeEvent.actionName === "delete") requestDelete(item);
+          }}
           accessibilityLabel={`${projectName(item.folder)}, ${info.word}, ${timeAgo(
             item.updatedAt,
           )}`}
         />
       );
     },
-    [router],
+    [router, prefs.archivedIds, toggleArchive, requestDelete, showCardActions],
   );
 
   return (
@@ -377,19 +515,34 @@ export default function SessionsScreen() {
           ) : undefined
         }
         ListFooterComponent={
-          hiddenWorkOrders > 0 && !showWorkOrders ? (
-            <Pressable
-              onPress={toggleWorkOrders}
-              accessibilityRole="button"
-              accessibilityLabel={`Show ${hiddenWorkOrders} hidden work orders`}
-              hitSlop={8}
-              style={styles.hiddenFooter}
-            >
-              <Text color="subtext" style={styles.hiddenText}>
-                {hiddenWorkOrders} work orders hidden · Show
-              </Text>
-            </Pressable>
-          ) : undefined
+          <View>
+            {hiddenWorkOrders > 0 && !prefs.showWorkOrders ? (
+              <Pressable
+                onPress={toggleWorkOrders}
+                accessibilityRole="button"
+                accessibilityLabel={`Show ${hiddenWorkOrders} hidden work orders`}
+                hitSlop={8}
+                style={styles.hiddenFooter}
+              >
+                <Text color="subtext" style={styles.hiddenText}>
+                  {hiddenWorkOrders} work orders hidden · Show
+                </Text>
+              </Pressable>
+            ) : undefined}
+            {hiddenArchived > 0 && !prefs.showArchived ? (
+              <Pressable
+                onPress={() => updatePrefs({ showArchived: true })}
+                accessibilityRole="button"
+                accessibilityLabel={`Show ${hiddenArchived} archived conversations`}
+                hitSlop={8}
+                style={styles.hiddenFooter}
+              >
+                <Text color="subtext" style={styles.hiddenText}>
+                  {hiddenArchived} archived · Show
+                </Text>
+              </Pressable>
+            ) : undefined}
+          </View>
         }
         contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: insets.bottom + 108 }}
       />
@@ -398,7 +551,7 @@ export default function SessionsScreen() {
           onPress={() => router.push("/new")}
           accessibilityRole="button"
           accessibilityLabel="Ask ZCode"
-          style={[styles.bar, { backgroundColor: t.colors.surface, shadowColor: "black" }]}
+          style={[styles.bar, { backgroundColor: t.colors.surface, shadowColor: t.colors.text }]}
         >
           <Text color="subtext" style={styles.barText}>
             Ask ZCode…
@@ -408,6 +561,11 @@ export default function SessionsScreen() {
           </View>
         </PressScale>
       </View>
+      <UsageSheet
+        visible={usageVisible}
+        onClose={() => setUsageVisible(false)}
+        fetchAccountUsage={fetchAccountUsage}
+      />
     </Screen>
   );
 }

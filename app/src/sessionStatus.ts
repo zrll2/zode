@@ -26,6 +26,10 @@ export function isWorkOrder(title: string): boolean {
   return title.trim().startsWith("#");
 }
 
+// Re-exported so callers have one import for the session helpers; defined
+// in src/sessionActions.ts.
+export { archiveKey } from "./sessionActions";
+
 // Card title: the last path segment of the workspace folder.
 export function projectName(folder: string): string {
   const parts = folder.split("/").filter(Boolean);

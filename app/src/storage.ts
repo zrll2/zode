@@ -40,20 +40,41 @@ export async function clearCredentials(): Promise<void> {
 }
 
 // UI preferences (not secret): JSON in SecureStore, defaults on any error.
+// archivedIds holds short keys (see sessionActions.archiveKey).
+import { ARCHIVE_CAP } from "./sessionActions";
+
 const PREFS_KEY = "zode.prefs.v1";
 
 export interface Prefs {
   showWorkOrders: boolean;
+  archivedIds: string[];
+  showArchived: boolean;
+}
+
+function normalizePrefs(raw: unknown): Prefs {
+  const value = (raw ?? {}) as {
+    showWorkOrders?: unknown;
+    archivedIds?: unknown;
+    showArchived?: unknown;
+  };
+  return {
+    showWorkOrders: value.showWorkOrders === true,
+    showArchived: value.showArchived === true,
+    archivedIds: Array.isArray(value.archivedIds)
+      ? value.archivedIds
+          .filter((entry): entry is string => typeof entry === "string")
+          .slice(0, ARCHIVE_CAP)
+      : [],
+  };
 }
 
 export async function loadPrefs(): Promise<Prefs> {
   try {
     const raw = await SecureStore.getItemAsync(PREFS_KEY);
-    if (!raw) return { showWorkOrders: false };
-    const parsed = JSON.parse(raw);
-    return { showWorkOrders: parsed?.showWorkOrders === true };
+    if (!raw) return normalizePrefs(null);
+    return normalizePrefs(JSON.parse(raw));
   } catch {
-    return { showWorkOrders: false };
+    return normalizePrefs(null);
   }
 }
 

@@ -1,10 +1,13 @@
 import { buildHomeSections, groupSessions } from "../src/sessionGroups";
-import { isWorkOrder, projectName, statusInfo } from "../src/sessionStatus";
+import { archiveKey, isWorkOrder, projectName, statusInfo } from "../src/sessionStatus";
+import type { HomePrefs } from "../src/sessionGroups";
 import type { SessionRow } from "../src/util";
 
 const NOW = new Date("2026-10-19T15:00:00").getTime();
 const TODAY_START = new Date("2026-10-19T00:00:00").getTime();
 const DAY = 24 * 60 * 60 * 1000;
+
+const OFF: HomePrefs = { showWorkOrders: false, showArchived: false, archivedIds: [] };
 
 function row(id: string, title: string, status: string, updatedAt: number | null): SessionRow {
   return { id, title, folder: "wt", status, updatedAt };
@@ -16,6 +19,10 @@ function sectionKeys(sections: { key: string }[]) {
 
 function itemsIn(sections: { key: string; items: SessionRow[] }[], key: string) {
   return sections.find((section) => section.key === key)?.items ?? [];
+}
+
+function prefsWith(patch: Partial<HomePrefs>): HomePrefs {
+  return { ...OFF, ...patch };
 }
 
 describe("isWorkOrder", () => {
@@ -55,14 +62,11 @@ describe("statusInfo", () => {
   });
 });
 
-describe("buildHomeSections", () => {
+describe("buildHomeSections: work orders", () => {
   it("hides finished work orders and counts them while the setting is off", () => {
-    const result = buildHomeSections(
-      [row("wo", "# tidy the imports", "idle", NOW)],
-      NOW,
-      false,
-    );
+    const result = buildHomeSections([row("wo", "# tidy the imports", "idle", NOW)], NOW, OFF);
     expect(result.hiddenWorkOrders).toBe(1);
+    expect(result.hiddenArchived).toBe(0);
     expect(result.sections).toEqual([]);
   });
 
@@ -70,7 +74,7 @@ describe("buildHomeSections", () => {
     const result = buildHomeSections(
       [row("wo", "# tidy the imports", "idle", NOW)],
       NOW,
-      true,
+      prefsWith({ showWorkOrders: true }),
     );
     expect(result.hiddenWorkOrders).toBe(0);
     expect(sectionKeys(result.sections)).toEqual(["work-orders"]);
@@ -78,14 +82,18 @@ describe("buildHomeSections", () => {
   });
 
   it("keeps a waiting work order in Needs you", () => {
-    const result = buildHomeSections([row("wo", "# fix hot path", "waiting", NOW)], NOW, false);
+    const result = buildHomeSections([row("wo", "# fix hot path", "waiting", NOW)], NOW, OFF);
     expect(result.hiddenWorkOrders).toBe(0);
     expect(sectionKeys(result.sections)).toEqual(["needs-you"]);
     expect(itemsIn(result.sections, "needs-you").map((s) => s.id)).toEqual(["wo"]);
   });
 
   it("keeps a running work order in Running", () => {
-    const result = buildHomeSections([row("wo", "# fix hot path", "running", NOW)], NOW, true);
+    const result = buildHomeSections(
+      [row("wo", "# fix hot path", "running", NOW)],
+      NOW,
+      prefsWith({ showWorkOrders: true }),
+    );
     expect(result.hiddenWorkOrders).toBe(0);
     expect(sectionKeys(result.sections)).toEqual(["running"]);
   });
@@ -98,7 +106,7 @@ describe("buildHomeSections", () => {
         row("old", "Old work", "idle", TODAY_START - 8 * DAY),
       ],
       NOW,
-      false,
+      OFF,
     );
     expect(sectionKeys(result.sections)).toEqual(["today", "yesterday", "earlier"]);
   });
@@ -111,10 +119,62 @@ describe("buildHomeSections", () => {
         row("c", "plain", "idle", NOW),
       ],
       NOW,
-      false,
+      OFF,
     );
     expect(result.hiddenWorkOrders).toBe(2);
     expect(itemsIn(result.sections, "today").map((s) => s.id)).toEqual(["c"]);
+  });
+});
+
+describe("buildHomeSections: archive", () => {
+  it("hides archived conversations and counts them", () => {
+    const result = buildHomeSections(
+      [row("a", "Fix a bug", "idle", NOW)],
+      NOW,
+      prefsWith({ archivedIds: [archiveKey("a")] }),
+    );
+    expect(result.sections).toEqual([]);
+    expect(result.hiddenArchived).toBe(1);
+    expect(result.hiddenWorkOrders).toBe(0);
+  });
+
+  it("never hides urgent archived conversations", () => {
+    const result = buildHomeSections(
+      [
+        row("w", "Fix", "waiting", NOW),
+        row("r", "Fix", "running", NOW),
+        row("e", "Fix", "error", NOW),
+      ],
+      NOW,
+      prefsWith({
+        archivedIds: [archiveKey("w"), archiveKey("r"), archiveKey("e")],
+      }),
+    );
+    expect(sectionKeys(result.sections)).toEqual(["needs-you", "running"]);
+    expect(itemsIn(result.sections, "needs-you").map((s) => s.id)).toEqual(["w", "e"]);
+    expect(itemsIn(result.sections, "running").map((s) => s.id)).toEqual(["r"]);
+    expect(result.hiddenArchived).toBe(0);
+  });
+
+  it("shows the Archived section when the setting is on", () => {
+    const result = buildHomeSections(
+      [row("a", "Fix a bug", "idle", NOW)],
+      NOW,
+      prefsWith({ showArchived: true, archivedIds: [archiveKey("a")] }),
+    );
+    expect(sectionKeys(result.sections)).toEqual(["archived"]);
+    expect(itemsIn(result.sections, "archived").map((s) => s.id)).toEqual(["a"]);
+  });
+
+  it("counts an archived work order as archived only", () => {
+    const result = buildHomeSections(
+      [row("wo", "# tidy", "idle", NOW)],
+      NOW,
+      prefsWith({ showWorkOrders: true, archivedIds: [archiveKey("wo")] }),
+    );
+    expect(result.hiddenArchived).toBe(1);
+    expect(result.hiddenWorkOrders).toBe(0);
+    expect(result.sections).toEqual([]);
   });
 });
 

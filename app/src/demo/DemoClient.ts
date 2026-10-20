@@ -55,6 +55,8 @@ export class DemoClient implements RelayClientLike {
   private turnNumbers = new Map<string, number>();
   private newSessionCount = 0;
   private seq = 0;
+  private demoModelId = "GLM-5.3-Flash";
+  private demoLevel = "max";
 
   connect(): Promise<void> {
     this.status = "connecting";
@@ -78,10 +80,52 @@ export class DemoClient implements RelayClientLike {
       case "session/create":
         return Promise.resolve({ session: { sessionId: this.createSession(request) } } as T);
       case "session/resume":
+        return Promise.resolve(this.demoResume() as T);
       case "session/subscribe": {
         this.maybeStartRunningTurn(String(request.sessionId ?? ""));
         return Promise.resolve({} as T);
       }
+      case "session/setModel": {
+        const model = request.model as
+          | { providerId?: unknown; modelId?: unknown; options?: { reasoningLevel?: unknown } }
+          | undefined;
+        if (typeof model?.modelId === "string" && model.modelId) {
+          this.demoModelId = model.modelId;
+        }
+        if (typeof model?.options?.reasoningLevel === "string") {
+          this.demoLevel = model.options.reasoningLevel;
+        }
+        return Promise.resolve({ status: "accepted" } as T);
+      }
+      case "session/setThoughtLevel": {
+        const level = String(request.thoughtLevel ?? "");
+        if (level) this.demoLevel = level;
+        return Promise.resolve({ status: "accepted" } as T);
+      }
+      case "session/rename": {
+        const id = String(request.sessionId ?? "");
+        const title = String(request.title ?? "").slice(0, 120);
+        const renamed = this.find(id);
+        if (renamed) {
+          renamed.title = title;
+          this.emitEvent(id, "session.titleUpdated", { title });
+        }
+        return Promise.resolve({ status: "accepted" } as T);
+      }
+      case "session/usage":
+        return Promise.resolve({
+          sessionId: String(request.sessionId ?? ""),
+          totalTokens: 465_541,
+          inputTokens: 465_176,
+          outputTokens: 365,
+          reasoningTokens: 0,
+          cacheCreationTokens: 0,
+          cacheReadTokens: 322_368,
+          modelRequestCount: 3,
+          modelErrorCount: 0,
+        } as T);
+      case "usage/stats":
+        return Promise.resolve(this.demoAccountUsage(Date.now()) as T);
       case "session/send": {
         this.startScriptedTurn(String(request.sessionId ?? ""), String(request.content ?? ""));
         return Promise.resolve({} as T);
@@ -89,6 +133,11 @@ export class DemoClient implements RelayClientLike {
       case "session/stop": {
         this.stopTurn(String(request.sessionId ?? ""));
         return Promise.resolve({} as T);
+      }
+      case "session/delete": {
+        const id = String(request.sessionId ?? "");
+        this.sessions = this.sessions.filter((session) => session.sessionId !== id);
+        return Promise.resolve({ commandId: "demo", status: "accepted" } as T);
       }
       default:
         return Promise.resolve({} as T);
@@ -120,6 +169,97 @@ export class DemoClient implements RelayClientLike {
 
   private find(sessionId: string): DemoSessionRecord | undefined {
     return this.sessions.find((session) => session.sessionId === sessionId);
+  }
+
+  // session/resume result with settings + projection so the chat screens the
+  // model/thinking/usage features work in demo mode.
+  private demoResume() {
+    const providerId = "account:zai-individual-coding-plan";
+    const levels = [
+      { value: "low", label: "low" },
+      { value: "high", label: "high" },
+      { value: "max", label: "max" },
+    ];
+    return {
+      settings: {
+        model: {
+          current: {
+            providerId,
+            modelId: this.demoModelId,
+            options: { reasoningLevel: this.demoLevel },
+          },
+          available: [
+            {
+              ref: { providerId, modelId: "GLM-5.3-Flash" },
+              label: "GLM-5.3",
+              providerLabel: "Z.AI Individual Coding Plan",
+              contextWindow: 1_000_000,
+              maxOutputTokens: 128_000,
+              reasoning: { levels, defaultLevel: "max" },
+            },
+            {
+              ref: { providerId, modelId: "GLM-5.3-Turbo" },
+              label: "GLM-5.3 Turbo",
+              providerLabel: "Z.AI Individual Coding Plan",
+              contextWindow: 1_000_000,
+              maxOutputTokens: 64_000,
+              reasoning: { levels: levels.slice(0, 2), defaultLevel: "high" },
+            },
+          ],
+        },
+        thoughtLevel: {
+          available: levels,
+          current: this.demoLevel,
+          enabled: true,
+        },
+      },
+      projection: {
+        contextUsed: 84_000,
+        contextWindow: 1_000_000,
+        totalTokenCount: 465_541,
+        turnCount: 6,
+        status: "idle",
+      },
+    };
+  }
+
+  private demoAccountUsage(now: number) {
+    const days: ({ date: string; totalTokens: number; turnCount: number } | null)[] = [];
+    for (let index = 20; index >= 0; index -= 1) {
+      const date = new Date(now - index * 86_400_000);
+      if (index % 7 === 3) {
+        days.push(null);
+      } else {
+        days.push({
+          date: date.toISOString().slice(0, 10),
+          totalTokens: 120_000 + ((index * 7_919) % 380_000),
+          turnCount: 2 + (index % 4),
+        });
+      }
+    }
+    const weeks = [];
+    for (let start = 0; start < days.length; start += 7) {
+      weeks.push({ days: days.slice(start, start + 7) });
+    }
+    return {
+      range: "30d",
+      generatedAt: new Date(now).toISOString(),
+      summary: {
+        totalTokens: 5_662_760_401,
+        inputTokens: 4_900_000_000,
+        outputTokens: 640_000_000,
+        cacheReadTokens: 3_100_000_000,
+        cacheHitRate: 0.62,
+        totalSessions: 148,
+        totalTurns: 1_204,
+        toolCallCount: 6_512,
+        toolErrorRate: 0.02,
+        activeDays: 41,
+        favoriteModel: { modelId: "GLM-5.3-Flash", totalTokens: 4_100_000_000, share: 0.72 },
+      },
+      heatmap: { weeks },
+      dailyModelUsage: [],
+    };
   }
 
   private emitStatus() {

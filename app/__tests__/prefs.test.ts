@@ -23,24 +23,47 @@ beforeEach(() => {
   });
 });
 
-it("defaults to showWorkOrders: false", async () => {
+it("defaults every field", async () => {
   mockedGet.mockResolvedValue(null);
-  await expect(loadPrefs()).resolves.toEqual({ showWorkOrders: false });
+  await expect(loadPrefs()).resolves.toEqual({
+    showWorkOrders: false,
+    archivedIds: [],
+    showArchived: false,
+  });
 });
 
-it("round-trips a saved true", async () => {
-  await savePrefs({ showWorkOrders: true });
-  expect(mockedSet).toHaveBeenCalledWith(PREFS_KEY, JSON.stringify({ showWorkOrders: true }));
-  await expect(loadPrefs()).resolves.toEqual({ showWorkOrders: true });
+it("round-trips saved prefs including archived ids", async () => {
+  const prefs = { showWorkOrders: true, archivedIds: ["abcd1234"], showArchived: true };
+  await savePrefs(prefs);
+  expect(mockedSet).toHaveBeenCalledWith(PREFS_KEY, JSON.stringify(prefs));
+  await expect(loadPrefs()).resolves.toEqual(prefs);
+});
+
+it("loads an old format without the new fields with defaults", async () => {
+  store[PREFS_KEY] = JSON.stringify({ showWorkOrders: true });
+  await expect(loadPrefs()).resolves.toEqual({
+    showWorkOrders: true,
+    archivedIds: [],
+    showArchived: false,
+  });
 });
 
 it("gives defaults on corrupt JSON", async () => {
   store[PREFS_KEY] = "{not json at all";
-  await expect(loadPrefs()).resolves.toEqual({ showWorkOrders: false });
+  await expect(loadPrefs()).resolves.toEqual({
+    showWorkOrders: false,
+    archivedIds: [],
+    showArchived: false,
+  });
 });
 
 it("gives defaults when the store itself fails", async () => {
   mockedGet.mockRejectedValue(new Error("keychain unavailable"));
-  await expect(loadPrefs()).resolves.toEqual({ showWorkOrders: false });
-  await expect(savePrefs({ showWorkOrders: true })).resolves.toBeUndefined();
+  await expect(loadPrefs()).resolves.toEqual({
+    showWorkOrders: false,
+    archivedIds: [],
+    showArchived: false,
+  });
+  await expect(savePrefs({ showWorkOrders: true, archivedIds: [], showArchived: false }))
+    .resolves.toBeUndefined();
 });

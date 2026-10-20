@@ -55,6 +55,11 @@ Header: the Zode mark (34 px) next to "Zode" in Nunito 800 (29/36, tracking −0
 
 Bottom: an "Ask ZCode…" bar fixed above the safe area — `surface`, radius 26, soft shadow, a 36 px `accent` circle with an arrow-up — one button that opens the new-session screen. Conversations titled with a leading "#" are work orders: urgent ones never hide, finished ones leave the normal sections unless the setting is on (stored under `zode.prefs.v1`, default off, with a quiet "N work orders hidden · Show" line when hidden). Pull to refresh, the empty state and loading skeleton cards stay.
 
+Long-press a card (or use the chat "…" menu) to archive a conversation on this phone or delete it on the Mac via `session/delete` (confirm alert, light haptic; running sessions must be stopped first). Archived conversations disappear from every section — urgent ones never hide — and appear under **Archived** when "Show archived" is on from the "…" sheet, with a quiet "N archived · Show" line otherwise.
+
+### 3.6 Chat settings and usage
+The chat "…" menu gains Rename, Model and thinking, and Usage (above the archive/delete items), with a small `subtext` caption under the title showing the current model and thinking level ("GLM-5.3-Flash · max") once `session/resume` settings are known. Rename is a centred modal (autofocus, preselected, 120-char cap; Save disabled while empty or unchanged). "Model and thinking" is a bottom sheet: available models with their provider labels and a check on the current one, then a segmented thinking-level row; picking calls `session/setModel` (keeping a reasoning level the model supports, else its default) or `session/setThoughtLevel`, disabled with a note while the conversation runs. "Usage" opens a scrollable sheet — this conversation's context bar plus Input / Output / Cache read / Requests, then account totals for 7 days / 30 days / All (big K/M/B total, Sessions, Turns, Cache hit rate, Favorite model) and a 14-day mini bar chart (accent for today) with the first and last date. The home "…" sheet gets the same Usage view without the conversation part.
+
 ### 3.2 Chat (session)
 ```
  ‹                Fix login redirect       ⋯     <- icon-only back arrow, small centered title (sans 16/600), overflow ⋯

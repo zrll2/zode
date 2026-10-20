@@ -23,3 +23,15 @@ export function buildSessionCreateParams(input: {
 export function buildSessionSubscribeParams(sessionId: string) {
   return { sessionId, deliveryKind: "web-remote-replayable" };
 }
+
+export function buildSessionDeleteParams(sessionId: string) {
+  return { sessionId };
+}
+
+export function buildSessionUsageParams(sessionId: string) {
+  return { sessionId };
+}
+
+export function buildUsageStatsParams(range: "all" | "7d" | "30d") {
+  return { range };
+}

@@ -1,3 +1,4 @@
+import { isArchived } from "./sessionActions";
 import { isWorkOrder } from "./sessionStatus";
 import type { SessionRow } from "./util";
 
@@ -60,20 +61,29 @@ export function groupSessions(sessions: SessionRow[], now: number): SessionSecti
   return allSections.filter((section) => section.items.length > 0);
 }
 
-// Home screen sections (order 16): Needs you and Running first — urgent work
-// orders stay there like any other session — then the recency buckets, then
-// finished work orders, which are hidden (and counted) unless the setting is
-// on. Empty sections are dropped.
+export interface HomePrefs {
+  showWorkOrders: boolean;
+  showArchived: boolean;
+  archivedIds: string[];
+}
+
+// Home screen sections (order 16/17b): Needs you and Running first — urgent
+// sessions, including archived ones, never hide — then the recency buckets,
+// then finished work orders and archived conversations, which are hidden
+// (and counted) unless their setting is on. An archived work order counts as
+// archived only. Empty sections are dropped.
 export function buildHomeSections(
   sessions: SessionRow[],
   now: number,
-  showWorkOrders: boolean,
-): { sections: SessionSection[]; hiddenWorkOrders: number } {
+  prefs: HomePrefs,
+): { sections: SessionSection[]; hiddenWorkOrders: number; hiddenArchived: number } {
   const needsYou: SessionRow[] = [];
   const running: SessionRow[] = [];
   const rest: SessionRow[] = [];
   const workOrders: SessionRow[] = [];
+  const archived: SessionRow[] = [];
   let hiddenWorkOrders = 0;
+  let hiddenArchived = 0;
 
   for (const session of sessions) {
     if (session.status === "waiting" || session.status === "error") {
@@ -84,8 +94,13 @@ export function buildHomeSections(
       running.push(session);
       continue;
     }
+    if (isArchived(prefs.archivedIds, session.id)) {
+      if (prefs.showArchived) archived.push(session);
+      else hiddenArchived += 1;
+      continue;
+    }
     if (isWorkOrder(session.title)) {
-      if (showWorkOrders) workOrders.push(session);
+      if (prefs.showWorkOrders) workOrders.push(session);
       else hiddenWorkOrders += 1;
       continue;
     }
@@ -96,6 +111,7 @@ export function buildHomeSections(
   needsYou.sort(byRecency);
   running.sort(byRecency);
   workOrders.sort(byRecency);
+  archived.sort(byRecency);
 
   const sections: SessionSection[] = [];
   const push = (key: string, title: string, items: SessionRow[]) => {
@@ -105,6 +121,7 @@ export function buildHomeSections(
   push("running", "Running", running);
   sections.push(...groupSessions(rest, now));
   push("work-orders", "Work orders", workOrders);
+  push("archived", "Archived", archived);
 
-  return { sections, hiddenWorkOrders };
+  return { sections, hiddenWorkOrders, hiddenArchived };
 }
