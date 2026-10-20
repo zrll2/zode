@@ -51,8 +51,11 @@ Every option is optional: `host` 127.0.0.1, `port` 8787, `publicUrl` `ws://host:
 
 ## Rules the relay enforces
 
-- Only these methods: `session/{list,create,resume,read,messages,events,subscribe,send,stop,close,setModel,setThoughtLevel,setMode,usage,goal,compact}`.
+- Only these methods: `session/{list,create,resume,read,messages,events,subscribe,send,stop,close,setModel,setThoughtLevel,setMode,usage,goal,compact,delete,rename}` and `usage/stats`.
 - `session/create` needs `mode` = `plan`, `edit` or `guarded`. `yolo` and `build` are refused.
+- `session/delete` deletes a conversation: the relay alone builds the agent's `v4/command` envelope (`deleteSession`), so a phone can never send raw commands.
+- `session/rename` renames one through the same envelope (`renameSession`); the id follows the delete rules, and the title must trim to 1-120 characters (the trimmed title is sent).
+- `usage/stats` is a plain read, forwarded unchanged; `range` must be exactly `all`, `7d` or `30d`.
 - Tokens are stored as SHA-256 hashes in `~/.zode/relay/devices.json` (mode 0600). Pair codes work once and expire.
 - Five failed attempts from one address cause a 60 second block.
 

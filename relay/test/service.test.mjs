@@ -1,4 +1,4 @@
-// The relay as an embeddable service: lifecycle, pairing, devices, per-instance isolation, upstream events.
+// The relay as an embeddable service: lifecycle, pairing, devices, per-instance isolation, upstream events, rpc policy and forwarding.
 // Port 0 is not supported (the pairing payload embeds the port), so each test asks the OS for a free port first.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -6,7 +6,7 @@ import net from 'node:net';
 import fs from 'node:fs';
 import path from 'node:path';
 import WebSocket from 'ws';
-import { createRelay } from '../service.mjs';
+import { createRelay, checkPolicy } from '../service.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const silent = { log() {}, warn() {}, error() {} };
@@ -34,6 +34,36 @@ const nextMessage = (ws, match, ms = 3000) => new Promise((resolve, reject) => {
   ws.on('message', onMsg);
 });
 const waitFor = async (fn, ms = 3000) => { const end = Date.now() + ms; while (Date.now() < end) { if (fn()) return; await sleep(25); } throw new Error('condition not met in time'); };
+
+// A fake agent upstream: a unix socket plus the <pid>.json meta file syncUpstream scans for. It answers tap/pending
+// itself and records every request the relay forwards; tests reply to a recorded request with respond().
+function fakeUpstream() {
+  const home = tmp();
+  const tapDir = path.join(home, 'tap'); fs.mkdirSync(tapDir);
+  const sockPath = path.join(tapDir, 'upstream.sock');
+  const received = [];
+  let sock = null;
+  const server = net.createServer((s) => {
+    sock = s; let buf = '';
+    s.on('data', (d) => {
+      buf += d; let i;
+      while ((i = buf.indexOf('\n')) >= 0) {
+        const l = buf.slice(0, i); buf = buf.slice(i + 1); if (!l.trim()) continue;
+        const m = JSON.parse(l);
+        if (m.method === 'tap/pending') s.write(JSON.stringify({ id: m.id, tapReply: true, result: { pending: [] } }) + '\n');
+        else received.push(m);
+      }
+    });
+  });
+  server.listen(sockPath);
+  fs.writeFileSync(path.join(tapDir, `${process.pid}.json`), JSON.stringify({ pid: process.pid, cwd: '/tmp/fake-workspace', sock: sockPath }));
+  return {
+    home, tapDir, received,
+    send: (o) => sock.write(JSON.stringify(o) + '\n'),                                              // upstream -> relay
+    respond: (m, result) => sock.write(JSON.stringify({ id: m.id, tapReply: true, result }) + '\n'),
+    close: async () => { sock?.destroy(); await new Promise((r) => server.close(r)); rm(home); },
+  };
+}
 
 test('start / status / stop; stop twice is safe; busy port rejects with EADDRINUSE', async () => {
   const state = tmp(), tap = tmp(), busyState = tmp();
@@ -162,35 +192,17 @@ test("'status' event fires after a device is paired, and off() unsubscribes", as
 });
 
 test('a fake upstream (unix socket + <pid>.json meta) delivers events to an authed phone', async () => {
-  const home = tmp();
-  const tapDir = path.join(home, 'tap'); fs.mkdirSync(tapDir);
-  const sockPath = path.join(tapDir, 'upstream.sock');
-  let upSock = null;
-  const fake = net.createServer((s) => {
-    upSock = s; let buf = '';
-    s.on('data', (d) => {
-      buf += d; let i;
-      while ((i = buf.indexOf('\n')) >= 0) {
-        const l = buf.slice(0, i); buf = buf.slice(i + 1); if (!l.trim()) continue;
-        const m = JSON.parse(l);
-        if (m.method === 'tap/pending') s.write(JSON.stringify({ id: m.id, tapReply: true, result: { pending: [] } }) + '\n');
-      }
-    });
-  });
-  fake.listen(sockPath);
-  // the meta file syncUpstream expects: live pid, cwd, and the unix socket path
-  fs.writeFileSync(path.join(tapDir, `${process.pid}.json`), JSON.stringify({ pid: process.pid, cwd: '/tmp/fake-workspace', sock: sockPath }));
-
+  const up = fakeUpstream();
   const port = await freePort();
-  const relay = createRelay({ port, stateDir: path.join(home, 'state'), tapDir, log: silent });
+  const relay = createRelay({ port, stateDir: path.join(up.home, 'state'), tapDir: up.tapDir, log: silent });
   await relay.start();
   try {
-    await waitFor(() => upSock !== null && relay.status().upstreams === 1);
+    await waitFor(() => relay.status().upstreams === 1);
     const { token } = await (await pair(port, relay.createPairing().code, 'phone')).json();
     const { ws, ready } = await authed(`ws://127.0.0.1:${port}`, token);
     assert.deepEqual(ready.servers, [{ pid: process.pid, cwd: '/tmp/fake-workspace' }]);
 
-    upSock.write(JSON.stringify({ method: 'session/event', params: { sessionId: 's1', payload: { text: 'hello' } } }) + '\n');
+    up.send({ method: 'session/event', params: { sessionId: 's1', payload: { text: 'hello' } } });
     const evt = await nextMessage(ws, (m) => m.type === 'event');
     assert.equal(evt.server, process.pid);
     assert.equal(evt.msg.method, 'session/event');
@@ -198,7 +210,151 @@ test('a fake upstream (unix socket + <pid>.json meta) delivers events to an auth
     ws.close();
   } finally {
     await relay.stop();
-    fake.close();
-    rm(home);
+    await up.close();
   }
+});
+
+test('checkPolicy: delete/rename session ids, rename titles, usage/stats ranges, and no raw v4/command', () => {
+  const id100 = 'sess_' + 'x'.repeat(95);                              // exactly 100 characters
+  assert.equal(checkPolicy('session/delete', { sessionId: id100 }), null);
+  assert.match(checkPolicy('session/delete', {}), /sessionId/);
+  assert.match(checkPolicy('session/delete', { sessionId: 'not-a-sess-id' }), /sessionId/);
+  assert.match(checkPolicy('session/delete', { sessionId: id100 + 'x' }), /sessionId/);      // 101 characters
+  assert.equal(checkPolicy('session/rename', { sessionId: id100, title: '  Renamed  ' }), null);
+  assert.match(checkPolicy('session/rename', { sessionId: id100, title: '   ' }), /title/);
+  assert.match(checkPolicy('session/rename', { sessionId: id100, title: 'x'.repeat(121) }), /title/);
+  for (const range of ['all', '7d', '30d']) assert.equal(checkPolicy('usage/stats', { range }), null);
+  assert.match(checkPolicy('usage/stats', {}), /range/);
+  assert.match(checkPolicy('usage/stats', { range: '90d' }), /range/);
+  assert.equal(checkPolicy('v4/command', {}), 'method not allowed: v4/command');
+});
+
+test('session/delete and session/rename go upstream as relay-built v4/command envelopes; results pass back unchanged', async () => {
+  const port = await freePort();
+  const up = fakeUpstream();
+  const lines = [];
+  const log = { log: (...a) => lines.push(a.join(' ')), warn() {}, error() {} };
+  const relay = createRelay({ port, stateDir: path.join(up.home, 'state'), tapDir: up.tapDir, log });
+  await relay.start();
+  try {
+    await waitFor(() => relay.status().upstreams === 1);
+    const { id: device, token } = await (await pair(port, relay.createPairing().code, 'phone')).json();
+    const { ws } = await authed(`ws://127.0.0.1:${port}`, token);
+
+    ws.send(JSON.stringify({ type: 'rpc', id: 7, method: 'session/delete', params: { sessionId: 'sess_abc123', bogus: 'nope' } }));
+    await waitFor(() => up.received.length > 0);
+    const del = up.received[0];
+    assert.equal(del.method, 'v4/command');
+    assert.deepEqual(Object.keys(del.params).sort(), ['clientId', 'commandId', 'issuedAt', 'payload', 'sessionId', 'type']);   // relay-built: nothing else leaks in
+    assert.equal(del.params.clientId, 'zode-relay');
+    assert.equal(del.params.sessionId, 'sess_abc123');
+    assert.equal(del.params.type, 'deleteSession');
+    assert.deepEqual(del.params.payload, {});
+    assert.match(del.params.commandId, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    assert.equal(typeof del.params.issuedAt, 'number');
+    up.respond(del, { commandId: del.params.commandId, status: 'accepted', revisionAtDecision: 0 });
+    const delRes = await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === 7);
+    assert.deepEqual(delRes.result, { commandId: del.params.commandId, status: 'accepted', revisionAtDecision: 0 });
+    assert.ok(lines.includes(`delete ${device} sess_abc123`));
+
+    ws.send(JSON.stringify({ type: 'rpc', id: 8, method: 'session/rename', params: { sessionId: 'sess_abc123', title: '  New name  ' } }));
+    await waitFor(() => up.received.length > 1);
+    const ren = up.received[1];
+    assert.equal(ren.method, 'v4/command');
+    assert.equal(ren.params.clientId, 'zode-relay');
+    assert.equal(ren.params.type, 'renameSession');
+    assert.deepEqual(ren.params.payload, { title: 'New name' });         // the trimmed title
+    up.respond(ren, { commandId: ren.params.commandId, status: 'rejected', reasonCode: 'proto.sessionNotFound', revisionAtDecision: 0 });
+    const renRes = await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === 8);
+    assert.deepEqual(renRes.result, { commandId: ren.params.commandId, status: 'rejected', reasonCode: 'proto.sessionNotFound', revisionAtDecision: 0 });
+    assert.ok(lines.includes(`rename ${device} sess_abc123`));
+    ws.close();
+  } finally { await relay.stop(); await up.close(); }
+});
+
+test('session/delete with a missing or bad sessionId is refused with -32001 and never reaches upstream', async () => {
+  const port = await freePort();
+  const up = fakeUpstream();
+  const relay = createRelay({ port, stateDir: path.join(up.home, 'state'), tapDir: up.tapDir, log: silent });
+  await relay.start();
+  try {
+    await waitFor(() => relay.status().upstreams === 1);
+    const { token } = await (await pair(port, relay.createPairing().code, 'phone')).json();
+    const { ws } = await authed(`ws://127.0.0.1:${port}`, token);
+
+    const bad = [{}, { sessionId: '' }, { sessionId: 'nope' }, { sessionId: 'sess_' + 'x'.repeat(96) }, { sessionId: 42 }];
+    for (let i = 0; i < bad.length; i++) {
+      ws.send(JSON.stringify({ type: 'rpc', id: i, method: 'session/delete', params: bad[i] }));
+      const res = await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === i);
+      assert.equal(res.error.code, -32001);
+      assert.match(res.error.message, /sessionId/);
+    }
+    await sleep(150);
+    assert.deepEqual(up.received, []);                                   // nothing was forwarded
+    ws.close();
+  } finally { await relay.stop(); await up.close(); }
+});
+
+test('a phone cannot send v4/command itself', async () => {
+  const port = await freePort();
+  const up = fakeUpstream();
+  const relay = createRelay({ port, stateDir: path.join(up.home, 'state'), tapDir: up.tapDir, log: silent });
+  await relay.start();
+  try {
+    await waitFor(() => relay.status().upstreams === 1);
+    const { token } = await (await pair(port, relay.createPairing().code, 'phone')).json();
+    const { ws } = await authed(`ws://127.0.0.1:${port}`, token);
+
+    ws.send(JSON.stringify({ type: 'rpc', id: 9, method: 'v4/command',
+      params: { commandId: 'forged', clientId: 'phone', sessionId: 'sess_abc', type: 'deleteSession', payload: {}, issuedAt: Date.now() } }));
+    const res = await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === 9);
+    assert.equal(res.error.code, -32001);
+    assert.equal(res.error.message, 'method not allowed: v4/command');
+    await sleep(150);
+    assert.deepEqual(up.received, []);
+    ws.close();
+  } finally { await relay.stop(); await up.close(); }
+});
+
+test('usage/stats needs range all/7d/30d and is forwarded unchanged; setModel, setThoughtLevel and session/usage pass through', async () => {
+  const port = await freePort();
+  const up = fakeUpstream();
+  const relay = createRelay({ port, stateDir: path.join(up.home, 'state'), tapDir: up.tapDir, log: silent });
+  await relay.start();
+  try {
+    await waitFor(() => relay.status().upstreams === 1);
+    const { token } = await (await pair(port, relay.createPairing().code, 'phone')).json();
+    const { ws } = await authed(`ws://127.0.0.1:${port}`, token);
+
+    ws.send(JSON.stringify({ type: 'rpc', id: 11, method: 'usage/stats', params: { range: '7d' } }));
+    await waitFor(() => up.received.length > 0);
+    assert.equal(up.received[0].method, 'usage/stats');
+    assert.deepEqual(up.received[0].params, { range: '7d' });            // untouched
+    up.respond(up.received[0], { sessions: 3, costUsd: 1.5 });
+    const res = await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === 11);
+    assert.deepEqual(res.result, { sessions: 3, costUsd: 1.5 });
+
+    for (const [id, params] of [[12, {}], [13, { range: '90d' }]]) {
+      ws.send(JSON.stringify({ type: 'rpc', id, method: 'usage/stats', params }));
+      const bad = await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === id);
+      assert.equal(bad.error.code, -32001);
+      assert.match(bad.error.message, /range/);
+    }
+
+    const passthrough = [                                                // already-allowed methods: params untouched
+      { id: 14, method: 'session/setModel', params: { sessionId: 'sess_a', model: 'glm-5' } },
+      { id: 15, method: 'session/setThoughtLevel', params: { sessionId: 'sess_a', thoughtLevel: 'high' } },
+      { id: 16, method: 'session/usage', params: { sessionId: 'sess_a' } },
+    ];
+    for (let i = 0; i < passthrough.length; i++) {
+      ws.send(JSON.stringify({ type: 'rpc', ...passthrough[i] }));
+      await waitFor(() => up.received.length > i + 1);
+      assert.equal(up.received[i + 1].method, passthrough[i].method);
+      assert.deepEqual(up.received[i + 1].params, passthrough[i].params);
+      up.respond(up.received[i + 1], { ok: true });
+      const ok = await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === passthrough[i].id);
+      assert.deepEqual(ok.result, { ok: true });
+    }
+    ws.close();
+  } finally { await relay.stop(); await up.close(); }
 });
