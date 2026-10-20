@@ -51,12 +51,14 @@ Only one ZCode can run at a time (they share one data folder). Use Zode.app for 
 
 ## Update
 
-When ZCode updates, rebuild the copy:
+Update the original ZCode.app as usual (its own updater works). The copy's updater is switched off on purpose: it cannot install over a re-signed app, so it would only download the update and fail. Once the original is newer than Zode.app, the Zode menu bar shows **ZCode x.y.z is installed. Rebuild Zode…**. Click it: Zode quits, rebuilds itself from the original and reopens, in about a minute (log in `~/.zode/rebuild.log`). The same by hand:
 
 ```bash
 # quit Zode.app first
 ./zode install
 ```
+
+To keep ZCode's own update check in the copy anyway, start it with `ZODE_KEEP_UPDATER=1`.
 
 Changed something in this repo, or copied ZCode by hand, and only want to (re-)apply the integration to your existing Zode.app?
 
@@ -79,5 +81,6 @@ rm -rf /Applications/Zode.app ~/.zode ~/.zcode-tap ~/.claude/skills/delegate-to-
 | `doctor` says no tap sockets | Open a project in Zode.app. The sockets appear when ZCode starts an agent. |
 | `doctor --models` says no models | Log in inside Zode.app (it may ask once). |
 | `install` says Zode.app is running | Quit it (Cmd+Q) and run `./zode install` again. |
+| **Rebuild Zode…** ended with a "Rebuild failed" notification | Read `~/.zode/rebuild.log`; the old Zode.app is still in place. Then run `./zode install` by hand. |
 | The menu says the relay could not start | Another relay is using the port (an old `./zode relay` in a terminal, or a second Zode.app). Quit it, then tick `Relay on` in the menu. |
 | `zcode/*` branch error | Use a separate worktree: `git worktree add ../x-wt -b zcode/my-task`. |

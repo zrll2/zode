@@ -4,17 +4,23 @@
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
+import { spawn } from 'node:child_process';
 import QRCode from 'qrcode';
 import { createRelay } from '../relay/service.mjs';
 import { detectAddresses, defaultAddress } from './lib/addresses.mjs';
 import { loadSettings, saveSettings } from './lib/settings.mjs';
 import { buildMenuTemplate } from './lib/menu.mjs';
+import { updateState, rebuildScript } from './lib/updates.mjs';
 
 const HOME = os.homedir();
 const SETTINGS_FILE = path.join(HOME, '.zode', 'settings.json');
 const LOG_FILE = path.join(HOME, '.zode', 'zode-app.log');
+const HOME_FILE = path.join(HOME, '.zode', 'home');                 // the Zode repo path, written by the installer
+const REBUILD_LOG = path.join(HOME, '.zode', 'rebuild.log');
+const UPDATE_CHECK_MS = 30 * 60 * 1000;
 
 const appendLog = (msg) => { try { fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true }); fs.appendFileSync(LOG_FILE, `${new Date().toISOString()} ${msg}\n`); } catch {} };
+const readRepoHome = () => { try { return fs.readFileSync(HOME_FILE, 'utf8').trim() || null; } catch { return null; } };
 
 let started = false;
 
@@ -32,6 +38,11 @@ export async function startZode({ electron, resourcesDir } = {}) {
     let relay = null, tray = null, pairWindow = null, currentPairing = null, pairedCount = 0;
     let error = null;
     let quitting = false;
+    // ZCode's own updater is off in this copy (boot.cjs); when the original ZCode is newer, the menu offers a rebuild.
+    const appPath = path.resolve(process.resourcesPath || path.join(res, '..'), '..', '..');   // this Zode.app bundle
+    const originalApp = process.env.ZCODE_APP || '/Applications/ZCode.app';   // same default as scripts/build-tap.sh
+    let update = { available: false, originalVersion: null, runningVersion: null };
+    let updateCheck = null;
 
     const chosen = () => addresses.find(a => a.id === settings.addressId) ?? defaultAddress(addresses);
     const publicUrlFor = a => `ws://${a.ip}:${settings.port}`;
@@ -59,6 +70,23 @@ export async function startZode({ electron, resourcesDir } = {}) {
       refresh();
     }
 
+    // Two Info.plist reads, so it is cheap enough to run on every tray click too. Shared while in flight.
+    function checkUpdate() {
+      if (updateCheck) return updateCheck;
+      updateCheck = updateState({ original: originalApp, running: appPath })
+        .then(next => {
+          const changed = ['available', 'originalVersion', 'runningVersion'].some(k => next[k] !== update[k]);
+          update = next;
+          if (changed) {
+            appendLog(`zode: original ZCode is ${next.originalVersion ?? 'missing'}, this copy is ${next.runningVersion ?? 'unknown'}${next.available ? '; offering a rebuild' : ''}`);
+            refresh();
+          }
+        })
+        .catch(err => appendLog(`zode: update check: ${err?.stack || err}`))
+        .finally(() => { updateCheck = null; });
+      return updateCheck;
+    }
+
     function menuState() {
       const devices = relay ? relay.listDevices() : [];
       return {
@@ -69,6 +97,7 @@ export async function startZode({ electron, resourcesDir } = {}) {
         addresses,
         addressId: chosen().id,
         launchAtLogin: settings.launchAtLogin,
+        update,
       };
     }
 
@@ -77,14 +106,44 @@ export async function startZode({ electron, resourcesDir } = {}) {
       pairWindow.webContents.send('zode:status', { running: !!(relay?.status().running), error, publicUrl: publicUrlFor(chosen()) });
     }
 
+    // State changed: tell the pairing window. The tray menu itself is built when the icon is clicked (see below).
     function refresh() {
       const devices = relay ? relay.listDevices() : [];
       if (devices.length > pairedCount) currentPairing = null;      // a phone just used the shown code
       pairedCount = devices.length;
+      try { pingPairWindow(); } catch (err) { appendLog(`zode: ${err?.stack || err}`); }
+    }
+
+    // Quit, rebuild Zode.app from the newer original ZCode, reopen. The work happens in a detached shell
+    // (rebuildScript) because this process must be gone before the bundle can be replaced. Whether a ZCode
+    // turn is in progress is not visible from here, so the dialog warns about it instead of refusing.
+    async function rebuild() {
       try {
-        if (tray) tray.setContextMenu(Menu.buildFromTemplate(buildMenuTemplate(menuState(), actions)));
-        pingPairWindow();
-      } catch (err) { appendLog(`zode: ${err?.stack || err}`); }
+        const version = update.originalVersion ?? 'the installed version';
+        const { response } = await dialog.showMessageBox({
+          type: 'warning', buttons: ['Rebuild', 'Cancel'], defaultId: 0, cancelId: 1,
+          message: `Zode will quit, rebuild itself from ZCode ${version} and reopen.`,
+          detail: 'This takes about a minute. Unsaved work in ZCode sessions that are running will not continue. Continue?',
+        });
+        if (response !== 0) return;
+        const repo = readRepoHome();
+        if (!repo || !fs.existsSync(path.join(repo, 'scripts', 'build-tap.sh'))) {
+          appendLog(`zode: rebuild: no usable repo path in ${HOME_FILE} (${repo ?? 'missing'})`);
+          await dialog.showMessageBox({
+            type: 'error', message: 'Zode cannot find its own repo.',
+            detail: `~/.zode/home should contain the path of the Zode repo${repo ? ` (it says ${repo}, which has no scripts/build-tap.sh)` : ''}. Run ./zode install in the Zode repo; that rebuilds the app as well.`,
+          });
+          return;
+        }
+        fs.mkdirSync(path.dirname(REBUILD_LOG), { recursive: true });
+        const logFd = fs.openSync(REBUILD_LOG, 'a');
+        const child = spawn('/bin/bash', ['-c', rebuildScript({ pid: process.pid, repo, appPath })], { detached: true, stdio: ['ignore', logFd, logFd] });
+        child.on('error', err => appendLog(`zode: rebuild: ${err?.stack || err}`));
+        child.unref();
+        fs.closeSync(logFd);
+        appendLog(`zode: rebuilding from ZCode ${version} with ${repo}/scripts/build-tap.sh (log: ${REBUILD_LOG}); quitting`);
+        app.quit();
+      } catch (err) { appendLog(`zode: rebuild: ${err?.stack || err}`); }
     }
 
     const actions = {
@@ -100,6 +159,7 @@ export async function startZode({ electron, resourcesDir } = {}) {
         win.show(); win.focus();
       },
       about: () => dialog.showMessageBox({ type: 'info', title: 'Zode', message: 'Zode', detail: 'Claude Code decides. ZCode writes. You watch from your phone.\n\nThe phone relay runs inside this app.' }),
+      rebuild: () => rebuild(),
     };
 
     async function pairingView() {
@@ -133,11 +193,20 @@ export async function startZode({ electron, resourcesDir } = {}) {
 
     const icon = nativeImage.createFromPath(path.join(res, 'trayTemplate.png'));    // the @2x variant is picked up automatically
     if (icon.isEmpty()) appendLog('zode: trayTemplate.png missing next to the bundle; no menu bar icon (use `./zode pair`).');
-    else { tray = new Tray(icon); tray.setToolTip('Zode'); }
+    else {
+      tray = new Tray(icon); tray.setToolTip('Zode');
+      // The menu is built on click, after a version check, rather than set ahead of time: on macOS a preset
+      // context menu swallows the click event, so there would be no moment to re-check before it opens.
+      const popMenu = () => { try { tray.popUpContextMenu(Menu.buildFromTemplate(buildMenuTemplate(menuState(), actions))); } catch (err) { appendLog(`zode: ${err?.stack || err}`); } };
+      tray.on('click', () => { checkUpdate().then(popMenu, popMenu); });
+      tray.on('right-click', popMenu);
+    }
 
     app.setLoginItemSettings({ openAtLogin: settings.launchAtLogin });
     app.on('before-quit', () => { quitting = true; relay?.stop().catch(() => {}); });
 
+    checkUpdate();
+    setInterval(checkUpdate, UPDATE_CHECK_MS);
     await applyRelay();
   } catch (err) {
     appendLog(`zode: ${err?.stack || err}`);
