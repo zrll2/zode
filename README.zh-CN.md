@@ -57,7 +57,7 @@ open /Applications/Zode.app   # 登录一次，打开任意项目
 
 ### 加上手机应用（可选）
 
-`./zode install` 之后，中继已经内置在 Zode.app 里运行。点**菜单栏上的 Zode 图标**，选择 **Pair a phone…**，用手机上的 Zode 扫描二维码即可。出门在外怎么连回家里的 Mac，见 [docs/PHONE.md](docs/PHONE.md)。
+`./zode install` 之后，中继已经内置在 Zode.app 里运行。点**菜单栏上的 Zode 图标**，选择 **Pair a phone…**，用手机上的 Zode 扫描二维码即可（手机要能连到 Mac：同一 Wi-Fi，或使用 [Tailscale](https://tailscale.com)）。出门在外怎么连回家里的 Mac，见 [docs/PHONE.md](docs/PHONE.md)。
 
 只在终端里跑（比如 SSH）？`./zode relay` 和 `./zode pair` 是同一个中继的命令行版本，见 [docs/PHONE.md](docs/PHONE.md) 的无界面说明。
 
@@ -88,11 +88,19 @@ flowchart LR
 | [`app/`](app) | 手机应用（Expo、React Native），iOS 和 Android。 |
 | [`docs/`](docs) | 安装、架构、协议和安全说明。 |
 
+## 手机应用
+
+- **首页：** 每个项目一张带状态灯的卡片。先是**需要你**，然后是**运行中**，再按天列出历史。滑动即可归档会话；已完成的 `#` 工单默认隐藏，可在菜单里打开。
+- **聊天：** 像读文档一样读 agent：Markdown，工具调用和思考折叠成一行。
+- **控制：** 重命名会话、切换模型和思考强度、查看用量（本会话上下文与账号 token）。
+- **附件：** 用 **+** 按钮发送照片、拍照和文档（每个最大 8 MB）。
+- **权限级别：** 在聊天里切换 Plan、Edit、Guarded。Guarded 模式下的批准目前仍要在 Mac 上操作。
+
 ## 默认安全
 
 - ZCode 只在 **独立的 git worktree**、`zcode/*` 分支里工作，从不碰 `main`。
 - ZCode **只写文件**，所有命令由 Claude Code 运行。
-- 手机只能用 `plan` 和 `edit` 模式，中继会拦截 `yolo` 和 `build`。
+- 手机只能用 `plan`、`edit` 和 `guarded` 模式，中继会拦截 `yolo` 和 `build`。
 - 手机用一次性配对码配对，各自拥有可撤销的令牌。
 - 中继默认只监听 `127.0.0.1`，除非你选择私有网络地址（推荐 Tailscale）。
 - Zode 从不读取或复制你的 ZCode 凭据。

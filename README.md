@@ -64,7 +64,7 @@ That is all. Claude Code creates a worktree, writes the order, sends it to ZCode
 
 ### Add the phone app (optional)
 
-After `./zode install` the relay already runs inside Zode.app. Click the **Zode icon in the menu bar**, choose **Pair a phone…**, and scan the QR code with Zode on your phone. Done. See [docs/PHONE.md](docs/PHONE.md) to reach your Mac when you are away from home.
+After `./zode install` the relay already runs inside Zode.app. Click the **Zode icon in the menu bar**, choose **Pair a phone…**, and scan the QR code with Zode on your phone (the phone must reach the Mac: same Wi-Fi, or [Tailscale](https://tailscale.com)). Done. See [docs/PHONE.md](docs/PHONE.md) to reach your Mac when you are away from home.
 
 Running the Mac headless (SSH only)? `./zode relay` and `./zode pair` are the same relay in a terminal — see the headless note in [docs/PHONE.md](docs/PHONE.md).
 
@@ -105,16 +105,18 @@ flowchart LR
   <img src="docs/images/approval.png" width="230" alt="Approval">
 </p>
 
-- **Needs you** first, then **Running**, then history by day.
-- Read the agent like a document: Markdown, tool calls and thinking collapsed to one line.
-- Allow or deny an edit with one tap.
+- **Home:** one card per project with a status light. **Needs you** first, then **Running**, then history by day. Archive a conversation with a swipe. Finished `#` work orders are hidden until you turn them on.
+- **Chat:** read the agent like a document: Markdown, and tool calls and thinking collapsed to one line.
+- **Controls:** rename a chat, switch model and thinking level, and see usage (this chat's context and your account's tokens).
+- **Attach:** send photos, camera shots and documents (up to 8 MB each) with the **+** button.
+- **Permission level:** switch between Plan, Edit and Guarded from the chat. In Guarded, approvals are answered on the Mac for now.
 - Light and dark, black and white, nothing loud.
 
 ## Safe by default
 
 - ZCode only works in a **separate git worktree** on a `zcode/*` branch. It never touches `main`.
 - ZCode **writes files only**. Claude Code runs every command.
-- The phone can use `plan` and `edit` modes only. `yolo` and `build` are blocked in the relay.
+- The phone can use `plan`, `edit` and `guarded` modes only. `yolo` and `build` are blocked in the relay.
 - Phones pair with a one-time code and get their own revocable token.
 - The relay listens on `127.0.0.1` unless you choose a private network address (we suggest Tailscale).
 - Zode never reads or copies your ZCode credentials.
