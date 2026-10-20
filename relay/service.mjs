@@ -25,28 +25,58 @@ const eq = (a, b) => { const x = Buffer.from(a), y = Buffer.from(b); return x.le
 // ---- policy: what a phone may call ------------------------------------------
 const ALLOWED = new Set(['session/list', 'session/create', 'session/resume', 'session/read', 'session/messages', 'session/events',
   'session/subscribe', 'session/send', 'session/stop', 'session/close', 'session/setModel', 'session/setThoughtLevel', 'session/setMode',
-  'session/usage', 'session/goal', 'session/compact', 'session/delete', 'session/rename', 'usage/stats']);
+  'session/usage', 'session/goal', 'session/compact', 'session/rename', 'usage/stats', 'attachment/upload']);
 const SAFE_MODES = new Set(['plan', 'edit', 'guarded']);       // never yolo / build from a phone
 const DECISIONS = new Set(['allow', 'deny']);   // a phone may only allow or deny; never modify, escalate or add rules
-// session/delete and session/rename are the only phone methods that become agent commands: the relay builds the whole
-// v4/command envelope itself, so a phone can never send v4/command or inject fields into it.
+// session/rename and session/send (with attachments) are the phone methods that become agent commands: the relay builds
+// the whole v4/command envelope itself, so a phone can never send v4/command or inject fields into it.
 const COMMANDS = {
-  'session/delete': { verb: 'delete', type: 'deleteSession', payload: () => ({}) },
   'session/rename': { verb: 'rename', type: 'renameSession', payload: p => ({ title: p.title.trim() }) },
 };
+const MAX_UPLOAD = 8 * 1024 * 1024;            // largest file a phone may attach
+const CHUNK = 256 * 1024;                      // the agent stages uploads in chunks of at most 256 KiB
+const MIME_RE = /^[a-z0-9][a-z0-9.+-]*\/[a-z0-9][a-z0-9.+-]*$/;
+const B64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
+const b64Bytes = s => Math.floor(s.length / 4) * 3 - (s.endsWith('==') ? 2 : s.endsWith('=') ? 1 : 0);   // decoded size, no decode
+const ATTACH_FIELDS = a => ({ ref: a.ref, fileName: a.fileName, mime: a.mime, bytes: a.bytes });         // drop anything else the phone sent
+
+function checkAttachment(a, sessionId) {
+  if (!a || typeof a !== 'object' || Array.isArray(a)) return 'each attachment must be an object';
+  if (typeof a.ref !== 'string' || !a.ref.startsWith(`zcode-artifact://${sessionId}/`)) return 'attachment ref must be a zcode-artifact:// ref of this session';
+  if (typeof a.fileName !== 'string' || !a.fileName.length || a.fileName.length > 200) return 'attachment fileName must be 1-200 characters';
+  if (typeof a.mime !== 'string' || a.mime.length > 100 || !MIME_RE.test(a.mime)) return 'attachment mime must be a lowercase type/subtype';
+  if (!Number.isInteger(a.bytes) || a.bytes < 1 || a.bytes > MAX_UPLOAD) return 'attachment bytes must be 1 byte to 8 MB';
+  return null;
+}
 
 export function checkPolicy(method, params) {
   if (!ALLOWED.has(method)) return `method not allowed: ${method}`;
   const mode = method === 'session/create' ? params?.mode : method === 'session/setMode' ? (params?.mode ?? params?.current) : undefined;
   if (method === 'session/create' && mode === undefined) return 'mode required (plan|edit|guarded)';
   if (mode !== undefined && !SAFE_MODES.has(mode)) return `mode not allowed from mobile: ${mode}`;
-  if (method === 'session/delete' || method === 'session/rename') {
+  if (method === 'session/rename' || method === 'attachment/upload') {
     const id = params?.sessionId;
     if (typeof id !== 'string' || !id.startsWith('sess_') || id.length > 100) return 'sessionId must be a sess_ id of at most 100 characters';
   }
   if (method === 'session/rename') {
     const title = typeof params?.title === 'string' ? params.title.trim() : '';
     if (!title || title.length > 120) return 'title must trim to 1-120 characters';
+  }
+  if (method === 'attachment/upload') {
+    const name = params?.fileName;
+    if (typeof name !== 'string' || !name.length || name.length > 200) return 'fileName must be 1-200 characters';
+    const mime = params?.mime;
+    if (typeof mime !== 'string' || mime.length > 100 || !MIME_RE.test(mime)) return 'mime must be a lowercase type/subtype';
+    const b64 = params?.dataBase64;
+    if (typeof b64 !== 'string' || !B64_RE.test(b64) || b64.length % 4) return 'dataBase64 must be base64';
+    const bytes = b64Bytes(b64);
+    if (bytes < 1) return 'file is empty';
+    if (bytes > MAX_UPLOAD) return 'file is larger than 8 MB';
+  }
+  if (method === 'session/send' && Array.isArray(params?.attachments) && params.attachments.length) {
+    if (params.attachments.length > 6) return 'at most 6 attachments';
+    for (const a of params.attachments) { const bad = checkAttachment(a, params?.sessionId); if (bad) return bad; }
+    if (typeof params.content !== 'string') return 'content must be a string when attachments are sent';
   }
   if (method === 'usage/stats' && !['all', '7d', '30d'].includes(params?.range)) return "range must be 'all', '7d' or '30d'";
   return null;
@@ -103,7 +133,12 @@ export function createRelay(opts = {}) {
       if (upstream.has(pid)) continue;
       const sock = net.connect(meta.sock); const u = { meta, sock, buf: '' }; upstream.set(pid, u); emitStatus();
       sock.on('data', d => { u.buf += d; let i; while ((i = u.buf.indexOf('\n')) >= 0) { const l = u.buf.slice(0, i); u.buf = u.buf.slice(i + 1); if (l.trim()) fromUpstream(pid, l); } });
-      sock.on('close', () => { upstream.delete(pid); emitStatus(); for (const k of pendingReq.keys()) if (k.startsWith(pid + ':')) pendingReq.delete(k); }); sock.on('error', () => {});
+      sock.on('close', () => {
+        upstream.delete(pid); emitStatus();
+        for (const k of pendingReq.keys()) if (k.startsWith(pid + ':')) pendingReq.delete(k);
+        for (const [rid, r] of routes) if (r.internalCall && r.pid === pid) { routes.delete(rid); clearTimeout(r.timer); r.reject(new Error('upstream closed')); }
+      });
+      sock.on('error', () => {});
       const sid = ++relayId; routes.set(sid, { internal: true, pid });       // ask the wrapper what is already pending
       sock.write(JSON.stringify({ id: sid, method: 'tap/pending', params: {} }) + '\n');
     }
@@ -114,6 +149,12 @@ export function createRelay(opts = {}) {
       if (!m.tapReply) return;                                      // copy of a desktop reply
       const r = routes.get(m.id); if (!r) return; routes.delete(m.id);
       if (r.internal) { for (const p of m.result?.pending ?? []) pendingReq.set(`${r.pid}:${p.id}`, { server: r.pid, ...p }); return; }
+      if (r.internalCall) {
+        clearTimeout(r.timer);
+        const err = m.error ?? (m.result?.status === 'rejected' ? m.result : m.result?.error);
+        if (err) return r.reject(new Error(err.message ?? err.reasonCode ?? (typeof err === 'string' ? err : 'upstream error')));
+        return r.resolve(m.result);
+      }
       delete m.tapReply; m.id = r.clientId;
       return send(r.client, { type: 'rpc-result', server: pid, ...fitForMobile(r.method, m) });
     }
@@ -137,6 +178,19 @@ export function createRelay(opts = {}) {
     return m;
   }
   const send = (c, o) => { try { if (c.ws.readyState === 1) c.ws.send(JSON.stringify(o)); } catch {} };
+
+  // One relay-built request to one upstream; the reply comes back through fromUpstream (tapReply convention) and the
+  // promise settles with the agent's result or an Error carrying its message / reasonCode. 30 s per call.
+  function callUpstream(u, method, params) {
+    return new Promise((resolve, reject) => {
+      const id = ++relayId;
+      const timer = setTimeout(() => { if (routes.delete(id)) reject(new Error(`${method} timed out`)); }, 30_000);
+      timer.unref?.();
+      routes.set(id, { internalCall: true, pid: u.meta.pid, resolve, reject, timer });
+      try { u.sock.write(JSON.stringify({ id, method, params }) + '\n'); }
+      catch (err) { clearTimeout(timer); routes.delete(id); reject(err); }
+    });
+  }
 
   // ---- pairing / devices -------------------------------------------------------
   function newPairCode() {
@@ -173,6 +227,48 @@ export function createRelay(opts = {}) {
     return true;
   }
 
+  // ---- phone-initiated uploads and commands ---------------------------------------
+
+  // attachment/upload: resume the session, stage the file in chunks, commit. Answers {ref, fileName, mime, bytes}.
+  async function uploadAttachment(c, m, u) {
+    const p = m.params;
+    const connectionId = `relay-${c.device.id}`;
+    const uploadId = crypto.randomUUID();
+    const fail = message => send(c, { type: 'rpc-result', id: m.id, error: { code: -32010, message } });
+    try {
+      const raw = Buffer.from(p.dataBase64, 'base64');
+      const fileName = p.fileName.replace(/[\/\\\x00-\x1f\x7f]/g, '_');     // the agent stages files under this name
+      log.log(`upload ${c.device.id} ${fileName} ${raw.length}B -> ${u.meta.pid}`);
+      await callUpstream(u, 'session/resume', { sessionId: p.sessionId });
+      await callUpstream(u, 'v4/attachment/begin', { connectionId, uploadId, sessionId: p.sessionId, fileName, mime: p.mime,
+        totalBytes: raw.length, totalChunks: Math.ceil(raw.length / CHUNK), checksum: 'sha256:' + crypto.createHash('sha256').update(raw).digest('hex') });
+      for (let i = 0; i * CHUNK < raw.length; i++) {
+        await callUpstream(u, 'v4/attachment/chunk', { connectionId, uploadId, sessionId: p.sessionId, chunkIndex: i, dataBase64: raw.subarray(i * CHUNK, (i + 1) * CHUNK).toString('base64') });
+      }
+      const done = await callUpstream(u, 'v4/attachment/commit', { connectionId, uploadId, sessionId: p.sessionId });
+      if (!done?.ref) return fail('upload failed: the commit returned no ref');
+      send(c, { type: 'rpc-result', id: m.id, result: { ref: done.ref, fileName, mime: p.mime, bytes: raw.length } });
+    } catch (err) {
+      callUpstream(u, 'v4/attachment/abort', { connectionId, uploadId, sessionId: p.sessionId }).catch(() => {});   // its params are undocumented: best effort
+      fail(`upload failed: ${err.message}`);
+    }
+  }
+
+  // session/send with attachments: resume, then one relay-built sendText command.
+  async function sendWithAttachments(c, m, u) {
+    const p = m.params;
+    const fail = message => send(c, { type: 'rpc-result', id: m.id, error: { code: -32010, message } });
+    try {
+      log.log(`send ${c.device.id} ${p.attachments.length} attachment(s) -> ${u.meta.pid}`);
+      await callUpstream(u, 'session/resume', { sessionId: p.sessionId });
+      const payload = { text: p.content, attachments: p.attachments.map(ATTACH_FIELDS) };
+      if (p.modelSelection !== undefined) payload.modelSelection = p.modelSelection;
+      const res = await callUpstream(u, 'v4/command', { commandId: crypto.randomUUID(), clientId: 'zode-relay', sessionId: p.sessionId, type: 'sendText', payload, issuedAt: Date.now() });
+      if (!res || res.status !== 'accepted') return fail(res?.reasonCode ?? 'send was not accepted');
+      send(c, { type: 'rpc-result', id: m.id, result: { accepted: true, sessionId: p.sessionId, command: res } });
+    } catch (err) { fail(err.message); }
+  }
+
   // ---- server --------------------------------------------------------------------
   function start() {
     if (running) return Promise.resolve({ host, port });
@@ -196,7 +292,7 @@ export function createRelay(opts = {}) {
       }
       res.writeHead(404).end();
     });
-    wss = new WebSocketServer({ server: srv, maxPayload: 2 * 1024 * 1024 });
+    wss = new WebSocketServer({ server: srv, maxPayload: 14 * 1024 * 1024 });   // an 8 MiB upload is ~10.7 MiB as base64; MAX_FRAME still caps frames to phones
     wss.on('error', () => {});                    // ws re-emits srv's 'error' on wss; without a listener it throws uncaught and aborts the srv emit before srv.once below runs
     wss.on('connection', (ws, req) => {
       const ip = req.socket.remoteAddress; const c = { ws, authed: false, device: null };
@@ -232,12 +328,16 @@ export function createRelay(opts = {}) {
           if (bad) return send(c, { type: 'rpc-result', id: m.id, error: { code: -32001, message: bad } });
           const u = (m.server && upstream.get(m.server)) || [...upstream.values()].find(x => x.meta.cwd === m.params?.workspace?.workspacePath) || [...upstream.values()][0];
           if (!u) return send(c, { type: 'rpc-result', id: m.id, error: { code: -32002, message: 'no ZCode server (is Zode.app running?)' } });
+          if (m.method === 'attachment/upload') return uploadAttachment(c, m, u);        // multi-step: resume, begin, chunks, commit
+          if (m.method === 'session/send' && Array.isArray(m.params?.attachments) && m.params.attachments.length) return sendWithAttachments(c, m, u);
           const id = ++relayId; routes.set(id, { client: c, clientId: m.id, pid: u.meta.pid, method: m.method });
           const cmd = COMMANDS[m.method];
-          if (cmd) {                                                      // delete/rename go out as the agent's one command shape
+          if (cmd) {                                                      // rename goes out as the agent's one command shape
             log.log(`${cmd.verb} ${c.device.id} ${m.params.sessionId}`);
-            u.sock.write(JSON.stringify({ id, method: 'v4/command',
-              params: { commandId: crypto.randomUUID(), clientId: 'zode-relay', sessionId: m.params.sessionId, type: cmd.type, payload: cmd.payload(m.params), issuedAt: Date.now() } }) + '\n');
+            callUpstream(u, 'session/resume', { sessionId: m.params.sessionId }).catch(() => {}).then(() => {   // the command needs an active session
+              try { u.sock.write(JSON.stringify({ id, method: 'v4/command',
+                params: { commandId: crypto.randomUUID(), clientId: 'zode-relay', sessionId: m.params.sessionId, type: cmd.type, payload: cmd.payload(m.params), issuedAt: Date.now() } }) + '\n'); } catch {}
+            });
             return;
           }
           log.log(`rpc ${c.device.id} ${m.method} -> ${u.meta.pid}`);
