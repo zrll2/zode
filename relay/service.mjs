@@ -25,15 +25,30 @@ const eq = (a, b) => { const x = Buffer.from(a), y = Buffer.from(b); return x.le
 // ---- policy: what a phone may call ------------------------------------------
 const ALLOWED = new Set(['session/list', 'session/create', 'session/resume', 'session/read', 'session/messages', 'session/events',
   'session/subscribe', 'session/send', 'session/stop', 'session/close', 'session/setModel', 'session/setThoughtLevel', 'session/setMode',
-  'session/usage', 'session/goal', 'session/compact']);
+  'session/usage', 'session/goal', 'session/compact', 'session/delete', 'session/rename', 'usage/stats']);
 const SAFE_MODES = new Set(['plan', 'edit', 'guarded']);       // never yolo / build from a phone
 const DECISIONS = new Set(['allow', 'deny']);   // a phone may only allow or deny; never modify, escalate or add rules
+// session/delete and session/rename are the only phone methods that become agent commands: the relay builds the whole
+// v4/command envelope itself, so a phone can never send v4/command or inject fields into it.
+const COMMANDS = {
+  'session/delete': { verb: 'delete', type: 'deleteSession', payload: () => ({}) },
+  'session/rename': { verb: 'rename', type: 'renameSession', payload: p => ({ title: p.title.trim() }) },
+};
 
 export function checkPolicy(method, params) {
   if (!ALLOWED.has(method)) return `method not allowed: ${method}`;
   const mode = method === 'session/create' ? params?.mode : method === 'session/setMode' ? (params?.mode ?? params?.current) : undefined;
   if (method === 'session/create' && mode === undefined) return 'mode required (plan|edit|guarded)';
   if (mode !== undefined && !SAFE_MODES.has(mode)) return `mode not allowed from mobile: ${mode}`;
+  if (method === 'session/delete' || method === 'session/rename') {
+    const id = params?.sessionId;
+    if (typeof id !== 'string' || !id.startsWith('sess_') || id.length > 100) return 'sessionId must be a sess_ id of at most 100 characters';
+  }
+  if (method === 'session/rename') {
+    const title = typeof params?.title === 'string' ? params.title.trim() : '';
+    if (!title || title.length > 120) return 'title must trim to 1-120 characters';
+  }
+  if (method === 'usage/stats' && !['all', '7d', '30d'].includes(params?.range)) return "range must be 'all', '7d' or '30d'";
   return null;
 }
 
@@ -218,6 +233,13 @@ export function createRelay(opts = {}) {
           const u = (m.server && upstream.get(m.server)) || [...upstream.values()].find(x => x.meta.cwd === m.params?.workspace?.workspacePath) || [...upstream.values()][0];
           if (!u) return send(c, { type: 'rpc-result', id: m.id, error: { code: -32002, message: 'no ZCode server (is Zode.app running?)' } });
           const id = ++relayId; routes.set(id, { client: c, clientId: m.id, pid: u.meta.pid, method: m.method });
+          const cmd = COMMANDS[m.method];
+          if (cmd) {                                                      // delete/rename go out as the agent's one command shape
+            log.log(`${cmd.verb} ${c.device.id} ${m.params.sessionId}`);
+            u.sock.write(JSON.stringify({ id, method: 'v4/command',
+              params: { commandId: crypto.randomUUID(), clientId: 'zode-relay', sessionId: m.params.sessionId, type: cmd.type, payload: cmd.payload(m.params), issuedAt: Date.now() } }) + '\n');
+            return;
+          }
           log.log(`rpc ${c.device.id} ${m.method} -> ${u.meta.pid}`);
           u.sock.write(JSON.stringify({ id, method: m.method, params: m.params }) + '\n');
         }
