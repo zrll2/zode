@@ -1,11 +1,4 @@
-import {
-  addArchived,
-  archiveKey,
-  deleteSession,
-  isArchived,
-  removeArchived,
-} from "../src/sessionActions";
-import { buildSessionDeleteParams } from "../src/relay/params";
+import { addArchived, archiveKey, isArchived, removeArchived } from "../src/sessionActions";
 
 describe("archiveKey", () => {
   it("takes the 8 characters after sess_", () => {
@@ -42,47 +35,5 @@ describe("archived id lists", () => {
     const list = addArchived(addArchived([], "sess_aaaa1111"), "sess_bbbb2222");
     expect(removeArchived(list, "sess_aaaa1111")).toEqual(["bbbb2222"]);
     expect(removeArchived(list, "sess_nope0000")).toEqual(["bbbb2222", "aaaa1111"]);
-  });
-});
-
-describe("buildSessionDeleteParams", () => {
-  it("carries the session id", () => {
-    expect(buildSessionDeleteParams("sess_1")).toEqual({ sessionId: "sess_1" });
-  });
-});
-
-describe("deleteSession", () => {
-  function fakeClient(result: unknown) {
-    return {
-      rpc: jest.fn().mockReturnValue(Promise.resolve(result)),
-      status: "ready" as const,
-    };
-  }
-
-  it("resolves when the server accepts", async () => {
-    const client = fakeClient({ commandId: "cmd_1", status: "accepted" });
-    await expect(deleteSession(client as any, "sess_1")).resolves.toBeUndefined();
-    expect(client.rpc).toHaveBeenCalledWith("session/delete", { sessionId: "sess_1" });
-  });
-
-  it("rejects with a readable message on a rejected result", async () => {
-    const client = fakeClient({ status: "rejected", reasonCode: "proto.sessionNotFound" });
-    await expect(deleteSession(client as any, "sess_1")).rejects.toThrow(
-      "no longer exists",
-    );
-  });
-
-  it("rejects on any non-accepted status", async () => {
-    const client = fakeClient({ status: "rejected", reasonCode: "proto.busy" });
-    await expect(deleteSession(client as any, "sess_1")).rejects.toThrow(
-      "(proto.busy)",
-    );
-  });
-
-  it("propagates rpc errors", async () => {
-    const client = {
-      rpc: jest.fn().mockReturnValue(Promise.reject(new Error("relay offline"))),
-    };
-    await expect(deleteSession(client as any, "sess_1")).rejects.toThrow("relay offline");
   });
 });

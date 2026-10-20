@@ -5,6 +5,7 @@ import * as Haptics from "expo-haptics";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { radius, useTheme } from "../theme";
 import { PressScale } from "./PressScale";
+import { Text } from "./Text";
 
 interface ComposerProps {
   value: string;
@@ -12,27 +13,35 @@ interface ComposerProps {
   onSend: () => void;
   onStop: () => void;
   running: boolean;
-  sending?: boolean;
+  // chat computes it: text or ready attachments present, not mid-send
+  canSend: boolean;
+  sendDisabled?: boolean;
   autoFocus?: boolean;
   placeholder?: string;
+  onAddPress?: () => void;
+  modeLabel?: string | null;
+  onPermissionPress?: () => void;
 }
 
-// Sticky composer: surface field, radius 26, grows to 6 lines. The send
-// circle is accent with an arrow-up; while running it becomes a `text`
-// circle with a square (stop). Light haptic on send.
+// Sticky composer: "+" (attachments), permission pill, surface field with a
+// 36 px accent send circle (stop while running). Light haptic on send.
 export function Composer({
   value,
   onChangeText,
   onSend,
   onStop,
   running,
-  sending,
+  canSend,
+  sendDisabled = false,
   autoFocus,
   placeholder = "Message ZCode",
+  onAddPress,
+  modeLabel,
+  onPermissionPress,
 }: ComposerProps) {
   const t = useTheme();
   const insets = useSafeAreaInsets();
-  const canSend = value.trim().length > 0 && !sending;
+  const sendActive = running || (canSend && !sendDisabled);
   return (
     <View
       style={[
@@ -40,6 +49,37 @@ export function Composer({
         { backgroundColor: t.colors.bg, borderTopColor: t.colors.border, paddingBottom: insets.bottom + 8 },
       ]}
     >
+      <View style={styles.controls}>
+        {onAddPress ? (
+          <PressScale
+            onPress={onAddPress}
+            accessibilityRole="button"
+            accessibilityLabel="Add attachment"
+            style={[styles.roundButton, { backgroundColor: t.colors.muted }]}
+          >
+            <Feather name="plus" size={18} color={t.colors.text} />
+          </PressScale>
+        ) : undefined}
+        {modeLabel && onPermissionPress ? (
+          <PressScale
+            onPress={onPermissionPress}
+            accessibilityRole="button"
+            accessibilityLabel={`Permission: ${modeLabel}`}
+            style={[styles.modePill, { backgroundColor: t.colors.muted }]}
+          >
+            <Text
+              numberOfLines={1}
+              style={{
+                color: modeLabel === "Full access" ? t.colors.warn : t.colors.subtext,
+                fontWeight: "600",
+                fontSize: 12,
+              }}
+            >
+              {modeLabel}
+            </Text>
+          </PressScale>
+        ) : undefined}
+      </View>
       <View style={[styles.field, { backgroundColor: t.colors.surface, borderColor: t.colors.border }]}>
         <TextInput
           style={[styles.input, { color: t.colors.text }]}
@@ -56,18 +96,18 @@ export function Composer({
               onStop();
               return;
             }
-            if (!canSend) return;
+            if (!canSend || sendDisabled) return;
             void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
             onSend();
           }}
-          disabled={!running && !canSend}
+          disabled={!running && (!canSend || sendDisabled)}
           accessibilityRole="button"
           accessibilityLabel={running ? "Stop" : "Send message"}
           style={[
             styles.action,
             {
               backgroundColor: t.colors.accent,
-              opacity: !running && !canSend ? 0.4 : 1,
+              opacity: !running && (!canSend || sendDisabled) ? 0.4 : 1,
             },
           ]}
         >
@@ -83,6 +123,28 @@ const styles = StyleSheet.create({
     borderTopWidth: StyleSheet.hairlineWidth,
     paddingTop: 8,
     paddingHorizontal: 20,
+  },
+  controls: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 6,
+    minHeight: 28,
+  },
+  roundButton: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  modePill: {
+    minHeight: 28,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    maxWidth: 110,
   },
   field: {
     flexDirection: "row",

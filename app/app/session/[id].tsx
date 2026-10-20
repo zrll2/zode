@@ -1,7 +1,9 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ActionSheetIOS,
   Alert,
   FlatList,
+  Image,
   KeyboardAvoidingView,
   LayoutAnimation,
   Platform,
@@ -13,10 +15,14 @@ import {
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
+import * as ImagePicker from "expo-image-picker";
+import * as DocumentPicker from "expo-document-picker";
+import { File } from "expo-file-system";
 import { useRelay, useSessionEvents } from "../../src/useRelay";
 import { useTheme } from "../../src/theme";
 import type { ChatItem } from "../../src/relay/reducer";
 import {
+  buildAttachmentUploadParams,
   buildSessionSendParams,
   buildSessionSubscribeParams,
   buildSessionUsageParams,
@@ -25,30 +31,34 @@ import {
 import { retryInSeconds } from "../../src/relay/backoff";
 import {
   buildRenameParams,
+  buildSetModeParams,
   buildSetModelParams,
   buildSetThoughtLevelParams,
   emptyChatSettings,
   parseChatSettings,
+  permissionLabel,
   type ChatSettings,
   type ModelOption,
 } from "../../src/chatSettings";
 import {
   addArchived,
-  deleteSession,
   isArchived,
   removeArchived,
 } from "../../src/sessionActions";
 import { loadPrefs, savePrefs } from "../../src/storage";
+import { canAttach, describeAttachment, formatBytes, guessMime, MAX_ATTACHMENTS } from "../../src/attachments";
 import {
   isSystemLikeUserText,
   mergeHistoryWithLive,
   messagesToItems,
 } from "../../src/history";
 import { useScrollPin } from "../../src/scrollPin";
+import { AttachmentTray, type TrayAttachment } from "../../src/ui/AttachmentTray";
 import { Composer } from "../../src/ui/Composer";
 import { Dot, useReduceMotion } from "../../src/ui/Dot";
 import { Markdown } from "../../src/ui/Markdown";
 import { ModelSheet } from "../../src/ui/ModelSheet";
+import { PermissionSheet, type PhoneMode } from "../../src/ui/PermissionSheet";
 import { Pill } from "../../src/ui/Pill";
 import { RenameModal } from "../../src/ui/RenameModal";
 import { Skeleton } from "../../src/ui/Skeleton";
@@ -131,6 +141,10 @@ export default function SessionScreen() {
   const [renameVisible, setRenameVisible] = useState(false);
   const [modelSheetVisible, setModelSheetVisible] = useState(false);
   const [usageSheetVisible, setUsageSheetVisible] = useState(false);
+  const [permissionVisible, setPermissionVisible] = useState(false);
+  const [attachments, setAttachments] = useState<TrayAttachment[]>([]);
+  const [optimisticItems, setOptimisticItems] = useState<ChatItem[]>([]);
+  const attachmentKey = useRef(0);
   const [chatSettings, setChatSettings] = useState<ChatSettings>(() => emptyChatSettings());
 
   useEffect(() => {
@@ -182,7 +196,8 @@ export default function SessionScreen() {
     if (sessionId && status === "ready") void bootstrap();
   }, [sessionId, status, bootstrap]);
 
-  const items = mergeHistoryWithLive(historyItems, session.items);
+  const liveItems = mergeHistoryWithLive(historyItems, session.items);
+  const items = useMemo(() => [...liveItems, ...optimisticItems], [liveItems, optimisticItems]);
 
   // Elapsed time for the "Working..." indicator.
   const [elapsed, setElapsed] = useState<number | null>(null);
@@ -205,8 +220,188 @@ export default function SessionScreen() {
     } catch {}
   }, [rpc, sessionId]);
 
-  // Archive is local to this phone; delete removes it on the Mac. Both
-  // return to the home screen on success.
+  // ---- attachments (order 17e) ----
+  function patchAttachment(key: string, patch: Partial<TrayAttachment>) {
+    setAttachments((current) =>
+      current.map((entry) => (entry.key === key ? { ...entry, ...patch } : entry)),
+    );
+  }
+
+  async function uploadAttachment(item: TrayAttachment) {
+    if (!client) {
+      patchAttachment(item.key, { state: "failed" });
+      return;
+    }
+    patchAttachment(item.key, { state: "uploading" });
+    try {
+      const result = await client.rpc(
+        "attachment/upload",
+        buildAttachmentUploadParams({
+          sessionId,
+          fileName: item.fileName,
+          mime: item.mime,
+          dataBase64: item.dataBase64 ?? "",
+        }),
+        undefined,
+        90_000,
+      );
+      const data = (result ?? {}) as Record<string, unknown>;
+      if (typeof data.ref !== "string" || !data.ref) throw new Error("upload failed");
+      patchAttachment(item.key, {
+        state: "ready",
+        ref: data.ref,
+        bytes: typeof data.bytes === "number" ? data.bytes : item.sizeBytes,
+      });
+    } catch {
+      patchAttachment(item.key, { state: "failed" });
+    }
+  }
+
+  interface PickedAttachment {
+    fileName: string;
+    mime: string;
+    sizeBytes: number;
+    localUri?: string;
+    dataBase64?: string;
+  }
+
+  function addPicked(picked: PickedAttachment[]) {
+    const next: TrayAttachment[] = [];
+    let count = attachments.length;
+    for (const item of picked) {
+      if (count >= MAX_ATTACHMENTS) {
+        Alert.alert("Limit reached", "At most 6 attachments per message.", [{ text: "OK" }]);
+        break;
+      }
+      if (!canAttach(count, item.sizeBytes)) {
+        Alert.alert(item.fileName, "is larger than 8 MB", [{ text: "OK" }]);
+        continue;
+      }
+      count += 1;
+      attachmentKey.current += 1;
+      next.push({
+        key: `att-${attachmentKey.current}`,
+        fileName: item.fileName,
+        mime: item.mime,
+        sizeBytes: item.sizeBytes,
+        localUri: item.localUri,
+        dataBase64: item.dataBase64,
+        isImage: item.mime.startsWith("image/"),
+        state: "uploading",
+      });
+    }
+    if (next.length === 0) return;
+    setAttachments((current) => [...current, ...next]);
+    for (const item of next) void uploadAttachment(item);
+  }
+
+  async function pickFromLibrary() {
+    const remaining = MAX_ATTACHMENTS - attachments.length;
+    if (remaining <= 0) {
+      Alert.alert("Limit reached", "At most 6 attachments per message.", [{ text: "OK" }]);
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      allowsMultipleSelection: true,
+      selectionLimit: remaining,
+      quality: 0.7,
+      base64: true,
+    });
+    if (result.canceled) return;
+    addPicked(
+      result.assets.map((asset) => ({
+        fileName: asset.fileName ?? `photo-${Date.now()}.jpg`,
+        mime: asset.mimeType ?? guessMime(asset.fileName ?? "photo.jpg"),
+        sizeBytes: asset.fileSize ?? Math.round((asset.base64?.length ?? 0) * 0.75),
+        localUri: asset.uri,
+        dataBase64: asset.base64 ?? "",
+      })),
+    );
+  }
+
+  async function pickFromCamera() {
+    const permission = await ImagePicker.requestCameraPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert("Camera unavailable", "Camera permission was denied.", [{ text: "OK" }]);
+      return;
+    }
+    const result = await ImagePicker.launchCameraAsync({ quality: 0.7, base64: true });
+    if (result.canceled) return;
+    const asset = result.assets[0];
+    if (!asset) return;
+    addPicked([
+      {
+        fileName: asset.fileName ?? `photo-${Date.now()}.jpg`,
+        mime: asset.mimeType ?? guessMime(asset.fileName ?? "photo.jpg"),
+        sizeBytes: asset.fileSize ?? Math.round((asset.base64?.length ?? 0) * 0.75),
+        localUri: asset.uri,
+        dataBase64: asset.base64 ?? "",
+      },
+    ]);
+  }
+
+  async function pickFiles() {
+    const result = await DocumentPicker.getDocumentAsync({
+      type: "*/*",
+      multiple: true,
+      copyToCacheDirectory: true,
+    });
+    if (result.canceled) return;
+    const picked: PickedAttachment[] = [];
+    for (const asset of result.assets) {
+      // relay rejects mimes without a type/subtype shape
+      const mime =
+        typeof asset.mimeType === "string" && asset.mimeType.includes("/")
+          ? asset.mimeType
+          : guessMime(asset.name);
+      const file = new File(asset.uri);
+      const dataBase64 = await file.base64();
+      picked.push({
+        fileName: asset.name,
+        mime,
+        sizeBytes: asset.size ?? Math.round((dataBase64.length * 3) / 4),
+        dataBase64,
+      });
+    }
+    addPicked(picked);
+  }
+
+  function showAddSheet() {
+    const options = [
+      { key: "library", label: "Photo library" },
+      { key: "camera", label: "Take photo" },
+      { key: "files", label: "Files" },
+      { key: "cancel", label: "Cancel" },
+    ];
+    const run = (key: string | undefined) => {
+      if (key === "library") void pickFromLibrary();
+      if (key === "camera") void pickFromCamera();
+      if (key === "files") void pickFiles();
+    };
+    if (Platform.OS === "ios") {
+      ActionSheetIOS.showActionSheetWithOptions(
+        {
+          options: options.map((option) => option.label),
+          cancelButtonIndex: 3,
+        },
+        (index: number) => run(options[index]?.key),
+      );
+    } else {
+      Alert.alert(
+        "Add attachment",
+        undefined,
+        options.map((option) => ({
+          text: option.label,
+          style: option.key === "cancel" ? ("cancel" as const) : ("default" as const),
+          onPress: () => run(option.key),
+        })),
+      );
+    }
+  }
+
+  // Archive is local to this phone. Deleting conversations from the phone is
+  // not supported (order 17e).
   const toggleArchive = useCallback(async () => {
     const prefs = await loadPrefs();
     const archivedIds = archived
@@ -277,6 +472,21 @@ export default function SessionScreen() {
     [chatSettings.thoughtLevel, client, sessionId],
   );
 
+  const applyMode = useCallback(
+    async (mode: PhoneMode) => {
+      setPermissionVisible(false);
+      if (!client) return;
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      try {
+        await client.rpc("session/setMode", buildSetModeParams(sessionId, mode));
+        setChatSettings((current) => ({ ...current, mode }));
+      } catch (e: unknown) {
+        Alert.alert("Could not change the permission level", shortError(e), [{ text: "OK" }]);
+      }
+    },
+    [client, sessionId],
+  );
+
   const fetchSessionUsage = useCallback(
     () => rpc("session/usage", buildSessionUsageParams(sessionId)),
     [rpc, sessionId],
@@ -287,43 +497,60 @@ export default function SessionScreen() {
     [rpc],
   );
 
-  const deleteConversation = useCallback(async () => {
-    if (session.running) {
-      Alert.alert("Stop it first", undefined, [{ text: "OK" }]);
-      return;
-    }
-    if (!client) {
-      Alert.alert("Could not delete", "Not connected.", [{ text: "OK" }]);
-      return;
-    }
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    try {
-      await deleteSession(client, sessionId);
-      const prefs = await loadPrefs();
-      await savePrefs({
-        ...prefs,
-        archivedIds: removeArchived(prefs.archivedIds, sessionId),
-      });
-      router.back();
-    } catch (e: unknown) {
-      Alert.alert("Could not delete", shortError(e), [{ text: "OK" }]);
-    }
-  }, [client, sessionId, session.running, router]);
-
   const send = useCallback(async () => {
-    const text = draft.trim();
+    const ready = attachments.filter((item) => item.state === "ready" && item.ref);
+    const text = draft.trim() || (ready.length > 0 ? "See attached." : "");
     if (!text || sending || !sessionId) return;
+    if (attachments.some((item) => item.state !== "ready")) return;
     setSending(true);
     setSendError(null);
     setDraft("");
+    attachmentKey.current += 1;
+    const optimisticKey = `optimistic-${attachmentKey.current}`;
+    const optimistic: ChatItem = {
+      key: optimisticKey,
+      kind: "user",
+      text,
+      attachments: ready.map((item) => ({
+        label: item.fileName,
+        image: item.isImage,
+        sizeBytes: item.sizeBytes,
+        localUri: item.localUri,
+      })),
+    };
+    setOptimisticItems((current) => [...current, optimistic]);
     try {
-      await rpc("session/send", buildSessionSendParams(sessionId, text));
+      const sent = ready.map((item) => ({
+        ref: item.ref as string,
+        fileName: item.fileName,
+        mime: item.mime,
+        bytes: item.bytes ?? item.sizeBytes,
+      }));
+      await rpc(
+        "session/send",
+        buildSessionSendParams(sessionId, text, sent.length > 0 ? sent : undefined),
+      );
+      // accepted: clear the tray (the optimistic bubble keeps the chips)
+      setAttachments([]);
     } catch (e: unknown) {
+      setOptimisticItems((current) => current.filter((item) => item.key !== optimisticKey));
+      setDraft((current) => (current ? current : text));
       setSendError(shortError(e));
     } finally {
       setSending(false);
     }
-  }, [draft, sending, sessionId, rpc]);
+  }, [attachments, draft, sending, sessionId, rpc]);
+
+  // Once the live stream echoes the user text, drop the local optimistic copy.
+  useEffect(() => {
+    if (optimisticItems.length === 0) return;
+    const texts = new Set(optimisticItems.map((item) => item.text));
+    if (session.items.some((item) => item.kind === "user" && texts.has(item.text))) {
+      setOptimisticItems((current) =>
+        current.filter((item) => !texts.has(item.text)),
+      );
+    }
+  }, [session.items, optimisticItems]);
 
   const currentTitle = renamedTitle ?? session.title ?? routeTitle ?? "";
 
@@ -348,15 +575,10 @@ export default function SessionScreen() {
           text: archived ? "Unarchive" : "Archive",
           onPress: () => void toggleArchive(),
         },
-        {
-          text: "Delete conversation",
-          style: "destructive" as const,
-          onPress: () => void deleteConversation(),
-        },
         { text: "Cancel", style: "cancel" as const },
       ],
     );
-  }, [session.running, archived, toggleArchive, deleteConversation, stop]);
+  }, [session.running, archived, toggleArchive, stop]);
 
   const headerRight = useCallback(
     () => (
@@ -501,6 +723,18 @@ export default function SessionScreen() {
         </Text>
       ) : undefined}
 
+      {attachments.length > 0 ? (
+        <AttachmentTray
+          items={attachments}
+          onRemove={(key) =>
+            setAttachments((current) => current.filter((item) => item.key !== key))
+          }
+          onRetry={(key) => {
+            const item = attachments.find((entry) => entry.key === key);
+            if (item) void uploadAttachment(item);
+          }}
+        />
+      ) : undefined}
       <View>
         {showJump && items.length > 0 ? (
           <Pressable
@@ -518,8 +752,16 @@ export default function SessionScreen() {
           onSend={() => void send()}
           onStop={() => void stop()}
           running={session.running}
-          sending={sending}
+          canSend={
+            (draft.trim().length > 0 ||
+              attachments.some((item) => item.state === "ready" && item.ref)) &&
+            !sending
+          }
+          sendDisabled={attachments.some((item) => item.state !== "ready")}
           autoFocus={autoFocusComposer}
+          onAddPress={showAddSheet}
+          modeLabel={chatSettings.mode ? permissionLabel(chatSettings.mode) : null}
+          onPermissionPress={() => setPermissionVisible(true)}
         />
       </View>
 
@@ -550,6 +792,13 @@ export default function SessionScreen() {
         fetchSessionUsage={fetchSessionUsage}
         fetchAccountUsage={fetchAccountUsage}
       />
+      <PermissionSheet
+        visible={permissionVisible}
+        onClose={() => setPermissionVisible(false)}
+        running={session.running}
+        mode={chatSettings.mode}
+        onPick={(mode: PhoneMode) => void applyMode(mode)}
+      />
     </KeyboardAvoidingView>
   );
 }
@@ -561,7 +810,7 @@ const ChatRow = React.memo(function ChatRow({ item }: { item: ChatItem }) {
     return isSystemLikeUserText(item.text) ? (
       <SystemRow text={item.text} />
     ) : (
-      <UserBubble text={item.text} />
+      <UserBubble item={item} />
     );
   }
   if (item.kind === "assistant") return <AssistantBlock item={item} />;
@@ -583,13 +832,50 @@ const ChatRow = React.memo(function ChatRow({ item }: { item: ChatItem }) {
   );
 });
 
-const UserBubble = React.memo(function UserBubble({ text }: { text: string }) {
+const UserBubble = React.memo(function UserBubble({ item }: { item: ChatItem }) {
   const t = useTheme();
   return (
     <View style={styles.userRow}>
       <View style={[styles.bubble, { backgroundColor: t.colors.muted }]}>
+        {item.attachments && item.attachments.length > 0 ? (
+          <View style={styles.attachmentRow}>
+            {item.attachments.map((attachment, index) => (
+              <View
+                key={`${item.key}-${index}`}
+                style={[styles.attachmentChip, { backgroundColor: t.colors.surface }]}
+              >
+                {attachment.localUri ? (
+                  <Image
+                    source={{ uri: attachment.localUri }}
+                    style={styles.attachmentThumb}
+                  />
+                ) : (
+                  <Feather
+                    name={attachment.image ? "image" : "file-text"}
+                    size={14}
+                    color={t.colors.subtext}
+                  />
+                )}
+                <Text
+                  numberOfLines={1}
+                  style={[styles.attachmentLabel, { color: t.colors.subtext }]}
+                >
+                  {attachment.image
+                    ? formatBytes(attachment.sizeBytes)
+                    : attachment.label}
+                </Text>
+                <Text
+                  numberOfLines={1}
+                  style={[styles.attachmentLabel, { color: t.colors.subtext }]}
+                >
+                  {formatBytes(attachment.sizeBytes)}
+                </Text>
+              </View>
+            ))}
+          </View>
+        ) : undefined}
         <Text variant="body" selectable>
-          {text}
+          {item.text}
         </Text>
       </View>
     </View>
@@ -753,6 +1039,16 @@ const styles = StyleSheet.create({
     maxWidth: "85%",
     marginVertical: 4,
   },
+  attachmentRow: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 6 },
+  attachmentChip: {
+    width: 64,
+    borderRadius: 10,
+    padding: 6,
+    alignItems: "center",
+    gap: 3,
+  },
+  attachmentThumb: { width: 50, height: 38, borderRadius: 6 },
+  attachmentLabel: { fontSize: 8.5, lineHeight: 10 },
   systemRow: { borderRadius: 12, padding: 10, marginVertical: 4, gap: 2 },
   assistant: { marginVertical: 4 },
   reasoning: { marginVertical: 4 },

@@ -21,7 +21,12 @@ export interface RelayClientLike {
   retryAt: number | null;
   retryNow(): void;
   connect(): Promise<void>;
-  rpc<T = unknown>(method: string, params?: unknown, server?: string | number): Promise<T>;
+  rpc<T = unknown>(
+    method: string,
+    params?: unknown,
+    server?: string | number,
+    timeoutMs?: number,
+  ): Promise<T>;
   onEvent(cb: (msg: RelayMessage, seq: number) => void): () => void;
   onStatus(cb: (status: RelayStatus) => void): () => void;
   close(): void;
@@ -57,6 +62,7 @@ export class DemoClient implements RelayClientLike {
   private seq = 0;
   private demoModelId = "GLM-5.3-Flash";
   private demoLevel = "max";
+  private demoMode = "edit";
 
   connect(): Promise<void> {
     this.status = "connecting";
@@ -134,10 +140,22 @@ export class DemoClient implements RelayClientLike {
         this.stopTurn(String(request.sessionId ?? ""));
         return Promise.resolve({} as T);
       }
-      case "session/delete": {
-        const id = String(request.sessionId ?? "");
-        this.sessions = this.sessions.filter((session) => session.sessionId !== id);
-        return Promise.resolve({ commandId: "demo", status: "accepted" } as T);
+      case "attachment/upload": {
+        this.seq += 1;
+        const bytes = Math.round(String(request.dataBase64 ?? "").length * 0.75);
+        return Promise.resolve({
+          ref: `demo-att-${this.seq}`,
+          fileName: String(request.fileName ?? "file"),
+          mime: String(request.mime ?? "application/octet-stream"),
+          bytes,
+        } as T);
+      }
+      case "session/setMode": {
+        const mode = String(request.mode ?? "");
+        if (["plan", "edit", "guarded", "build", "yolo", "auto"].includes(mode)) {
+          this.demoMode = mode;
+        }
+        return Promise.resolve({ status: "accepted" } as T);
       }
       default:
         return Promise.resolve({} as T);
@@ -182,6 +200,7 @@ export class DemoClient implements RelayClientLike {
     ];
     return {
       settings: {
+        mode: { current: this.demoMode },
         model: {
           current: {
             providerId,
@@ -219,6 +238,7 @@ export class DemoClient implements RelayClientLike {
         totalTokenCount: 465_541,
         turnCount: 6,
         status: "idle",
+        mode: this.demoMode,
       },
     };
   }

@@ -2,6 +2,14 @@ import type { RelayMessage } from "./protocol";
 
 export type ChatItemKind = "user" | "assistant" | "reasoning" | "tool" | "error" | "notice";
 
+export interface ChatItemAttachment {
+  label: string;
+  image: boolean;
+  sizeBytes: number;
+  // local preview uri for optimistic bubbles; history chips have none
+  localUri?: string;
+}
+
 export interface ChatItem {
   key: string;
   kind: ChatItemKind;
@@ -11,6 +19,7 @@ export interface ChatItem {
   toolName?: string;
   toolState?: string;
   timestamp?: number;
+  attachments?: ChatItemAttachment[];
 }
 
 export interface PermissionRequest {

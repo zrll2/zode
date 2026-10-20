@@ -1,4 +1,5 @@
-import type { ChatItem } from "./relay/reducer";
+import { describeAttachment } from "./attachments";
+import type { ChatItem, ChatItemAttachment } from "./relay/reducer";
 
 // Verified session/messages shape: result.messages[], each
 // {info:{id, role, time}, parts:[{type:"text"|"reasoning"|"tool"|...}]}.
@@ -17,16 +18,28 @@ export function messagesToItems(result: unknown): ChatItem[] {
     const role = typeof message?.info?.role === "string" ? message.info.role : "";
     const id = typeof message?.info?.id === "string" ? message.info.id : `m${messageIdx}`;
     const parts = Array.isArray(message?.parts) ? message.parts : [];
+    // user file parts become chips on the user items (no separate rows)
+    const userFiles: ChatItemAttachment[] =
+      role === "user"
+        ? parts
+            .filter((part: any) => part?.type === "file")
+            .map((part: any) => describeAttachment(part))
+        : [];
     parts.forEach((part: any, partIdx: number) => {
       const type = typeof part?.type === "string" ? part.type : "";
       if (type === "text") {
         const text = typeof part.text === "string" ? part.text : "";
         if (!text.trim()) return;
-        items.push({
-          key: `h-${id}-${partIdx}`,
-          kind: role === "user" ? "user" : "assistant",
-          text,
-        });
+        if (role === "user") {
+          items.push({
+            key: `h-${id}-${partIdx}`,
+            kind: "user",
+            text,
+            attachments: userFiles.length > 0 ? userFiles : undefined,
+          } as ChatItem);
+        } else {
+          items.push({ key: `h-${id}-${partIdx}`, kind: "assistant", text });
+        }
       } else if (type === "reasoning") {
         const text = typeof part.text === "string" ? part.text : "";
         if (!text.trim()) return;

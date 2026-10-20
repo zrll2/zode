@@ -23,12 +23,7 @@ import { buildUsageStatsParams } from "../src/relay/params";
 import { PRIVACY_URL, SUPPORT_URL } from "../src/config";
 import { buildHomeSections } from "../src/sessionGroups";
 import { projectName, statusInfo } from "../src/sessionStatus";
-import {
-  addArchived,
-  deleteSession,
-  isArchived,
-  removeArchived,
-} from "../src/sessionActions";
+import { addArchived, isArchived, removeArchived } from "../src/sessionActions";
 import { loadPrefs, savePrefs, type Prefs } from "../src/storage";
 import { parseSessionList, timeAgo, type SessionRow } from "../src/util";
 import type { RelayStatus } from "../src/relay/client";
@@ -90,7 +85,6 @@ export default function SessionsScreen() {
   const {
     status,
     authFailed,
-    client,
     rpc,
     unpair,
     demo,
@@ -287,7 +281,7 @@ export default function SessionsScreen() {
     status === "ready" ? t.colors.ok : status === "closed" ? t.colors.subtext : t.colors.warn;
   const showLine = status !== "ready" || showStatusLine;
 
-  // Archive is local to this phone; delete removes it on the Mac.
+  // Archive is local to this phone (order 17e: no delete from the phone).
   const toggleArchive = useCallback(
     (session: SessionRow) => {
       updatePrefs({
@@ -299,70 +293,22 @@ export default function SessionsScreen() {
     [prefs.archivedIds, updatePrefs],
   );
 
-  const requestDelete = useCallback(
-    (session: SessionRow) => {
-      if (session.status === "running") {
-        Alert.alert("Stop it first", undefined, [{ text: "OK" }]);
-        return;
-      }
-      if (!client) {
-        Alert.alert("Could not delete", "Not connected.", [{ text: "OK" }]);
-        return;
-      }
-      Alert.alert(
-        "Delete this conversation?",
-        "It is removed from ZCode on your Mac. This cannot be undone.",
-        [
-          { text: "Cancel", style: "cancel" },
-          {
-            text: "Delete",
-            style: "destructive",
-            onPress: () => {
-              void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              void (async () => {
-                try {
-                  await deleteSession(client, session.id);
-                  // Drop it from the list at once; also forget an archive.
-                  setSessions((current) =>
-                    current.filter((entry) => entry.id !== session.id),
-                  );
-                  setPrefs((current) => ({
-                    ...current,
-                    archivedIds: removeArchived(current.archivedIds, session.id),
-                  }));
-                } catch (e: any) {
-                  Alert.alert("Could not delete", e?.message ?? "Delete failed.", [
-                    { text: "OK" },
-                  ]);
-                }
-              })();
-            },
-          },
-        ],
-      );
-    },
-    [client],
-  );
-
   const showCardActions = useCallback(
     (session: SessionRow) => {
       const archived = isArchived(prefs.archivedIds, session.id);
       const items = [
         { key: "archive", label: archived ? "Unarchive" : "Archive" },
-        { key: "delete", label: "Delete", destructive: true },
         { key: "cancel", label: "Cancel" },
       ];
       const runItem = (item: { key: string } | undefined) => {
         if (!item) return;
         if (item.key === "archive") toggleArchive(session);
-        if (item.key === "delete") requestDelete(session);
       };
       if (Platform.OS === "ios") {
         ActionSheetIOS.showActionSheetWithOptions(
           {
             options: items.map((item) => item.label),
-            destructiveButtonIndex: 1,
-            cancelButtonIndex: 2,
+            cancelButtonIndex: 1,
           },
           (index) => runItem(items[index]),
         );
@@ -372,13 +318,13 @@ export default function SessionsScreen() {
           undefined,
           items.map((item) => ({
             text: item.label,
-            style: item.key === "cancel" ? ("cancel" as const) : item.destructive ? ("destructive" as const) : ("default" as const),
+            style: item.key === "cancel" ? ("cancel" as const) : ("default" as const),
             onPress: () => runItem(item),
           })),
         );
       }
     },
-    [prefs.archivedIds, toggleArchive, requestDelete],
+    [prefs.archivedIds, toggleArchive],
   );
 
   const renderItem = useCallback(
@@ -400,11 +346,9 @@ export default function SessionsScreen() {
           onLongPress={() => showCardActions(item)}
           accessibilityActions={[
             { name: "archive", label: archived ? "Unarchive" : "Archive" },
-            { name: "delete", label: "Delete" },
           ]}
           onAccessibilityAction={(event) => {
             if (event.nativeEvent.actionName === "archive") toggleArchive(item);
-            if (event.nativeEvent.actionName === "delete") requestDelete(item);
           }}
           accessibilityLabel={`${projectName(item.folder)}, ${info.word}, ${timeAgo(
             item.updatedAt,
@@ -412,7 +356,7 @@ export default function SessionsScreen() {
         />
       );
     },
-    [router, prefs.archivedIds, toggleArchive, requestDelete, showCardActions],
+    [router, prefs.archivedIds, toggleArchive, showCardActions],
   );
 
   return (

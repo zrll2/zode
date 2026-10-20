@@ -19,7 +19,8 @@
           "NSAllowsLocalNetworking": true
         },
         "NSLocalNetworkUsageDescription": "Zode connects to the relay that runs on your Mac, over your local or private network.",
-        "NSCameraUsageDescription": "Zode scans the pairing QR code shown by the relay on your Mac."
+        "NSCameraUsageDescription": "Zode scans the pairing QR code shown by the Mac, and lets you attach photos you take to a message.",
+        "NSPhotoLibraryUsageDescription": "Zode lets you attach photos from your library to a message for ZCode."
       },
       "privacyManifests": {
         "NSPrivacyAccessedAPITypes": [
@@ -72,11 +73,20 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "Zode scans the pairing QR code shown by the relay on your Mac.",
+          "cameraPermission": "Zode scans the pairing QR code shown by the Mac, and lets you attach photos you take to a message.",
           "microphonePermission": false,
           "recordAudioAndroid": false
         }
       ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Zode lets you attach photos from your library to a message for ZCode.",
+          "cameraPermission": "Zode scans the pairing QR code shown by the Mac, and lets you attach photos you take to a message.",
+          "microphonePermission": false
+        }
+      ],
+      "expo-document-picker",
       "expo-secure-store",
       [
         "expo-splash-screen",

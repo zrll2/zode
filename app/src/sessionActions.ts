@@ -1,7 +1,5 @@
-import type { RelayClientLike } from "./demo/DemoClient";
-import { buildSessionDeleteParams } from "./relay/params";
-
-// Local archive helpers + the real remote delete (order 17b).
+// Local archive helpers (order 17b). Deleting conversations from the phone
+// is not supported — the agent has no real delete.
 
 export const ARCHIVE_CAP = 150;
 
@@ -24,25 +22,4 @@ export function removeArchived(list: string[], sessionId: string): string[] {
 
 export function isArchived(list: string[], sessionId: string): boolean {
   return list.includes(archiveKey(sessionId));
-}
-
-// Delete the conversation on the Mac. Only an explicit "accepted" counts as
-// success; everything else becomes a readable error. Rpc errors propagate.
-export async function deleteSession(
-  client: RelayClientLike,
-  sessionId: string,
-): Promise<void> {
-  const result = (await client.rpc(
-    "session/delete",
-    buildSessionDeleteParams(sessionId),
-  )) as { status?: unknown; reasonCode?: unknown } | null;
-  if (!result || result.status !== "accepted") {
-    throw new Error(deleteFailureMessage(result));
-  }
-}
-
-function deleteFailureMessage(result: { status?: unknown; reasonCode?: unknown } | null): string {
-  const reason = typeof result?.reasonCode === "string" ? result.reasonCode : "";
-  if (reason === "proto.sessionNotFound") return "That conversation no longer exists.";
-  return reason ? `The delete was not accepted (${reason}).` : "The delete was not accepted.";
 }

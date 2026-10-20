@@ -24,6 +24,7 @@ export interface ChatSettings {
   thoughtLevel: string | null;
   contextUsed: number | null;
   contextWindow: number | null;
+  mode: string | null;
 }
 
 export function emptyChatSettings(): ChatSettings {
@@ -34,6 +35,7 @@ export function emptyChatSettings(): ChatSettings {
     thoughtLevel: null,
     contextUsed: null,
     contextWindow: null,
+    mode: null,
   };
 }
 
@@ -99,10 +101,50 @@ export function parseChatSettings(resumeResult: unknown): ChatSettings {
       projection && typeof projection.contextWindow === "number"
         ? projection.contextWindow
         : null;
+    // settings.mode.current first, projection.mode as fallback.
+    const mode =
+      settings.mode && typeof settings.mode.current === "string"
+        ? settings.mode.current
+        : projection && typeof projection.mode === "string"
+          ? projection.mode
+          : null;
 
-    return { model, models, thoughtLevels, thoughtLevel, contextUsed, contextWindow };
+    return { model, models, thoughtLevels, thoughtLevel, contextUsed, contextWindow, mode };
   } catch {
     return emptyChatSettings();
+  }
+}
+
+// The phone may only switch between these; build/yolo/auto are read-only
+// states shown as "Full access".
+const PHONE_MODES = ["plan", "edit", "guarded"];
+
+export function isPhoneSelectableMode(mode: string): boolean {
+  return PHONE_MODES.includes(mode);
+}
+
+export function buildSetModeParams(sessionId: string, mode: string) {
+  if (!isPhoneSelectableMode(mode)) {
+    throw new Error(`Mode "${mode}" is not available on the phone.`);
+  }
+  return { sessionId, mode };
+}
+
+// Pill label for the current mode; null when unknown.
+export function permissionLabel(mode: string): string | null {
+  switch (mode) {
+    case "plan":
+      return "Plan";
+    case "edit":
+      return "Edit";
+    case "guarded":
+      return "Guarded";
+    case "build":
+    case "yolo":
+    case "auto":
+      return "Full access";
+    default:
+      return null;
   }
 }
 

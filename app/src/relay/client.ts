@@ -98,7 +98,12 @@ export class RelayClient {
     return this.connectPromise;
   }
 
-  rpc<T = unknown>(method: string, params?: unknown, server?: string | number): Promise<T> {
+  rpc<T = unknown>(
+    method: string,
+    params?: unknown,
+    server?: string | number,
+    timeoutMs?: number,
+  ): Promise<T> {
     const socket = this.socket;
     if (!socket || this.status !== "ready") {
       return Promise.reject(new Error(`relay: not connected (${this.status})`));
@@ -110,7 +115,7 @@ export class RelayClient {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`relay: ${method} timed out`));
-      }, this.rpcTimeoutMs);
+      }, timeoutMs ?? this.rpcTimeoutMs);
       this.pending.set(id, { resolve: resolve as (value: unknown) => void, reject, timer });
       this.send(frame);
     });

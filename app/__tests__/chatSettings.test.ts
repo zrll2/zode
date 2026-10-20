@@ -1,14 +1,18 @@
 import {
   buildRenameParams,
+  buildSetModeParams,
   buildSetModelParams,
   buildSetThoughtLevelParams,
   emptyChatSettings,
+  isPhoneSelectableMode,
   parseChatSettings,
+  permissionLabel,
   type ModelOption,
 } from "../src/chatSettings";
 
 const RESUME = {
   settings: {
+    mode: { current: "edit" },
     model: {
       current: {
         providerId: "account:zai-individual-coding-plan",
@@ -67,6 +71,7 @@ const RESUME = {
     totalTokenCount: 465_541,
     turnCount: 6,
     status: "idle",
+    mode: "edit",
   },
 };
 
@@ -94,6 +99,7 @@ describe("parseChatSettings", () => {
     expect(settings.thoughtLevel).toBe("max");
     expect(settings.contextUsed).toBe(84_000);
     expect(settings.contextWindow).toBe(1_000_000);
+    expect(settings.mode).toBe("edit");
   });
 
   it("parses a minimal result", () => {
@@ -120,6 +126,45 @@ describe("parseChatSettings", () => {
     expect(parseChatSettings("nope")).toEqual(empty);
     expect(parseChatSettings({ settings: 7 })).toEqual(empty);
     expect(parseChatSettings({ settings: { model: { available: "nope" } } })).toEqual(empty);
+  });
+
+  it("reads the mode from settings, falling back to projection", () => {
+    expect(
+      parseChatSettings({
+        settings: { mode: { current: "guarded" } },
+        projection: { mode: "edit" },
+      }).mode,
+    ).toBe("guarded");
+    expect(parseChatSettings({ settings: {}, projection: { mode: "build" } }).mode).toBe(
+      "build",
+    );
+    expect(parseChatSettings({ settings: {} }).mode).toBeNull();
+  });
+});
+
+describe("permission level helpers", () => {
+  it("labels known modes and treats desktop-only ones as full access", () => {
+    expect(permissionLabel("plan")).toBe("Plan");
+    expect(permissionLabel("edit")).toBe("Edit");
+    expect(permissionLabel("guarded")).toBe("Guarded");
+    expect(permissionLabel("build")).toBe("Full access");
+    expect(permissionLabel("yolo")).toBe("Full access");
+    expect(permissionLabel("auto")).toBe("Full access");
+    expect(permissionLabel("something")).toBeNull();
+  });
+
+  it("marks the modes the phone may select", () => {
+    expect(isPhoneSelectableMode("plan")).toBe(true);
+    expect(isPhoneSelectableMode("edit")).toBe(true);
+    expect(isPhoneSelectableMode("guarded")).toBe(true);
+    expect(isPhoneSelectableMode("yolo")).toBe(false);
+    expect(isPhoneSelectableMode("auto")).toBe(false);
+  });
+
+  it("builds setMode params only for selectable modes", () => {
+    expect(buildSetModeParams("s", "guarded")).toEqual({ sessionId: "s", mode: "guarded" });
+    expect(() => buildSetModeParams("s", "yolo")).toThrow(/not available/);
+    expect(() => buildSetModeParams("s", "build")).toThrow(/not available/);
   });
 });
 
