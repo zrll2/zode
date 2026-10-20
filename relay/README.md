@@ -51,11 +51,14 @@ Every option is optional: `host` 127.0.0.1, `port` 8787, `publicUrl` `ws://host:
 
 ## Rules the relay enforces
 
-- Only these methods: `session/{list,create,resume,read,messages,events,subscribe,send,stop,close,setModel,setThoughtLevel,setMode,usage,goal,compact,delete,rename}` and `usage/stats`.
+- Only these methods: `session/{list,create,resume,read,messages,events,subscribe,send,stop,close,setModel,setThoughtLevel,setMode,usage,goal,compact,rename}`, `usage/stats` and `attachment/upload`.
 - `session/create` needs `mode` = `plan`, `edit` or `guarded`. `yolo` and `build` are refused.
-- `session/delete` deletes a conversation: the relay alone builds the agent's `v4/command` envelope (`deleteSession`), so a phone can never send raw commands.
-- `session/rename` renames one through the same envelope (`renameSession`); the id follows the delete rules, and the title must trim to 1-120 characters (the trimmed title is sent).
+- `session/delete` was removed: the agent accepts a `deleteSession` command but it only closes the session in memory — the record stays — so the relay no longer offers it and a phone gets `method not allowed`.
+- `session/rename` renames one through the agent's `v4/command` envelope (`renameSession`, sent after a `session/resume` so the session is active); the id must be a `sess_` id of at most 100 characters, and the title must trim to 1-120 characters (the trimmed title is sent).
+- `attachment/upload` resumes the session, stages the file with the agent in chunks of at most 256 KiB and answers `{ref, fileName, mime, bytes}`: files up to 8 MB, `fileName` up to 200 characters (the relay replaces `/`, `\` and control characters with `_`), `mime` a lowercase `type/subtype`.
+- `session/send` accepts up to 6 `attachments` (`{ref, fileName, mime, bytes}` whose `ref` points into the same session) and sends them as the agent's `sendText` command; without attachments it is forwarded unchanged.
 - `usage/stats` is a plain read, forwarded unchanged; `range` must be exactly `all`, `7d` or `30d`.
+- Every `v4/command` envelope is built by the relay itself; a phone can never send `v4/command` or inject fields into it.
 - Tokens are stored as SHA-256 hashes in `~/.zode/relay/devices.json` (mode 0600). Pair codes work once and expire.
 - Five failed attempts from one address cause a 60 second block.
 

@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import net from 'node:net';
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import WebSocket from 'ws';
 import { createRelay, checkPolicy } from '../service.mjs';
 
@@ -35,14 +36,21 @@ const nextMessage = (ws, match, ms = 3000) => new Promise((resolve, reject) => {
 });
 const waitFor = async (fn, ms = 3000) => { const end = Date.now() + ms; while (Date.now() < end) { if (fn()) return; await sleep(25); } throw new Error('condition not met in time'); };
 
-// A fake agent upstream: a unix socket plus the <pid>.json meta file syncUpstream scans for. It answers tap/pending
-// itself and records every request the relay forwards; tests reply to a recorded request with respond().
+// A fake agent upstream: a unix socket plus the <pid>.json meta file syncUpstream scans for. It records every request
+// the relay forwards, answers tap/pending itself, and auto-answers the relay's internal calls (session/resume, the
+// attachment staging); tests override an answer with answer() or reply to a recorded request manually with respond().
 function fakeUpstream() {
   const home = tmp();
   const tapDir = path.join(home, 'tap'); fs.mkdirSync(tapDir);
   const sockPath = path.join(tapDir, 'upstream.sock');
   const received = [];
-  let sock = null;
+  let sock = null, beginSession = null, commitSeq = 0;
+  const answers = {
+    'session/resume': () => ({}),
+    'v4/attachment/begin': (m) => { beginSession = m.params.sessionId; return { uploadId: m.params.uploadId, state: 'staging', nextChunkIndex: 0 }; },
+    'v4/attachment/chunk': (m) => ({ uploadId: m.params.uploadId, nextChunkIndex: m.params.chunkIndex + 1 }),
+    'v4/attachment/commit': () => ({ ref: `zcode-artifact://${beginSession}/tool-result-${commitSeq++}` }),
+  };
   const server = net.createServer((s) => {
     sock = s; let buf = '';
     s.on('data', (d) => {
@@ -51,7 +59,11 @@ function fakeUpstream() {
         const l = buf.slice(0, i); buf = buf.slice(i + 1); if (!l.trim()) continue;
         const m = JSON.parse(l);
         if (m.method === 'tap/pending') s.write(JSON.stringify({ id: m.id, tapReply: true, result: { pending: [] } }) + '\n');
-        else received.push(m);
+        else {
+          received.push(m);
+          const answer = answers[m.method];
+          if (answer) s.write(JSON.stringify({ id: m.id, tapReply: true, result: answer(m) }) + '\n');
+        }
       }
     });
   });
@@ -59,6 +71,7 @@ function fakeUpstream() {
   fs.writeFileSync(path.join(tapDir, `${process.pid}.json`), JSON.stringify({ pid: process.pid, cwd: '/tmp/fake-workspace', sock: sockPath }));
   return {
     home, tapDir, received,
+    answer: (method, fn) => { answers[method] = fn; },
     send: (o) => sock.write(JSON.stringify(o) + '\n'),                                              // upstream -> relay
     respond: (m, result) => sock.write(JSON.stringify({ id: m.id, tapReply: true, result }) + '\n'),
     close: async () => { sock?.destroy(); await new Promise((r) => server.close(r)); rm(home); },
@@ -214,22 +227,39 @@ test('a fake upstream (unix socket + <pid>.json meta) delivers events to an auth
   }
 });
 
-test('checkPolicy: delete/rename session ids, rename titles, usage/stats ranges, and no raw v4/command', () => {
+test('checkPolicy: rename/upload session ids, upload file rules, send attachments, usage ranges, no raw commands', () => {
   const id100 = 'sess_' + 'x'.repeat(95);                              // exactly 100 characters
-  assert.equal(checkPolicy('session/delete', { sessionId: id100 }), null);
-  assert.match(checkPolicy('session/delete', {}), /sessionId/);
-  assert.match(checkPolicy('session/delete', { sessionId: 'not-a-sess-id' }), /sessionId/);
-  assert.match(checkPolicy('session/delete', { sessionId: id100 + 'x' }), /sessionId/);      // 101 characters
+  const png = { fileName: 'a.png', mime: 'image/png', dataBase64: Buffer.from('hello').toString('base64') };
+  const att = { ref: 'zcode-artifact://sess_a/tool-result-1', fileName: 'a.png', mime: 'image/png', bytes: 10 };
+
   assert.equal(checkPolicy('session/rename', { sessionId: id100, title: '  Renamed  ' }), null);
+  assert.match(checkPolicy('session/rename', { sessionId: 'nope', title: 'x' }), /sessionId/);
+  assert.match(checkPolicy('session/rename', { sessionId: id100 + 'x', title: 'x' }), /sessionId/);            // 101 characters
   assert.match(checkPolicy('session/rename', { sessionId: id100, title: '   ' }), /title/);
   assert.match(checkPolicy('session/rename', { sessionId: id100, title: 'x'.repeat(121) }), /title/);
+
+  assert.equal(checkPolicy('attachment/upload', { sessionId: id100, ...png }), null);
+  assert.match(checkPolicy('attachment/upload', { sessionId: 'nope', ...png }), /sessionId/);
+  assert.match(checkPolicy('attachment/upload', { sessionId: id100, fileName: '', mime: 'image/png', dataBase64: png.dataBase64 }), /fileName/);
+  assert.match(checkPolicy('attachment/upload', { sessionId: id100, fileName: 'x'.repeat(201), mime: 'image/png', dataBase64: png.dataBase64 }), /fileName/);
+  assert.match(checkPolicy('attachment/upload', { sessionId: id100, fileName: 'a.png', mime: 'not a mime', dataBase64: png.dataBase64 }), /mime/);
+  assert.match(checkPolicy('attachment/upload', { sessionId: id100, fileName: 'a.png', mime: 'Image/PNG', dataBase64: png.dataBase64 }), /mime/);   // lowercase only
+  assert.match(checkPolicy('attachment/upload', { sessionId: id100, fileName: 'a.png', mime: 'image/png', dataBase64: '' }), /dataBase64/);
+  assert.match(checkPolicy('attachment/upload', { sessionId: id100, fileName: 'a.png', mime: 'image/png', dataBase64: Buffer.alloc(8 * 1024 * 1024 + 1).toString('base64') }), /larger than 8 MB/);
+
+  assert.equal(checkPolicy('session/send', { sessionId: 'sess_a', content: 'hi', attachments: [att] }), null);
+  assert.match(checkPolicy('session/send', { sessionId: 'sess_a', content: 'hi', attachments: Array(7).fill(att) }), /at most 6/);
+  assert.match(checkPolicy('session/send', { sessionId: 'sess_b', content: 'hi', attachments: [att] }), /ref/);
+  assert.match(checkPolicy('session/send', { sessionId: 'sess_a', content: 'hi', attachments: [{ ...att, bytes: 0 }] }), /bytes/);
+  assert.match(checkPolicy('session/send', { sessionId: 'sess_a', attachments: [att] }), /content/);
+
   for (const range of ['all', '7d', '30d']) assert.equal(checkPolicy('usage/stats', { range }), null);
   assert.match(checkPolicy('usage/stats', {}), /range/);
-  assert.match(checkPolicy('usage/stats', { range: '90d' }), /range/);
   assert.equal(checkPolicy('v4/command', {}), 'method not allowed: v4/command');
+  assert.equal(checkPolicy('session/delete', { sessionId: 'sess_x' }), 'method not allowed: session/delete');
 });
 
-test('session/delete and session/rename go upstream as relay-built v4/command envelopes; results pass back unchanged', async () => {
+test('session/rename resumes the session upstream, then sends the relay-built renameSession command', async () => {
   const port = await freePort();
   const up = fakeUpstream();
   const lines = [];
@@ -241,56 +271,21 @@ test('session/delete and session/rename go upstream as relay-built v4/command en
     const { id: device, token } = await (await pair(port, relay.createPairing().code, 'phone')).json();
     const { ws } = await authed(`ws://127.0.0.1:${port}`, token);
 
-    ws.send(JSON.stringify({ type: 'rpc', id: 7, method: 'session/delete', params: { sessionId: 'sess_abc123', bogus: 'nope' } }));
-    await waitFor(() => up.received.length > 0);
-    const del = up.received[0];
-    assert.equal(del.method, 'v4/command');
-    assert.deepEqual(Object.keys(del.params).sort(), ['clientId', 'commandId', 'issuedAt', 'payload', 'sessionId', 'type']);   // relay-built: nothing else leaks in
-    assert.equal(del.params.clientId, 'zode-relay');
-    assert.equal(del.params.sessionId, 'sess_abc123');
-    assert.equal(del.params.type, 'deleteSession');
-    assert.deepEqual(del.params.payload, {});
-    assert.match(del.params.commandId, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
-    assert.equal(typeof del.params.issuedAt, 'number');
-    up.respond(del, { commandId: del.params.commandId, status: 'accepted', revisionAtDecision: 0 });
-    const delRes = await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === 7);
-    assert.deepEqual(delRes.result, { commandId: del.params.commandId, status: 'accepted', revisionAtDecision: 0 });
-    assert.ok(lines.includes(`delete ${device} sess_abc123`));
-
-    ws.send(JSON.stringify({ type: 'rpc', id: 8, method: 'session/rename', params: { sessionId: 'sess_abc123', title: '  New name  ' } }));
+    ws.send(JSON.stringify({ type: 'rpc', id: 7, method: 'session/rename', params: { sessionId: 'sess_abc123', title: '  New name  ' } }));
     await waitFor(() => up.received.length > 1);
+    assert.equal(up.received[0].method, 'session/resume');               // the command needs an active session
+    assert.deepEqual(up.received[0].params, { sessionId: 'sess_abc123' });
     const ren = up.received[1];
     assert.equal(ren.method, 'v4/command');
+    assert.deepEqual(Object.keys(ren.params).sort(), ['clientId', 'commandId', 'issuedAt', 'payload', 'sessionId', 'type']);   // relay-built: nothing else leaks in
     assert.equal(ren.params.clientId, 'zode-relay');
+    assert.equal(ren.params.sessionId, 'sess_abc123');
     assert.equal(ren.params.type, 'renameSession');
     assert.deepEqual(ren.params.payload, { title: 'New name' });         // the trimmed title
     up.respond(ren, { commandId: ren.params.commandId, status: 'rejected', reasonCode: 'proto.sessionNotFound', revisionAtDecision: 0 });
-    const renRes = await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === 8);
-    assert.deepEqual(renRes.result, { commandId: ren.params.commandId, status: 'rejected', reasonCode: 'proto.sessionNotFound', revisionAtDecision: 0 });
+    const res = await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === 7);
+    assert.deepEqual(res.result, { commandId: ren.params.commandId, status: 'rejected', reasonCode: 'proto.sessionNotFound', revisionAtDecision: 0 });
     assert.ok(lines.includes(`rename ${device} sess_abc123`));
-    ws.close();
-  } finally { await relay.stop(); await up.close(); }
-});
-
-test('session/delete with a missing or bad sessionId is refused with -32001 and never reaches upstream', async () => {
-  const port = await freePort();
-  const up = fakeUpstream();
-  const relay = createRelay({ port, stateDir: path.join(up.home, 'state'), tapDir: up.tapDir, log: silent });
-  await relay.start();
-  try {
-    await waitFor(() => relay.status().upstreams === 1);
-    const { token } = await (await pair(port, relay.createPairing().code, 'phone')).json();
-    const { ws } = await authed(`ws://127.0.0.1:${port}`, token);
-
-    const bad = [{}, { sessionId: '' }, { sessionId: 'nope' }, { sessionId: 'sess_' + 'x'.repeat(96) }, { sessionId: 42 }];
-    for (let i = 0; i < bad.length; i++) {
-      ws.send(JSON.stringify({ type: 'rpc', id: i, method: 'session/delete', params: bad[i] }));
-      const res = await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === i);
-      assert.equal(res.error.code, -32001);
-      assert.match(res.error.message, /sessionId/);
-    }
-    await sleep(150);
-    assert.deepEqual(up.received, []);                                   // nothing was forwarded
     ws.close();
   } finally { await relay.stop(); await up.close(); }
 });
@@ -357,4 +352,146 @@ test('usage/stats needs range all/7d/30d and is forwarded unchanged; setModel, s
     }
     ws.close();
   } finally { await relay.stop(); await up.close(); }
+});
+
+test('attachment/upload resumes, stages the chunks in order, commits and answers {ref, fileName, mime, bytes}', async () => {
+  const port = await freePort();
+  const up = fakeUpstream();
+  const relay = createRelay({ port, stateDir: path.join(up.home, 'state'), tapDir: up.tapDir, log: silent });
+  await relay.start();
+  try {
+    await waitFor(() => relay.status().upstreams === 1);
+    const { id: device, token } = await (await pair(port, relay.createPairing().code, 'phone')).json();
+    const { ws } = await authed(`ws://127.0.0.1:${port}`, token);
+
+    const raw = Buffer.alloc(300 * 1024);                                // two 256 KiB chunks
+    for (let i = 0; i < raw.length; i++) raw[i] = i % 251;
+    const ref = 'zcode-artifact://sess_up1/tool-result-1234';
+    up.answer('v4/attachment/commit', () => ({ ref }));
+    ws.send(JSON.stringify({ type: 'rpc', id: 21, method: 'attachment/upload',
+      params: { sessionId: 'sess_up1', fileName: 'a/b\nc.png', mime: 'image/png', dataBase64: raw.toString('base64') } }));
+    const res = await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === 21);
+    assert.deepEqual(res.result, { ref, fileName: 'a_b_c.png', mime: 'image/png', bytes: 300 * 1024 });   // sanitized name
+
+    await waitFor(() => up.received.length >= 5);
+    const [resume, begin, chunk0, chunk1, commit] = up.received;
+    assert.equal(resume.method, 'session/resume');                       // staging needs an active session
+    assert.deepEqual(resume.params, { sessionId: 'sess_up1' });
+    assert.equal(begin.method, 'v4/attachment/begin');
+    assert.equal(begin.params.connectionId, `relay-${device}`);
+    assert.equal(begin.params.sessionId, 'sess_up1');
+    assert.equal(begin.params.fileName, 'a_b_c.png');                    // / and control characters replaced
+    assert.equal(begin.params.mime, 'image/png');
+    assert.equal(begin.params.totalBytes, 300 * 1024);
+    assert.equal(begin.params.totalChunks, 2);
+    assert.match(begin.params.checksum, /^sha256:[0-9a-f]{64}$/);
+    assert.equal(begin.params.checksum, 'sha256:' + crypto.createHash('sha256').update(raw).digest('hex'));
+    assert.equal(begin.params.uploadId, chunk0.params.uploadId);
+    assert.equal(chunk0.params.uploadId, chunk1.params.uploadId);
+    assert.equal(chunk1.params.uploadId, commit.params.uploadId);
+    assert.equal(chunk0.params.connectionId, `relay-${device}`);
+    assert.equal(chunk0.params.chunkIndex, 0);
+    assert.equal(chunk1.params.chunkIndex, 1);
+    assert.deepEqual(Buffer.concat([Buffer.from(chunk0.params.dataBase64, 'base64'), Buffer.from(chunk1.params.dataBase64, 'base64')]), raw);
+    assert.equal(commit.method, 'v4/attachment/commit');
+    assert.deepEqual(Object.keys(commit.params).sort(), ['connectionId', 'sessionId', 'uploadId']);
+    ws.close();
+  } finally { await relay.stop(); await up.close(); }
+});
+
+test('attachment/upload: too large or bad mime is refused by policy, nothing reaches upstream', async () => {
+  const port = await freePort();
+  const up = fakeUpstream();
+  const relay = createRelay({ port, stateDir: path.join(up.home, 'state'), tapDir: up.tapDir, log: silent });
+  await relay.start();
+  try {
+    await waitFor(() => relay.status().upstreams === 1);
+    const { token } = await (await pair(port, relay.createPairing().code, 'phone')).json();
+    const { ws } = await authed(`ws://127.0.0.1:${port}`, token);
+
+    const tooBig = Buffer.alloc(8 * 1024 * 1024 + 1).toString('base64');
+    ws.send(JSON.stringify({ type: 'rpc', id: 31, method: 'attachment/upload',
+      params: { sessionId: 'sess_big', fileName: 'big.bin', mime: 'application/octet-stream', dataBase64: tooBig } }));
+    const big = await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === 31);
+    assert.equal(big.error.code, -32001);
+    assert.match(big.error.message, /larger than 8 MB/);
+
+    ws.send(JSON.stringify({ type: 'rpc', id: 32, method: 'attachment/upload',
+      params: { sessionId: 'sess_x', fileName: 'a.txt', mime: 'not a mime', dataBase64: Buffer.from('hello').toString('base64') } }));
+    const mime = await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === 32);
+    assert.equal(mime.error.code, -32001);
+    assert.match(mime.error.message, /mime/);
+
+    await sleep(150);
+    assert.deepEqual(up.received, []);                                   // nothing was forwarded
+    ws.close();
+  } finally { await relay.stop(); await up.close(); }
+});
+
+test('session/send with attachments sends exactly one sendText v4/command; a foreign ref is refused', async () => {
+  const port = await freePort();
+  const up = fakeUpstream();
+  const relay = createRelay({ port, stateDir: path.join(up.home, 'state'), tapDir: up.tapDir, log: silent });
+  await relay.start();
+  try {
+    await waitFor(() => relay.status().upstreams === 1);
+    const { token } = await (await pair(port, relay.createPairing().code, 'phone')).json();
+    const { ws } = await authed(`ws://127.0.0.1:${port}`, token);
+
+    up.answer('v4/command', (m) => ({ commandId: m.params.commandId, status: 'accepted', result: { type: 'inputAccepted', delivery: 'startNow', inputId: 'in_1' } }));
+    const att = { ref: 'zcode-artifact://sess_s1/tool-result-9', fileName: 'pic.png', mime: 'image/png', bytes: 1234, bogus: 'dropped' };
+    const resP = nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === 41);   // listen first: the fake answers v4/command within the same tick
+    ws.send(JSON.stringify({ type: 'rpc', id: 41, method: 'session/send',
+      params: { sessionId: 'sess_s1', content: 'look at this', attachments: [att], modelSelection: { model: 'glm-5' } } }));
+    await waitFor(() => up.received.length >= 2);
+    assert.equal(up.received[0].method, 'session/resume');               // the command needs an active session
+    assert.equal(up.received.filter((x) => x.method === 'v4/command').length, 1);
+    const cmd = up.received[1];
+    assert.equal(cmd.method, 'v4/command');
+    assert.equal(cmd.params.type, 'sendText');
+    assert.equal(cmd.params.clientId, 'zode-relay');
+    assert.equal(cmd.params.sessionId, 'sess_s1');
+    assert.equal(typeof cmd.params.issuedAt, 'number');
+    assert.deepEqual(cmd.params.payload, { text: 'look at this',
+      attachments: [{ ref: att.ref, fileName: 'pic.png', mime: 'image/png', bytes: 1234 }],
+      modelSelection: { model: 'glm-5' } });
+    const res = await resP;
+    assert.deepEqual(res.result, { accepted: true, sessionId: 'sess_s1',
+      command: { commandId: cmd.params.commandId, status: 'accepted', result: { type: 'inputAccepted', delivery: 'startNow', inputId: 'in_1' } } });
+
+    up.answer('v4/command', () => ({ status: 'rejected', reasonCode: 'proto.sessionNotFound' }));
+    const badP = nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === 42);   // listen first, same reason
+    ws.send(JSON.stringify({ type: 'rpc', id: 42, method: 'session/send',
+      params: { sessionId: 'sess_s1', content: 'again', attachments: [{ ref: 'zcode-artifact://sess_s1/tool-result-9', fileName: 'pic.png', mime: 'image/png', bytes: 1234 }] } }));
+    await waitFor(() => up.received.length >= 4);
+    const bad = await badP;
+    assert.equal(bad.error.code, -32010);
+    assert.equal(bad.error.message, 'proto.sessionNotFound');
+
+    const foreign = { ref: 'zcode-artifact://sess_OTHER/tool-result-9', fileName: 'pic.png', mime: 'image/png', bytes: 1234 };
+    ws.send(JSON.stringify({ type: 'rpc', id: 43, method: 'session/send', params: { sessionId: 'sess_s1', content: 'hi', attachments: [foreign] } }));
+    const refRes = await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === 43);
+    assert.equal(refRes.error.code, -32001);
+    assert.match(refRes.error.message, /ref/);
+
+    await sleep(150);
+    assert.equal(up.received.filter((x) => x.method === 'v4/command').length, 2);   // the refused one never went upstream
+    ws.close();
+  } finally { await relay.stop(); await up.close(); }
+});
+
+test('session/delete was removed: a phone gets method not allowed', async () => {
+  const state = tmp(), tap = tmp();
+  const port = await freePort();
+  const relay = createRelay({ port, stateDir: state, tapDir: tap, log: silent });
+  await relay.start();
+  try {
+    const { token } = await (await pair(port, relay.createPairing().code, 'phone')).json();
+    const { ws } = await authed(`ws://127.0.0.1:${port}`, token);
+    ws.send(JSON.stringify({ type: 'rpc', id: 51, method: 'session/delete', params: { sessionId: 'sess_x' } }));
+    const res = await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === 51);
+    assert.equal(res.error.code, -32001);
+    assert.equal(res.error.message, 'method not allowed: session/delete');
+    ws.close();
+  } finally { await relay.stop(); rm(state, tap); }
 });
