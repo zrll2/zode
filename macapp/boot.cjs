@@ -13,7 +13,21 @@ const appendLog = (msg) => {
   } catch {}
 };
 
+// ZCode's in-app updater cannot finish in this copy: Squirrel.Mac only swaps the app when the new
+// bundle's code signature matches the running one, and Zode.app is re-signed ad hoc. So it would
+// download the whole update and then fail silently at install (and a successful swap would replace
+// Zode.app with a plain ZCode anyway). The bundle has no off switch, but it takes its feed URL from
+// ZCODE_UPDATE_FEED_URL, so point it at a local port that refuses connections: a check fails at once
+// and nothing is downloaded. Update the original ZCode.app instead; the tray then offers "Rebuild
+// Zode…". ZODE_KEEP_UPDATER=1 (like ZODE_OFF=1, or a feed URL of your own) leaves ZCode as it is.
+function disableInAppUpdater() {
+  if (process.env.ZODE_OFF === '1' || process.env.ZODE_KEEP_UPDATER === '1' || process.env.ZCODE_UPDATE_FEED_URL) return;
+  process.env.ZCODE_UPDATE_FEED_URL = 'http://127.0.0.1:9/zode-updater-disabled';
+  appendLog('zode: ZCode in-app updater switched off (feed set to http://127.0.0.1:9, which refuses connections): update the original ZCode.app, then "Rebuild Zode…" from the menu bar. ZODE_KEEP_UPDATER=1 keeps it on.');
+}
+
 async function main() {
+  try { disableInAppUpdater(); } catch (err) { appendLog(`zode: ${err && err.stack || err}`); }
   // (1) The Zode integration: never awaited, never fatal. ZODE_OFF=1 turns it off.
   if (process.env.ZODE_OFF !== '1') {
     try {

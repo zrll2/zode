@@ -13,6 +13,7 @@ const actions = {
   toggleLaunchAtLogin: () => calls.push('login'),
   showZCode: () => calls.push('showZCode'),
   about: () => calls.push('about'),
+  rebuild: () => calls.push('rebuild'),
 };
 const addresses = [
   { id: 'tailscale', label: 'Tailscale (100.64.0.1)', ip: '100.64.0.1' },
@@ -80,4 +81,22 @@ test('login checkbox, ZCode window, about, and no quit item', () => {
   assert.ok(calls.includes('showZCode'));
   assert.ok(calls.includes('about'));
   assert.equal(JSON.stringify(t).includes('Quit'), false);          // the app has its own Quit
+});
+
+test('rebuild item leads the menu only when an update is available', () => {
+  const update = { available: true, originalVersion: '3.16.2', runningVersion: '3.15.3' };
+  const t = buildMenuTemplate(state({ update }), actions);
+  assert.equal(t[0].label, 'ZCode 3.16.2 is installed. Rebuild Zode…');
+  assert.equal(t[1].type, 'separator');
+  assert.equal(t[2].label, 'Relay running · no phones paired');          // the usual menu follows unchanged
+  calls.length = 0;
+  t[0].click();
+  assert.deepEqual(calls, ['rebuild']);
+
+  for (const s of [state(), state({ update: undefined }), state({ update: { available: false, originalVersion: '3.15.3', runningVersion: '3.15.3' } })]) {
+    const u = buildMenuTemplate(s, actions);
+    assert.equal(u[0].label, 'Relay running · no phones paired');
+    assert.equal(JSON.stringify(u).includes('Rebuild Zode'), false);
+    assert.equal(u.length, t.length - 2);
+  }
 });

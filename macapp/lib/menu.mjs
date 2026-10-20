@@ -9,7 +9,12 @@ export function buildMenuTemplate(state, actions) {
   else if (state.running) line = phones === 1 ? 'Relay running · 1 phone' : phones > 1 ? `Relay running · ${phones} phones` : 'Relay running · no phones paired';
   else line = 'Relay stopped';
   const addresses = state.addresses ?? [];
+  const update = state.update;                                     // { available, originalVersion, runningVersion }
   return [
+    ...(update?.available ? [
+      { label: `ZCode ${update.originalVersion} is installed. Rebuild Zode…`, click: () => actions.rebuild() },
+      { type: 'separator' },
+    ] : []),
     { label: line, enabled: false },
     { label: 'Pair a phone…', click: () => actions.pair() },
     {

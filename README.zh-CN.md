@@ -117,7 +117,7 @@ flowchart LR
 
 **支持 Windows 或 Linux 吗？** 暂时不支持，目前只在 macOS 上构建和测试。
 
-**ZCode 更新后怎么办？** 重新运行 `./zode install` 即可。
+**ZCode 更新后怎么办？** 像平时一样更新原来的 ZCode.app；Zode.app 自己的更新器是故意关掉的，因为它无法覆盖安装一个重新签名过的副本。原应用更新后，Zode 的菜单栏会出现 **Rebuild Zode…**（重建 Zode），点一下即可；或者重新运行 `./zode install`。
 
 ## 文档
 
