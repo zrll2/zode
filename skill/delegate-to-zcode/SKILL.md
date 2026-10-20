@@ -38,7 +38,8 @@ node __ZODE_HOME__/bridge/zcode-task.mjs --worktree <wt> --order <order.md> --ev
 ```
 - Run it with `run_in_background: true` (max reasoning takes 3 to 25 minutes). Do not poll; the completion notification arrives by itself.
 - First call creates the session; the id is saved next to the worktree, so the next call to the same worktree continues the same conversation with all context.
-- Output: JSON with `ended` (`turn-end`, `turn-failed`, `timeout`, `approval-needed`), the reply text, and `git status`.
+- `--stall 300` (default): if ZCode emits no meaningful event for 300 s (telemetry does not count) the tool returns `ended: stalled` (hung), `zcode-gone` (Zode.app/server died) or `disconnected` (socket dropped) with `idle_s` and a hint. Then run `zode doctor`, stop the session, resend (or relaunch Zode.app), and tell the user.
+- Output: JSON with `ended` (`turn-end`, `turn-failed`, `timeout`, `approval-needed`, `stalled`, `zcode-gone`, `disconnected`), the reply text, and `git status`.
 - To stop a running turn: `node __ZODE_HOME__/bridge/zcode-stop.mjs <sessionId>` (the id is in the `.zcode-session-*` file). Killing the node process alone does NOT stop ZCode.
 
 ## 4. Verify yourself, with real commands
@@ -48,6 +49,15 @@ Run the project's install, type check, tests, build, and the real app when the c
 
 ## 5. You do this yourself (mechanical, not feature code)
 Dependency version conflicts and lockfiles, tsconfig/tool config needed by new tool versions, deleting files, running migrations or builds, committing.
+
+## 6b. Clean up the conversations when the task is fully done
+Work orders leave one conversation per worktree in the ZCode sidebar and the phone list. After the work is merged (not before: a later fix order continues the same session):
+```bash
+node __ZODE_HOME__/bridge/zcode-cleanup.mjs --worktree <wt> --dry-run   # see what it will touch
+node __ZODE_HOME__/bridge/zcode-cleanup.mjs --worktree <wt>              # archive: reversible, hidden from lists
+node __ZODE_HOME__/bridge/zcode-cleanup.mjs --worktree <wt> --purge      # delete for good (ask the user first; irreversible)
+```
+It edits the agent's own DB (`~/.zcode/cli/db/db.sqlite`, `session.time_archived`), because the agent protocol has no delete or archive command. It also forgets the saved `.zcode-session-*` id, so the next order starts a fresh conversation. Default to archive; purge only when the user asks.
 
 ## 6. Review and commit
 - Read `git diff`. Audit against the order, not just against green tests.

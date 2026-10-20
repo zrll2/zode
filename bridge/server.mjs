@@ -12,10 +12,8 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-// The Zode.app copy that `zode install` builds. Override with ZODE_TAP_APP.
-const TAP_APP = process.env.ZODE_TAP_APP || ['/Applications/Zode.app', path.join(os.homedir(), 'Applications', 'Zode.app'), path.join(os.homedir(), 'Applications', 'ZCode-Tap.app')].find(p => fs.existsSync(p)) || '/Applications/Zode.app';
-const ELECTRON = path.join(TAP_APP, 'Contents', 'MacOS', 'ZCode');
-const CLI = process.env.ZCODE_CLI || path.join(TAP_APP, 'Contents', 'Resources', 'glm', 'zcode.real.cjs');
+const ELECTRON = '/Applications/ZCode.app/Contents/MacOS/ZCode';
+const CLI = process.env.ZCODE_CLI || path.join(HERE, 'bin', 'zcode.cjs');
 const DEFAULT_MODEL = {
   providerId: process.env.ZCODE_PROVIDER_ID || 'account:zai-individual-coding-plan',
   modelId: process.env.ZCODE_MODEL_ID || 'GLM-5.3-Flash',
@@ -67,6 +65,7 @@ function call(method, params, cwd) {
 }
 function push(sessionId, msg) {
   if (process.env.ZCODE_EVENT_LOG) { try { fs.appendFileSync(process.env.ZCODE_EVENT_LOG, JSON.stringify({ sessionId, msg }) + '\n'); } catch {} }
+  if (sessionId && !NOISE.test(String(msg?.method ?? ''))) lastActivity.set(sessionId, Date.now());
   if (!sessionId) { raw.push(msg); raw.splice(0, Math.max(0, raw.length - 50)); return; }
   const a = events.get(sessionId) ?? []; events.set(sessionId, a);
   a.push({ seq: a.length, msg });
@@ -120,6 +119,10 @@ const isTurnEnd = m => {
   return /turn\.terminal|turn-failed|turn-completed|turn_completed|turn-ended|turn_failed/i.test(j) || (m.method === 'state.updated' && m.params?.patch?.status === 'idle');
 };
 const sessionModel = new Map();
+// Liveness: last meaningful event per session (telemetry and resource samples do not count: a hung turn still emits them).
+const lastActivity = new Map(), sentAt = new Map();
+const NOISE = /telemetry|resourceSample/i;
+const STALL_S = Number(process.env.ZCODE_STALL_S || 300);
 
 // ---- MCP tools -------------------------------------------------------------
 const srv = new McpServer({ name: 'zcode-mcp', version: '0.1.0' });
@@ -153,23 +156,29 @@ srv.tool('zcode_send', 'Send a work order / follow-up to a session. Returns the 
   { session: z.string(), content: z.string() },
   async ({ session, content }) => {
     const since = (events.get(session) ?? []).length;
+    sentAt.set(session, Date.now()); lastActivity.set(session, Date.now());
     const r = await call('session/send', { sessionId: session, content, modelSelection: sessionModel.get(session) ?? DEFAULT_MODEL });
     return text({ since, response: r });
   });
 
 srv.tool('zcode_wait', 'Block until the turn ends, an approval is needed, or timeout. Returns new events since cursor.',
-  { session: z.string(), since: z.number().default(0), timeout_s: z.number().default(300), max_events: z.number().default(60) },
-  async ({ session, since, timeout_s, max_events }) => {
+  { session: z.string(), since: z.number().default(0), timeout_s: z.number().default(300), max_events: z.number().default(60), stall_s: z.number().default(STALL_S) },
+  async ({ session, since, timeout_s, max_events, stall_s }) => {
     const end = Date.now() + timeout_s * 1000; let why = 'timeout';
     while (Date.now() < end) {
       const ev = (events.get(session) ?? []).slice(since);
       if (ev.some(e => e.msg.kind === 'approval-needed')) { why = 'approval-needed'; break; }
       if (ev.some(e => isTurnEnd(e.msg))) { why = ev.some(e => /turn-failed|turn_failed/.test(JSON.stringify(e.msg).slice(0, 1500))) ? 'turn-failed' : 'turn-end'; break; }
+      // No turn end and no meaningful event for stall_s: ZCode hung, or was killed.
+      const last = lastActivity.get(session) ?? sentAt.get(session);
+      if (stall_s > 0 && last && sentAt.has(session) && Date.now() - last > stall_s * 1000) { why = findTap().length ? 'stalled' : 'zcode-gone'; break; }
+      if (sentAt.has(session) && !child && tapMode) { why = 'disconnected'; break; }
       await sleep(500);
     }
+    const last = lastActivity.get(session) ?? sentAt.get(session);
     const all = (events.get(session) ?? []).slice(since);
     const brief = e => ({ seq: e.seq, m: e.msg.method ?? e.msg.kind, p: JSON.stringify(e.msg.params ?? e.msg).replace(/"available":\[.*?\]\},/s, '').slice(0, 500) });
-    return text({ why, next: since + all.length, total: all.length, events: all.slice(-max_events).map(brief) });
+    return text({ why, idle_s: last ? Math.round((Date.now() - last) / 1000) : null, next: since + all.length, total: all.length, events: all.slice(-max_events).map(brief) });
   });
 
 srv.tool('zcode_events', 'Read raw events for a session from a cursor.',
