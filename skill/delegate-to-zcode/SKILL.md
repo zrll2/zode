@@ -30,7 +30,8 @@ Use `order-template.md` (next to this file). Rules that decide quality:
 - **Say what ZCode cannot do**: in `edit` mode it cannot run commands or delete files. You run installs, type checks, tests, and delete files.
 - State scope (files it may touch), forbidden changes, and the quality bar.
 - End with: `Reply with the single line: \`<name> done\`.` so the result is easy to read.
-- One order = one coherent change (5 to 15 files). Split bigger work.
+- **Small orders, always.** Big orders make ZCode silent for 10 to 60 minutes (measured: worktree turns averaged 10 min, the worst ran 2 hours, with 38k to 50k output tokens). Split every feature into steps that each take ZCode about 5 minutes: at most 3 to 5 files and about 150 lines of change, one concern per order (for example: pure logic + its tests; then the UI that uses it; then docs). Send them one after another in the same session, verify each (tsc/tests) before sending the next. If an order needs more than one of "new module", "wire into UI", "docs", it is too big. Prefer 4 small orders over 1 big one: each turn end is a heartbeat.
+- **Reasoning level** (`--reasoning low|high|max`, default `high`): `low` for mechanical work (fix orders with exact errors, renames, tests from a spec, docs); `high` for normal feature code; `max` only for hard design or tricky debugging, and expect it to be slow.
 
 ## 3. Send it and wait
 ```bash
@@ -38,6 +39,7 @@ node __ZODE_HOME__/bridge/zcode-task.mjs --worktree <wt> --order <order.md> --ev
 ```
 - Run it with `run_in_background: true` (max reasoning takes 3 to 25 minutes). Do not poll; the completion notification arrives by itself.
 - First call creates the session; the id is saved next to the worktree, so the next call to the same worktree continues the same conversation with all context.
+- **Heartbeat probe every 5 minutes**: `zcode-task` prints a `[heartbeat] {...}` line to stderr every 5 min (`--heartbeat 300`: elapsed, event count, idle seconds, agent status) and keeps the latest in `<events>.heartbeat.json`. Run it as `... > out.txt 2>&1` in the background and watch `out.txt` (Monitor, or Read it when you check in). Independent one-shot check any time: `node __ZODE_HOME__/bridge/zcode-probe.mjs <sessionId>` (exit 1 and `problems` when no ZCode server is alive or a running turn has been silent for more than 5 min).
 - `--stall 300` (default): if ZCode emits no meaningful event for 300 s (telemetry does not count) the tool returns `ended: stalled` (hung), `zcode-gone` (Zode.app/server died) or `disconnected` (socket dropped) with `idle_s` and a hint. Then run `zode doctor`, stop the session, resend (or relaunch Zode.app), and tell the user.
 - Output: JSON with `ended` (`turn-end`, `turn-failed`, `timeout`, `approval-needed`, `stalled`, `zcode-gone`, `disconnected`), the reply text, and `git status`.
 - To stop a running turn: `node __ZODE_HOME__/bridge/zcode-stop.mjs <sessionId>` (the id is in the `.zcode-session-*` file). Killing the node process alone does NOT stop ZCode.

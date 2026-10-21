@@ -17,7 +17,7 @@ const CLI = process.env.ZCODE_CLI || path.join(HERE, 'bin', 'zcode.cjs');
 const DEFAULT_MODEL = {
   providerId: process.env.ZCODE_PROVIDER_ID || 'account:zai-individual-coding-plan',
   modelId: process.env.ZCODE_MODEL_ID || 'GLM-5.3-Flash',
-  options: { reasoningLevel: process.env.ZCODE_REASONING || 'max' },
+  options: { reasoningLevel: process.env.ZCODE_REASONING || 'high' },   // low | high | max; max is slow, see skill
 };
 const ALLOWED_MODES = ['plan', 'edit', 'guarded'];
 
@@ -119,6 +119,7 @@ const isTurnEnd = m => {
   return /turn\.terminal|turn-failed|turn-completed|turn_completed|turn-ended|turn_failed/i.test(j) || (m.method === 'state.updated' && m.params?.patch?.status === 'idle');
 };
 const sessionModel = new Map();
+const withReasoning = (m, level) => level ? { ...m, options: { ...(m.options ?? {}), reasoningLevel: level } } : m;
 // Liveness: last meaningful event per session (telemetry and resource samples do not count: a hung turn still emits them).
 const lastActivity = new Map(), sentAt = new Map();
 const NOISE = /telemetry|resourceSample/i;
@@ -153,11 +154,11 @@ srv.tool('zcode_resume', 'Re-attach to an existing session (after the MCP server
   });
 
 srv.tool('zcode_send', 'Send a work order / follow-up to a session. Returns the event cursor to wait from.',
-  { session: z.string(), content: z.string() },
-  async ({ session, content }) => {
+  { session: z.string(), content: z.string(), reasoning: z.enum(['low', 'high', 'max']).optional() },
+  async ({ session, content, reasoning }) => {
     const since = (events.get(session) ?? []).length;
     sentAt.set(session, Date.now()); lastActivity.set(session, Date.now());
-    const r = await call('session/send', { sessionId: session, content, modelSelection: sessionModel.get(session) ?? DEFAULT_MODEL });
+    const r = await call('session/send', { sessionId: session, content, modelSelection: withReasoning(sessionModel.get(session) ?? DEFAULT_MODEL, reasoning) });
     return text({ since, response: r });
   });
 
