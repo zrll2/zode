@@ -1,6 +1,6 @@
 # Work order NN: <short name>
 
-You write code. Claude Code supervises and runs every command (install, type check, tests, the app). You cannot run commands or delete files.
+You write code. Claude Code supervises and runs every command (install, type check, tests, the app). You cannot run commands or delete files: every shell command, including `ls`, `npm` and `git`, is refused (a few read-only ones like ls are allowed), so do not try. If a step needs a command, skip it and say in your reply what you could not check.
 Edit only inside the current directory. Do not commit. Do not add secrets, analytics, or network calls beyond the stated ones.
 
 ## Read first
