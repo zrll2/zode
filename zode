@@ -4,6 +4,7 @@ ZODE_HOME="$(cd "$(dirname "$0")" && pwd)"
 cmd="${1:-help}"; [ $# -gt 0 ] && shift
 case "$cmd" in
   install)   exec "$ZODE_HOME/scripts/install.sh" "$@" ;;
+  update-zcode) exec bash "$ZODE_HOME/scripts/update-zcode.sh" "$@" ;;
   app)       exec bash "$ZODE_HOME/scripts/apply-app.sh" "$@" ;;
   doctor)    exec node "$ZODE_HOME/bridge/doctor.mjs" "$@" ;;
   relay)     exec node "$ZODE_HOME/relay/relay.mjs" serve "$@" ;;
@@ -19,6 +20,7 @@ case "$cmd" in
 Zode: Claude Code decides, ZCode writes, you watch from your phone.
 
   zode install            build Zode.app from your ZCode, install the skill
+  zode update-zcode [--check]   update the original ZCode, then rebuild Zode.app
   zode app [--uninstall]  (re-)apply the phone-relay integration to Zode.app
   zode doctor [worktree]  check that everything is ready (add --models to test the login)
   zode relay              start the phone relay in a terminal (Zode.app runs it too)
