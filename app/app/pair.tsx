@@ -19,6 +19,7 @@ import { radius, useTheme } from "../src/theme";
 import { Pill } from "../src/ui/Pill";
 import { Screen } from "../src/ui/Screen";
 import { Text } from "../src/ui/Text";
+import { friendlyError } from "../src/friendlyError";
 
 function deviceName(): string {
   const anyConstants = Constants as any;
@@ -51,7 +52,7 @@ export default function PairScreen() {
       connect({ wsUrl: result.wsUrl, token: result.token, deviceId: result.id });
       router.replace("/sessions");
     } catch (e: any) {
-      setError(e?.message ?? "Pairing failed.");
+      setError(friendlyError(e, "pair"));
       setScanned(false);
     } finally {
       setBusy(false);
@@ -77,7 +78,7 @@ export default function PairScreen() {
           <Text style={[styles.mark, { color: t.colors.accent, fontFamily: t.fonts.serif }]}>Z</Text>
           <Text variant="display">Connect to your Mac</Text>
           <Text variant="body" color="subtext" style={styles.paragraph}>
-            Run `./zode pair` in the Zode folder on your Mac, then scan the code.
+            On your Mac, click the Z in the menu bar and choose Pair a phone…, then scan the code it shows. Your Mac must be awake, with Zode open, on the same Wi-Fi as this phone.
           </Text>
         </View>
         <View style={styles.actions}>

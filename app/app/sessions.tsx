@@ -59,7 +59,7 @@ function ReconnectingLine({
     <View style={styles.reconnectRow}>
       <Text variant="caption" color="warn" style={styles.flex}>
         {retryAt
-          ? `Reconnecting, next try in ${retryInSeconds(retryAt, now)} s`
+          ? `Can't reach your Mac. Is it awake, with Zode open? Next try in ${retryInSeconds(retryAt, now)} s`
           : "Reconnecting…"}
       </Text>
       {showRetry ? (
