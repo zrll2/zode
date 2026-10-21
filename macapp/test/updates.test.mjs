@@ -1,10 +1,11 @@
-// updates: version parsing and comparison, the update decision, and the rebuild script's quoting and steps.
+// updates: version parsing and comparison, the update decision, the rebuild script's quoting and steps,
+// and the release check against scripts/update-zcode.sh --check.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { compareVersions, readVersion, updateState, rebuildScript } from '../lib/updates.mjs';
+import { compareVersions, readVersion, updateState, rebuildScript, parseCheckOutput, checkRelease } from '../lib/updates.mjs';
 
 const tmp = () => fs.mkdtempSync(path.join('/tmp', 'zode-updates-'));
 const plist = v => `<?xml version="1.0" encoding="UTF-8"?>
@@ -112,4 +113,74 @@ test('rebuildScript: waits for the pid, builds into a temp app, swaps only after
   assert.ok(s.indexOf('mv "$TMP/Zode.app" "$APP"') < s.indexOf('open "$APP"'));
   assert.equal(s.includes('/Applications/ZCode.app'), false);        // the original is never named, let alone touched
   assert.equal(s.includes('rm -rf "$APP"\n'), false);                 // the old app goes only via the .old swap
+});
+
+const CHECK_LINE = '{"installed":"3.15.3","latest":"3.16.2","available":true,"zode":"3.15.3"}';
+const CHECK_PARSED = { installed: '3.15.3', latest: '3.16.2', available: true, zode: '3.15.3' };
+
+test('parseCheckOutput: the one JSON line the script prints', () => {
+  assert.deepEqual(parseCheckOutput(CHECK_LINE), CHECK_PARSED);
+  assert.deepEqual(parseCheckOutput(`\n  \t${CHECK_LINE}\n\n`), CHECK_PARSED);   // extra whitespace/newlines
+  assert.deepEqual(parseCheckOutput(CHECK_LINE.replace('"available":true', '"available":false')),
+    { ...CHECK_PARSED, available: false });
+  // null is a valid value (the script prints null when an app is missing or has no version)
+  assert.deepEqual(parseCheckOutput('{"installed":null,"latest":"3.16.2","available":false,"zode":null}'),
+    { installed: null, latest: '3.16.2', available: false, zode: null });
+});
+
+test('parseCheckOutput: anything else is null, never a throw', () => {
+  assert.equal(parseCheckOutput('{"installed":"1","latest":"2","available":"yes","zode":null}'), null);  // not a boolean
+  assert.equal(parseCheckOutput('not json at all'), null);
+  assert.equal(parseCheckOutput(''), null);
+  assert.equal(parseCheckOutput('   \n'), null);
+  assert.equal(parseCheckOutput('{}'), null);                         // missing fields
+  assert.equal(parseCheckOutput('{"installed":"1","latest":"2","available":true}'), null);
+  assert.equal(parseCheckOutput('{"installed":1,"latest":"2","available":true,"zode":null}'), null);  // wrong type
+  assert.equal(parseCheckOutput('error: could not fetch the release manifest\nsecond line'), null);
+  assert.equal(parseCheckOutput(`${CHECK_LINE} trailing junk`), null);
+  assert.equal(parseCheckOutput(undefined), null);
+  assert.equal(parseCheckOutput(null), null);
+  assert.equal(parseCheckOutput(42), null);
+});
+
+test('checkRelease: runs bash on the script with --check, a 30 s timeout, and the env', async () => {
+  const calls = [];
+  const execFile = (file, args, opts, cb) => {
+    calls.push({ file, args, opts });
+    cb(null, `${CHECK_LINE}\n`, '');
+  };
+  const env = { ZCODE_APP: '/Applications/ZCode.app', ZODE_APP: '/Applications/Zode.app' };
+  assert.deepEqual(await checkRelease({ repo: '/repo', env, execFile }), CHECK_PARSED);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].file, '/bin/bash');
+  assert.deepEqual(calls[0].args, ['/repo/scripts/update-zcode.sh', '--check']);
+  assert.equal(calls[0].opts.timeout, 30000);
+  assert.deepEqual(calls[0].opts.env, env);
+});
+
+test('checkRelease: script failure (exit 3, no manifest) resolves null', async () => {
+  const err = Object.assign(new Error('exit code 3'), { code: 3 });
+  const execFile = (f, a, o, cb) => cb(err, '', 'error: could not fetch the release manifest');
+  assert.equal(await checkRelease({ repo: '/repo', execFile }), null);
+});
+
+test('checkRelease: timeout or a throwing execFile resolves null', async () => {
+  const killed = (f, a, o, cb) => cb(Object.assign(new Error('command timed out'), { killed: true, timedOut: true }));
+  assert.equal(await checkRelease({ repo: '/repo', execFile: killed }), null);
+  const throws = () => { throw new Error('spawn ENOENT'); };
+  assert.equal(await checkRelease({ repo: '/repo', execFile: throws }), null);
+});
+
+test('checkRelease: malformed output resolves null', async () => {
+  const execFile = (f, a, o, cb) => cb(null, 'garbage, no json', '');
+  assert.equal(await checkRelease({ repo: '/repo', execFile }), null);
+});
+
+test('checkRelease: no repo resolves null without running anything', async () => {
+  let called = 0;
+  const execFile = () => { called += 1; };
+  assert.equal(await checkRelease({ repo: null, execFile }), null);
+  assert.equal(await checkRelease({ repo: '', execFile }), null);
+  assert.equal(await checkRelease({}, execFile), null);
+  assert.equal(called, 0);
 });

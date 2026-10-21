@@ -117,7 +117,7 @@ flowchart LR
 
 **支持 Windows 或 Linux 吗？** 暂时不支持，目前只在 macOS 上构建和测试。
 
-**ZCode 更新后怎么办？** 先退出 Zode.app（两者共用同一个数据目录，Zode.app 运行时原版 ZCode 一打开就会退出，Finder 会提示「ZCode 已不再打开」），再像平时一样更新原来的 ZCode.app；Zode.app 自己的更新器是故意关掉的，因为它无法覆盖安装一个重新签名过的副本。原应用更新后，Zode 的菜单栏会出现 **Rebuild Zode…**（重建 Zode），点一下即可；或者重新运行 `./zode install`。
+**ZCode 更新后怎么办？** 无需手动操作：新版本发布后约 6 小时内，Zode 的菜单栏会出现 **ZCode x.y.z is available. Update ZCode and rebuild Zode…**——点一下、确认，Zode 会退出、更新原版 ZCode、重建自身并自动重新打开；也可以在终端里运行 `./zode update-zcode`。老办法 `./zode install` 依然可用。
 
 ## 文档
 

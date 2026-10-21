@@ -1,6 +1,8 @@
 // Updates for Zode.app. ZCode's own updater is off in the copy (see boot.cjs); instead the original
 // ZCode.app is compared with the running copy and, when the original is newer, the copy is rebuilt
-// from it by a detached shell script. Pure helpers: fs reads and plutil only, nothing here throws.
+// from it by a detached shell script, and checkRelease asks the official manifest whether a newer
+// release exists online (the menu then offers to run scripts/update-zcode.sh). Pure helpers: fs
+// reads and plutil only, nothing here throws.
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
@@ -102,4 +104,43 @@ rm -rf "$APP.old" "$TMP"
 echo "$(date '+%F %T') rebuilt $APP; reopening"
 open "$APP"
 `;
+}
+
+// parseCheckOutput: the one JSON line `scripts/update-zcode.sh --check` prints, as
+// { installed, latest, available, zode } with strings or null and a strict boolean. Anything else
+// (garbage, wrong shape, an error message) is null. Pure and total: never throws.
+export function parseCheckOutput(text) {
+  try {
+    if (typeof text !== 'string') return null;
+    const lines = text.split('\n').map(l => l.trim()).filter(l => l !== '');
+    if (lines.length !== 1 || !lines[0].startsWith('{') || !lines[0].endsWith('}')) return null;
+    const raw = JSON.parse(lines[0]);
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null;
+    if (typeof raw.available !== 'boolean') return null;
+    const field = key => {
+      const v = raw[key];
+      if (v === null) return null;
+      return typeof v === 'string' && v.trim() ? v.trim() : undefined;
+    };
+    const installed = field('installed'), latest = field('latest'), zode = field('zode');
+    if (installed === undefined || latest === undefined || zode === undefined) return null;
+    return { installed, latest, available: raw.available, zode };
+  } catch { return null; }
+}
+
+// checkRelease: run `<repo>/scripts/update-zcode.sh --check` (30 s timeout) and parse its output.
+// Resolves to the parsed object, or null when there is no repo, the script fails (exit 3: no
+// network or an unparsable manifest), times out, or prints nothing usable. Never rejects.
+// execFile is injectable for tests; env carries ZCODE_APP and ZODE_APP for the script.
+export function checkRelease({ repo, env, execFile: run = execFile } = {}) {
+  return new Promise(resolve => {
+    try {
+      if (typeof repo !== 'string' || !repo) return resolve(null);
+      const script = path.join(repo, 'scripts', 'update-zcode.sh');
+      run('/bin/bash', [script, '--check'], { timeout: 30000, env }, (err, stdout) => {
+        if (err) return resolve(null);
+        resolve(parseCheckOutput(String(stdout ?? '')));
+      });
+    } catch { resolve(null); }
+  });
 }

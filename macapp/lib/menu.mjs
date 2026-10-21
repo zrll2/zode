@@ -10,8 +10,20 @@ export function buildMenuTemplate(state, actions) {
   else line = 'Relay stopped';
   const addresses = state.addresses ?? [];
   const update = state.update;                                     // { available, originalVersion, runningVersion }
+  const release = state.release;                                   // { available, latest, installed } from the release check
   return [
-    ...(update?.available ? [
+    // A newer release online: one click runs scripts/update-zcode.sh, which includes the rebuild,
+    // so the plain rebuild item is not shown next to it.
+    ...(release?.available ? [
+      {
+        label: release.latest
+          ? `ZCode ${release.latest} is available. Update ZCode and rebuild Zode…`
+          : 'A new ZCode is available. Update ZCode and rebuild Zode…',
+        click: () => actions.updateZcode(),
+      },
+      { type: 'separator' },
+    ] : []),
+    ...(update?.available && !release?.available ? [
       { label: `ZCode ${update.originalVersion} is installed. Rebuild Zode…`, click: () => actions.rebuild() },
       { type: 'separator' },
     ] : []),

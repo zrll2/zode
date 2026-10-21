@@ -14,6 +14,7 @@ const actions = {
   showZCode: () => calls.push('showZCode'),
   about: () => calls.push('about'),
   rebuild: () => calls.push('rebuild'),
+  updateZcode: () => calls.push('updateZcode'),
 };
 const addresses = [
   { id: 'tailscale', label: 'Tailscale (100.64.0.1)', ip: '100.64.0.1' },
@@ -99,4 +100,36 @@ test('rebuild item leads the menu only when an update is available', () => {
     assert.equal(JSON.stringify(u).includes('Rebuild Zode'), false);
     assert.equal(u.length, t.length - 2);
   }
+});
+
+test('release update item leads the menu; the rebuild item is hidden because the update includes it', () => {
+  const update = { available: true, originalVersion: '3.15.3', runningVersion: '3.15.2' };
+  const release = { available: true, latest: '3.16.2', installed: '3.15.3' };
+  const t = buildMenuTemplate(state({ update, release }), actions);
+  assert.equal(t[0].label, 'ZCode 3.16.2 is available. Update ZCode and rebuild Zode…');
+  assert.equal(t[1].type, 'separator');
+  assert.equal(t[2].label, 'Relay running · no phones paired');          // the usual menu follows unchanged
+  assert.equal(JSON.stringify(t).includes('Rebuild Zode'), false);
+  calls.length = 0;
+  t[0].click();
+  assert.deepEqual(calls, ['updateZcode']);
+});
+
+test('release item falls back to a generic label when the version is missing', () => {
+  const t = buildMenuTemplate(state({ release: { available: true, latest: null, installed: null } }), actions);
+  assert.equal(t[0].label, 'A new ZCode is available. Update ZCode and rebuild Zode…');
+  assert.equal(t[1].type, 'separator');
+});
+
+test('without an available release the menu is unchanged, and the rebuild item still appears', () => {
+  for (const s of [state(), state({ release: undefined }), state({ release: { available: false, latest: '3.16.2', installed: '3.15.3' } })]) {
+    const u = buildMenuTemplate(s, actions);
+    assert.equal(u[0].label, 'Relay running · no phones paired');
+    assert.equal(JSON.stringify(u).includes('Update ZCode and rebuild'), false);
+  }
+  const t = buildMenuTemplate(state({ update: { available: true, originalVersion: '3.16.2', runningVersion: '3.15.3' } }), actions);
+  assert.equal(t[0].label, 'ZCode 3.16.2 is installed. Rebuild Zode…');
+  calls.length = 0;
+  t[0].click();
+  assert.deepEqual(calls, ['rebuild']);
 });

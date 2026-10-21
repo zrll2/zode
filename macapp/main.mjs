@@ -10,14 +10,17 @@ import { createRelay } from '../relay/service.mjs';
 import { detectAddresses, defaultAddress } from './lib/addresses.mjs';
 import { loadSettings, saveSettings } from './lib/settings.mjs';
 import { buildMenuTemplate } from './lib/menu.mjs';
-import { updateState, rebuildScript } from './lib/updates.mjs';
+import { updateState, rebuildScript, checkRelease } from './lib/updates.mjs';
 
 const HOME = os.homedir();
 const SETTINGS_FILE = path.join(HOME, '.zode', 'settings.json');
 const LOG_FILE = path.join(HOME, '.zode', 'zode-app.log');
 const HOME_FILE = path.join(HOME, '.zode', 'home');                 // the Zode repo path, written by the installer
 const REBUILD_LOG = path.join(HOME, '.zode', 'rebuild.log');
+const UPDATE_LOG = path.join(HOME, '.zode', 'update.log');
 const UPDATE_CHECK_MS = 30 * 60 * 1000;
+const RELEASE_CHECK_DELAY_MS = 30 * 1000;             // after start; startup never waits on the network
+const RELEASE_CHECK_MS = 6 * 60 * 60 * 1000;
 
 const appendLog = (msg) => { try { fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true }); fs.appendFileSync(LOG_FILE, `${new Date().toISOString()} ${msg}\n`); } catch {} };
 const readRepoHome = () => { try { return fs.readFileSync(HOME_FILE, 'utf8').trim() || null; } catch { return null; } };
@@ -38,11 +41,15 @@ export async function startZode({ electron, resourcesDir } = {}) {
     let relay = null, tray = null, pairWindow = null, currentPairing = null, pairedCount = 0;
     let error = null;
     let quitting = false;
-    // ZCode's own updater is off in this copy (boot.cjs); when the original ZCode is newer, the menu offers a rebuild.
+    // ZCode's own updater is off in this copy (boot.cjs); when a newer release is online (release)
+    // or the original ZCode is newer (update), the menu offers to update, or to rebuild.
     const appPath = path.resolve(process.resourcesPath || path.join(res, '..'), '..', '..');   // this Zode.app bundle
     const originalApp = process.env.ZCODE_APP || '/Applications/ZCode.app';   // same default as scripts/build-tap.sh
     let update = { available: false, originalVersion: null, runningVersion: null };
     let updateCheck = null;
+    // A newer ZCode release online than the installed original, from scripts/update-zcode.sh --check.
+    let release = { available: false, latest: null, installed: null };
+    let releaseCheck = null;
 
     const chosen = () => addresses.find(a => a.id === settings.addressId) ?? defaultAddress(addresses);
     const publicUrlFor = a => `ws://${a.ip}:${settings.port}`;
@@ -87,6 +94,27 @@ export async function startZode({ electron, resourcesDir } = {}) {
       return updateCheck;
     }
 
+    // Is a newer ZCode release online than the installed original? scripts/update-zcode.sh --check
+    // answers in one JSON line (up to ~15 s of network). Run 30 s after start and then every 6
+    // hours, never twice at once; the tray click only ever reads the cached value.
+    function checkReleaseOnce() {
+      if (releaseCheck) return releaseCheck;
+      releaseCheck = checkRelease({ repo: readRepoHome(), env: { ...process.env, ZCODE_APP: originalApp, ZODE_APP: appPath } })
+        .then(next => {
+          if (next) {
+            const changed = ['available', 'latest', 'installed'].some(k => next[k] !== release[k]);
+            release = { available: next.available === true, latest: next.latest, installed: next.installed };
+            if (changed) {
+              appendLog(`zode: release check: latest ZCode release is ${release.latest ?? 'unknown'}${release.available ? `; installed original is ${release.installed ?? 'unknown'}; offering the update` : ''}`);
+              refresh();
+            }
+          }
+        })
+        .catch(err => appendLog(`zode: release check: ${err?.stack || err}`))
+        .finally(() => { releaseCheck = null; });
+      return releaseCheck;
+    }
+
     function menuState() {
       const devices = relay ? relay.listDevices() : [];
       return {
@@ -98,6 +126,7 @@ export async function startZode({ electron, resourcesDir } = {}) {
         addressId: chosen().id,
         launchAtLogin: settings.launchAtLogin,
         update,
+        release,
       };
     }
 
@@ -114,6 +143,18 @@ export async function startZode({ electron, resourcesDir } = {}) {
       try { pingPairWindow(); } catch (err) { appendLog(`zode: ${err?.stack || err}`); }
     }
 
+    // Both update paths need the Zode repo. Returns the repo path, or null after the shared error dialog.
+    async function requireRepo(purpose) {
+      const repo = readRepoHome();
+      if (repo && fs.existsSync(path.join(repo, 'scripts', 'build-tap.sh'))) return repo;
+      appendLog(`zode: ${purpose}: no usable repo path in ${HOME_FILE} (${repo ?? 'missing'})`);
+      await dialog.showMessageBox({
+        type: 'error', message: 'Zode cannot find its own repo.',
+        detail: `~/.zode/home should contain the path of the Zode repo${repo ? ` (it says ${repo}, which has no scripts/build-tap.sh)` : ''}. Run ./zode install in the Zode repo; that rebuilds the app as well.`,
+      });
+      return null;
+    }
+
     // Quit, rebuild Zode.app from the newer original ZCode, reopen. The work happens in a detached shell
     // (rebuildScript) because this process must be gone before the bundle can be replaced. Whether a ZCode
     // turn is in progress is not visible from here, so the dialog warns about it instead of refusing.
@@ -126,15 +167,8 @@ export async function startZode({ electron, resourcesDir } = {}) {
           detail: 'This takes about a minute. Unsaved work in ZCode sessions that are running will not continue. Continue?',
         });
         if (response !== 0) return;
-        const repo = readRepoHome();
-        if (!repo || !fs.existsSync(path.join(repo, 'scripts', 'build-tap.sh'))) {
-          appendLog(`zode: rebuild: no usable repo path in ${HOME_FILE} (${repo ?? 'missing'})`);
-          await dialog.showMessageBox({
-            type: 'error', message: 'Zode cannot find its own repo.',
-            detail: `~/.zode/home should contain the path of the Zode repo${repo ? ` (it says ${repo}, which has no scripts/build-tap.sh)` : ''}. Run ./zode install in the Zode repo; that rebuilds the app as well.`,
-          });
-          return;
-        }
+        const repo = await requireRepo('rebuild');
+        if (!repo) return;
         fs.mkdirSync(path.dirname(REBUILD_LOG), { recursive: true });
         const logFd = fs.openSync(REBUILD_LOG, 'a');
         const child = spawn('/bin/bash', ['-c', rebuildScript({ pid: process.pid, repo, appPath })], { detached: true, stdio: ['ignore', logFd, logFd] });
@@ -144,6 +178,32 @@ export async function startZode({ electron, resourcesDir } = {}) {
         appendLog(`zode: rebuilding from ZCode ${version} with ${repo}/scripts/build-tap.sh (log: ${REBUILD_LOG}); quitting`);
         app.quit();
       } catch (err) { appendLog(`zode: rebuild: ${err?.stack || err}`); }
+    }
+
+    // One click for the whole update: the detached scripts/update-zcode.sh quits both apps, swaps in
+    // the new original ZCode, rebuilds this copy from it and reopens Zode. --pid makes it wait for
+    // this process to be gone before touching anything.
+    async function updateZcode() {
+      try {
+        const latest = release.latest ?? 'a new version';
+        const { response } = await dialog.showMessageBox({
+          type: 'warning', buttons: ['Update', 'Cancel'], defaultId: 0, cancelId: 1,
+          message: `Update ZCode to ${latest}?`,
+          detail: 'Zode will quit, update the original ZCode (the same release ZCode would download), rebuild itself and reopen. This takes a few minutes. ZCode and any running ZCode tasks will stop. Continue?',
+        });
+        if (response !== 0) return;
+        const repo = await requireRepo('update');
+        if (!repo) return;
+        const script = path.join(repo, 'scripts', 'update-zcode.sh');
+        fs.mkdirSync(path.dirname(UPDATE_LOG), { recursive: true });
+        const logFd = fs.openSync(UPDATE_LOG, 'a');
+        const child = spawn('/bin/bash', [script, '--yes', '--pid', String(process.pid)], { detached: true, stdio: ['ignore', logFd, logFd], env: { ...process.env, ZCODE_APP: originalApp, ZODE_APP: appPath } });
+        child.on('error', err => appendLog(`zode: update: ${err?.stack || err}`));
+        child.unref();
+        fs.closeSync(logFd);
+        appendLog(`zode: updating ZCode to ${latest} with ${script} (log: ${UPDATE_LOG}); quitting`);
+        app.quit();
+      } catch (err) { appendLog(`zode: update: ${err?.stack || err}`); }
     }
 
     const actions = {
@@ -160,6 +220,7 @@ export async function startZode({ electron, resourcesDir } = {}) {
       },
       about: () => dialog.showMessageBox({ type: 'info', title: 'Zode', message: 'Zode', detail: 'Claude Code decides. ZCode writes. You watch from your phone.\n\nThe phone relay runs inside this app.' }),
       rebuild: () => rebuild(),
+      updateZcode: () => updateZcode(),
     };
 
     async function pairingView() {
@@ -207,6 +268,8 @@ export async function startZode({ electron, resourcesDir } = {}) {
 
     checkUpdate();
     setInterval(checkUpdate, UPDATE_CHECK_MS);
+    setTimeout(checkReleaseOnce, RELEASE_CHECK_DELAY_MS);
+    setInterval(checkReleaseOnce, RELEASE_CHECK_MS);
     await applyRelay();
   } catch (err) {
     appendLog(`zode: ${err?.stack || err}`);

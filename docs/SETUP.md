@@ -57,7 +57,9 @@ Only one ZCode can run at a time (they share one data folder). Use Zode.app for 
 
 One command updates everything: it downloads the official ZCode release (the same zip ZCode's own updater would use), checks its size, SHA-512 and developer signature, quits ZCode and Zode, swaps in the new original, rebuilds Zode.app from it and reopens Zode. `--check` only prints whether an update is available, and `--no-rebuild` leaves Zode.app alone. If the rebuild fails, the new ZCode is already in place and your old Zode.app is untouched — run `./zode install` (log: `~/.zode/update.log`).
 
-ZCode's own updater cannot do this job: it aborts while any copy of the app is still running, and in Zode.app it cannot install at all because that copy is re-signed — which is why its updater is switched off on purpose. (A menu bar item that runs the same update is coming.)
+ZCode's own updater cannot do this job: it aborts while any copy of the app is still running, and in Zode.app it cannot install at all because that copy is re-signed — which is why its updater is switched off on purpose.
+
+The easy way is the menu bar: within about 6 hours of a release, Zode shows **ZCode x.y.z is available. Update ZCode and rebuild Zode…** there. Click it, confirm, and Zode quits, runs the whole update and reopens by itself a few minutes later. `./zode update-zcode` is the same thing from a terminal.
 
 To keep ZCode's own update check in the copy anyway, start it with `ZODE_KEEP_UPDATER=1`.
 
