@@ -51,10 +51,10 @@ Only one ZCode can run at a time (they share one data folder). Use Zode.app for 
 
 ## Update
 
-Update the original ZCode.app as usual (its own updater works). The copy's updater is switched off on purpose: it cannot install over a re-signed app, so it would only download the update and fail. Once the original is newer than Zode.app, the Zode menu bar shows **ZCode x.y.z is installed. Rebuild Zode…**. Click it: Zode quits, rebuilds itself from the original and reopens, in about a minute (log in `~/.zode/rebuild.log`). The same by hand:
+**Quit Zode.app first** (Cmd+Q, and wait for running ZCode tasks to finish). ZCode allows one running copy at a time and Zode.app shares its data folder, so while Zode.app is open the original ZCode quits the moment you launch it (Finder says *The application "ZCode" is not open anymore*). Then open the original ZCode.app and update it as usual (its own updater works), and quit it again. The copy's updater is switched off on purpose: it cannot install over a re-signed app, so it would only download the update and fail. Then open Zode.app. Once the original is newer than Zode.app, the Zode menu bar shows **ZCode x.y.z is installed. Rebuild Zode…**. Click it: Zode quits, rebuilds itself from the original and reopens, in about a minute (log in `~/.zode/rebuild.log`). The same by hand:
 
 ```bash
-# quit Zode.app first
+# with Zode.app and the original ZCode both quit
 ./zode install
 ```
 

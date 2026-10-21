@@ -133,7 +133,7 @@ Read [docs/SECURITY.md](docs/SECURITY.md) before you expose the relay beyond you
 
 **Windows or Linux?** Not yet. Zode is built and tested on macOS.
 
-**What happens when ZCode updates?** Update the original ZCode.app as usual; Zode.app's own updater is switched off on purpose, because it cannot install over a re-signed copy. Once the original is newer, the Zode menu bar offers **Rebuild Zode…**. Or run `./zode install` again.
+**What happens when ZCode updates?** Quit Zode.app first (the original ZCode refuses to open while Zode.app runs, because they share one data folder), then update the original ZCode.app as usual; Zode.app's own updater is switched off on purpose, because it cannot install over a re-signed copy. Reopen Zode.app; once the original is newer, the Zode menu bar offers **Rebuild Zode…**. Or run `./zode install` again.
 
 ## Documentation
 
