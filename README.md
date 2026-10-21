@@ -102,7 +102,7 @@ flowchart LR
   &nbsp;
   <img src="docs/images/chat.png" width="230" alt="Chat">
   &nbsp;
-  <img src="docs/images/approval.png" width="230" alt="Approval">
+  <img src="docs/images/controls.png" width="230" alt="Model, attachments and permission level">
 </p>
 
 - **Home:** one card per project with a status light. **Needs you** first, then **Running**, then history by day. Archive a conversation with a swipe. Finished `#` work orders are hidden until you turn them on.
