@@ -52,14 +52,16 @@ Run the project's install, type check, tests, build, and the real app when the c
 ## 5. You do this yourself (mechanical, not feature code)
 Dependency version conflicts and lockfiles, tsconfig/tool config needed by new tool versions, deleting files, running migrations or builds, committing.
 
-## 6b. Clean up the conversations when the task is fully done
-Work orders leave one conversation per worktree in the ZCode sidebar and the phone list. After the work is merged (not before: a later fix order continues the same session):
+## 6b. Finish: remove the worktree and tidy the conversations
+Every task leaves a sibling folder (`<proj>-<task>-wt`), a `zcode/*` branch and one ZCode conversation per worktree. When the work is merged and the user has what they asked for, always finish the task (not before: a later fix order reuses the worktree and session):
 ```bash
-node __ZODE_HOME__/bridge/zcode-cleanup.mjs --worktree <wt> --dry-run   # see what it will touch
-node __ZODE_HOME__/bridge/zcode-cleanup.mjs --worktree <wt>              # archive: reversible, hidden from lists
-node __ZODE_HOME__/bridge/zcode-cleanup.mjs --worktree <wt> --purge      # delete for good (ask the user first; irreversible)
+node __ZODE_HOME__/bridge/zcode-finish.mjs --worktree <wt> --dry-run   # shows what it will do, or why it refuses
+node __ZODE_HOME__/bridge/zcode-finish.mjs --worktree <wt>              # archive sessions, remove the folder, delete the merged branch
 ```
-It edits the agent's own DB (`~/.zcode/cli/db/db.sqlite`, `session.time_archived`), because the agent protocol has no delete or archive command. It also forgets the saved `.zcode-session-*` id, so the next order starts a fresh conversation. Default to archive; purge only when the user asks.
+It refuses and removes nothing unless: the branch is merged into main/master, `git status` is clean (no uncommitted or untracked files), and no ZCode turn or `zcode-task` is still running for it. Fix what it names (merge, commit, wait) and run it again. `--force` skips only the "merged" check; use it only when the user says the branch can be thrown away. Never `rm -rf` a worktree by hand.
+- Session cleanup alone: `node __ZODE_HOME__/bridge/zcode-cleanup.mjs --worktree <wt>` archives (reversible, hidden from lists); `--purge` deletes for good (ask first).
+- Orders and event logs (`*.events.jsonl`, `*.out.json`) belong in a scratch folder outside the worktree and outside `~/Projects`; delete them when the task is finished.
+- Before you tell the user a task is done, run the finish command or say why it was not run.
 
 ## 6. Review and commit
 - Read `git diff`. Audit against the order, not just against green tests.
