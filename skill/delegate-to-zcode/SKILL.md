@@ -31,7 +31,7 @@ Use `order-template.md` (next to this file). Rules that decide quality:
 - State scope (files it may touch), forbidden changes, and the quality bar.
 - End with: `Reply with the single line: \`<name> done\`.` so the result is easy to read.
 - **Small orders, always.** Big orders make ZCode silent for 10 to 60 minutes (measured: worktree turns averaged 10 min, the worst ran 2 hours, with 38k to 50k output tokens). Split every feature into steps that each take ZCode about 5 minutes: at most 3 to 5 files and about 150 lines of change, one concern per order (for example: pure logic + its tests; then the UI that uses it; then docs). Send them one after another in the same session, verify each (tsc/tests) before sending the next. If an order needs more than one of "new module", "wire into UI", "docs", it is too big. Prefer 4 small orders over 1 big one: each turn end is a heartbeat.
-- **Reasoning level** (`--reasoning low|high|max`, default `high`): `low` for mechanical work (fix orders with exact errors, renames, tests from a spec, docs); `high` for normal feature code; `max` only for hard design or tricky debugging, and expect it to be slow.
+- **Reasoning level** (`--reasoning low|high|max`, default `low`): measured on the same small order (a 17-line function plus tests, identical working code): `low` took 19 s and 596 output tokens, `max` took 144 s and 6644 tokens. Orders are small, so `low` is the default. Use `high` when a step needs real design or touches unfamiliar code, `max` only for hard debugging, and expect it to be slow. If a `low` result is wrong, send the exact error back first; raise the level only if it keeps failing.
 
 ## 3. Send it and wait
 ```bash

@@ -17,7 +17,7 @@ const CLI = process.env.ZCODE_CLI || path.join(HERE, 'bin', 'zcode.cjs');
 const DEFAULT_MODEL = {
   providerId: process.env.ZCODE_PROVIDER_ID || 'account:zai-individual-coding-plan',
   modelId: process.env.ZCODE_MODEL_ID || 'GLM-5.3-Flash',
-  options: { reasoningLevel: process.env.ZCODE_REASONING || 'high' },   // low | high | max; max is slow, see skill
+  options: { reasoningLevel: process.env.ZCODE_REASONING || 'low' },   // low | high | max; max is slow, see skill
 };
 const ALLOWED_MODES = ['plan', 'edit', 'guarded'];
 
