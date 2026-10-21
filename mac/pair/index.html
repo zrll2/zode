@@ -1,0 +1,36 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'; img-src data:">
+  <title>Pair a phone</title>
+  <link rel="stylesheet" href="pair.css">
+</head>
+<body>
+  <h1>Pair a phone</h1>
+  <p class="muted">Open Zode on your phone, tap Scan QR code, and point it here.</p>
+
+  <div id="relayMessage" class="relay-message hidden"></div>
+
+  <div id="qrCard" class="qr-card">
+    <div id="qr" class="qr" role="img" aria-label="Pairing QR code"></div>
+  </div>
+
+  <div id="codeRow" class="code-row">
+    <span id="code" class="code">···· ····</span>
+    <span id="countdown" class="muted"></span>
+  </div>
+
+  <div class="buttons">
+    <button id="newCode">New code</button>
+    <button id="copy" class="primary">Copy pairing text</button>
+  </div>
+
+  <p id="relayLine" class="relay-line"></p>
+
+  <h2>Paired phones</h2>
+  <ul id="devices"></ul>
+
+  <script src="pair.js"></script>
+</body>
+</html>

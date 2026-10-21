@@ -1,0 +1,18 @@
+{
+  "name": "zode-mac",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/main.mjs",
+  "productName": "Zode",
+  "private": true,
+  "scripts": {
+    "build": "node build.mjs",
+    "start": "node build.mjs && electron dist",
+    "test": "node --test test/*.test.mjs"
+  },
+  "devDependencies": {
+    "electron": "45.0.0",
+    "esbuild": "^0.25.0",
+    "qrcode": "^1.5.4"
+  }
+}
