@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { readTapServers, listSessions, describeSession, summarize } from '../lib/sessions.mjs';
+import { readTapServers, listSessions, listPending, describeSession, summarize, summarizeRequest, respondPermission, stopSession, sendToSession, nudgeSession, NUDGE_MESSAGE } from '../lib/sessions.mjs';
 
 const NOW = 1_700_000_000_000;
 const min = 60 * 1000;
@@ -105,6 +105,7 @@ test('listSessions: asks every server the one question, merges and dedupes by se
   assert.equal(asks[0].timeoutMs, 50);
   assert.deepEqual(sessions.map(s => s.sessionId).sort(), ['s1', 's2']);
   assert.equal(sessions.find(s => s.sessionId === 's1').updatedAt, NOW);         // the freshest copy of the shared session won
+  assert.equal(sessions.find(s => s.sessionId === 's1').sock, '/a');             // and it remembers which socket it came from
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -141,4 +142,102 @@ test('summarize: caps at 16 lines and reports how many more', () => {
   const s = summarize(many, NOW);
   assert.equal(s.lines.length, 16);
   assert.equal(s.more, 4);
+});
+
+test('summarize: every line names its sessionId and the socket it came from', () => {
+  const s = summarize([session({ sessionId: 's1', sock: '/a' }), session({ sessionId: 's2', status: 'idle', updatedAt: NOW - min })], NOW);
+  assert.deepEqual(s.lines.map(l => [l.sessionId, l.sock]), [['s1', '/a'], ['s2', '']]);
+});
+
+test('summarizeRequest: Run/Edit text, the 80-character cap, and the risky patterns (only at high risk)', () => {
+  assert.deepEqual(summarizeRequest({ toolName: 'Bash', input: { command: 'git status' }, riskLevel: 'low' }),
+    { text: 'Run: git status', detail: 'Run: git status', risky: false });
+  assert.deepEqual(summarizeRequest({ toolName: 'Edit', input: { file_path: '/a/b/notes.md' }, riskLevel: 'medium' }),
+    { text: 'Edit: notes.md', detail: 'Edit: notes.md', risky: false });
+  assert.deepEqual(summarizeRequest({ toolName: 'WebFetch', input: { url: 'https://x' }, riskLevel: 'low' }),
+    { text: 'WebFetch', detail: 'WebFetch', risky: false });
+  const long = 'rm -rf ' + 'x'.repeat(200);
+  const cut = summarizeRequest({ toolName: 'Bash', input: { command: long }, riskLevel: 'high' });
+  assert.equal(cut.text.length, 80);                                            // never more than 80 chars
+  assert.ok(cut.text.endsWith('…') && cut.text.startsWith('Run: rm -rf'));
+  assert.equal(cut.detail, `Run: ${long}`);                                     // the dialog detail stays untruncated
+  assert.equal(cut.risky, true);
+  for (const bit of ['rm -rf', 'sudo', 'curl ', 'wget ', 'git push', 'npm publish', 'chmod', 'chown', 'dd ', 'mkfs', '> /dev/']) {
+    assert.equal(summarizeRequest({ toolName: 'Bash', input: { command: `${bit} something` }, riskLevel: 'high' }).risky, true, bit);
+  }
+  assert.equal(summarizeRequest({ toolName: 'Bash', input: { command: 'sudo ls' }, riskLevel: 'medium' }).risky, false);   // only high risk
+  assert.equal(summarizeRequest({ toolName: 'Bash', input: { command: 'curl.js run' }, riskLevel: 'high' }).risky, false); // 'curl ' needs the space
+  assert.equal(summarizeRequest({}).text, 'Permission request');
+  assert.equal(summarizeRequest(null).text, 'Permission request');
+});
+
+test('listPending: permissions and questions from every server, oldest first, sock remembered, failures ignored', async () => {
+  const dir = fs.mkdtempSync(path.join('/tmp', 'zode-sessions-'));
+  for (const [name, sock] of [['1.json', '/a'], ['2.json', '/b'], ['3.json', '/dead']]) {
+    fs.writeFileSync(path.join(dir, name), JSON.stringify({ pid: process.pid, sock, cwd: '/w' }));
+  }
+  const asks = [];
+  const connect = async (sock, request) => {
+    asks.push({ sock, request: JSON.parse(request) });
+    if (sock === '/dead') throw new Error('ECONNREFUSED');
+    if (sock === '/a') return [
+      { tapReply: true, id: 1, result: { pending: [
+        { id: 'server-2', method: 'interaction/requestUserInput', params: { sessionId: 'sq' }, at: 20 },           // a question, not a permission
+        { id: 'server-1', method: 'interaction/requestPermission', params: { sessionId: 's1', toolName: 'Bash', input: { command: 'sudo rm -rf /tmp/x' }, riskLevel: 'high' }, at: 10 },
+        { id: 'server-3', method: 'session/ping', params: {}, at: 5 },                                             // not a user request at all
+      ] } },
+    ];
+    return [{ tapReply: true, id: 1, result: { pending: [{ id: 'server-1', method: 'interaction/requestPermission', params: { sessionId: 's2', toolName: 'Edit', input: { file_path: '/w/main.mjs' }, riskLevel: 'low' }, at: 30 }] } }];
+  };
+  const pending = await listPending({ dir, timeoutMs: 50, connect });
+  assert.equal(asks.length, 3);
+  assert.deepEqual(asks[0].request, { id: 1, method: 'tap/pending', params: {} });
+  assert.deepEqual(pending.map(p => [p.requestId, p.kind, p.sock, p.sessionId]), [
+    ['server-1', 'permission', '/a', 's1'],     // oldest first, across servers
+    ['server-2', 'question', '/a', 'sq'],
+    ['server-1', 'permission', '/b', 's2'],     // request ids are per wrapper: the same id on two sockets is two requests
+  ]);
+  assert.deepEqual(pending[0], { requestId: 'server-1', sessionId: 's1', kind: 'permission', toolName: 'Bash', summary: 'Run: sudo rm -rf /tmp/x', detail: 'Run: sudo rm -rf /tmp/x', risky: true, sock: '/a' });
+  assert.deepEqual(pending[1], { requestId: 'server-2', sessionId: 'sq', kind: 'question', toolName: '', summary: '', detail: '', risky: false, sock: '/a' });
+  assert.equal(pending[2].summary, 'Edit: main.mjs');
+  assert.deepEqual(await listPending({ dir: '/tmp/zode-sessions-missing', timeoutMs: 20 }), []);   // no dir, never throws
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('respondPermission: one tap/respond line per decision; a late answer is just the error text', async () => {
+  const seen = [];
+  const connect = async (sock, request) => {
+    seen.push({ sock, request: JSON.parse(request) });
+    return [{ tapReply: true, id: 1, result: { ok: true } }];
+  };
+  assert.equal(await respondPermission({ sock: '/a', requestId: 'server-9', decision: 'allow', reason: 'Approved from the menu bar', connect }), null);
+  assert.deepEqual(seen, [{ sock: '/a', request: { id: 1, method: 'tap/respond', params: { id: 'server-9', result: { decision: 'allow', reason: 'Approved from the menu bar' } } } }]);
+  const answered = async () => [{ tapReply: true, id: 1, error: { code: -32010, message: 'not pending (already answered?)' } }];
+  assert.equal(await respondPermission({ sock: '/a', requestId: 'server-9', decision: 'deny', reason: 'Denied from the menu bar', connect: answered }),
+    'not pending (already answered?)');
+  assert.equal(await respondPermission({ sock: '', requestId: 'server-9', decision: 'deny', connect }), null);   // no socket, no throw
+});
+
+test('stopSession and sendToSession: the session methods, refusals surfaced, junk tolerated', async () => {
+  const seen = [];
+  const connect = async (sock, request) => { seen.push(JSON.parse(request)); return [{ tapReply: true, id: 1, result: {} }]; };
+  assert.equal(await stopSession({ sock: '/a', sessionId: 's1', connect }), null);
+  assert.equal(await sendToSession({ sock: '/a', sessionId: 's1', content: 'hi', connect }), null);
+  assert.deepEqual(seen, [
+    { id: 1, method: 'session/stop', params: { sessionId: 's1' } },
+    { id: 1, method: 'session/send', params: { sessionId: 's1', content: 'hi' } },
+  ]);
+  const refused = async () => [{ tapReply: true, id: 1, error: { code: -32000, message: 'no such session' } }];
+  assert.equal(await stopSession({ sock: '/a', sessionId: 's1', connect: refused }), 'no such session');
+  assert.equal(await sendToSession({ sock: '/a', sessionId: 's1', content: 'x', connect: async () => ['junk'] }), null);
+});
+
+test('nudgeSession: stop first, then the continue message, on the same socket', async () => {
+  const seen = [];
+  const connect = async (sock, request) => { seen.push([sock, JSON.parse(request)]); return [{ tapReply: true, id: 1, result: {} }]; };
+  assert.equal(await nudgeSession({ sock: '/x', sessionId: 's1', connect, waitMs: 1 }), null);
+  assert.deepEqual(seen, [
+    ['/x', { id: 1, method: 'session/stop', params: { sessionId: 's1' } }],
+    ['/x', { id: 1, method: 'session/send', params: { sessionId: 's1', content: NUDGE_MESSAGE } }],
+  ]);
 });

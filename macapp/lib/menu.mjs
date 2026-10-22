@@ -36,6 +36,45 @@ export function alignedLabels(lines, metrics) {
   return lines.map(l => `${l.project}${padTo(total - w(l).p - w(l).s, sp)}${l.status}`);
 }
 
+// The submenu for a conversation that needs the user: allow/deny per pending permission request
+// (state.work.pending, keyed by sessionId, oldest first), answer-in-ZCode for a question or when
+// nothing matches, nudge and stop for a stalled turn, try again for a failed one. Finished and
+// normally-running lines keep their plain click and get no submenu (null).
+function lineSubmenu(line, work, actions) {
+  if (line.done) return null;
+  const pending = (work.pending ?? {})[line.id] ?? [];
+  if (line.light === 'amber' && line.status === 'Waiting for you') {
+    const requests = pending.filter(p => p.kind === 'permission').slice(0, 3);     // oldest first, three at most
+    const question = pending.some(p => p.kind === 'question');
+    if (requests.length === 0) return [{ label: 'Answer in ZCode…', click: () => actions.showZCode() }];   // a question (or nothing we can answer): ZCode only
+    const items = [];
+    for (const r of requests) {
+      items.push(
+        { label: r.summary || r.toolName || 'Permission request', enabled: false },
+        { label: 'Allow once', click: () => actions.approve(r.requestId, r.sock, r.risky === true, r.summary) },
+        { label: 'Deny', click: () => actions.deny(r.requestId, r.sock) },
+      );
+    }
+    if (question) items.push({ label: 'Answer in ZCode…', click: () => actions.showZCode() });
+    items.push({ type: 'separator' }, { label: 'Show in ZCode', click: () => actions.showZCode() });
+    return items;
+  }
+  if (line.light === 'amber') {                                    // Quiet for N min: the turn may be stuck
+    return [
+      { label: 'Nudge (stop and continue)', click: () => actions.nudge(line.id, line.sock) },
+      { label: 'Stop', click: () => actions.stop(line.id, line.sock) },
+      { label: 'Show in ZCode', click: () => actions.showZCode() },
+    ];
+  }
+  if (line.light === 'red') {                                      // Failed: send the try-again message
+    return [
+      { label: 'Try again', click: () => actions.retry(line.id, line.sock) },
+      { label: 'Show in ZCode', click: () => actions.showZCode() },
+    ];
+  }
+  return null;
+}
+
 // The ZCode-now block for the top of the menu: a disabled header, one clickable line per conversation with its
 // status light (a green tick when finished), an optional "Finished (N)" submenu when the user folded them, a
 // +N more stub and a separator. Icons arrive as opaque values in state.icons, so this stays testable.
@@ -49,12 +88,16 @@ function workItems(state, actions) {
   const aligned = alignedLabels([HEADER, ...work.lines], work.metrics);
   const headerLabel = aligned[0];
   const labels = aligned.slice(1);
-  const entry = (line, i) => ({
-    id: line.id != null ? `work-${line.id}` : undefined,
-    label: labels[i],
-    icon: line.done ? (icons.tick ?? icons[line.light]) : icons[line.light],
-    click: () => actions.showZCode(),
-  });
+  const entry = (line, i) => {
+    const submenu = lineSubmenu(line, work, actions);
+    return {
+      id: line.id != null ? `work-${line.id}` : undefined,
+      label: labels[i],
+      icon: line.done ? (icons.tick ?? icons[line.light]) : icons[line.light],
+      ...(submenu ? { submenu } : {}),                 // the arrow appears on its own; the label stays as measured
+      click: () => actions.showZCode(),
+    };
+  };
   const rows = work.lines.map((line, i) => ({ line, item: entry(line, i) }));
   // Finished more than an hour ago folds into its own submenu by default; "Fold finished" folds every finished line.
   const folded = r => r.line.done && (fold || r.line.older);

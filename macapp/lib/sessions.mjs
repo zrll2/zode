@@ -28,9 +28,10 @@ export function readTapServers(dir = tapDir()) {
   return servers;
 }
 
-// Ask one unix socket the session/list question and collect every JSON line until it goes quiet or the
-// timeout passes. Desktop traffic is copied across these sockets too, so the caller picks its reply out.
-function defaultConnect(sockPath, request, timeoutMs) {
+// Ask one unix socket a question and collect every JSON line until the reply with the expected id
+// arrives, it goes quiet, or the timeout passes. Desktop traffic is copied across these sockets too,
+// so the caller matches on tapReply + id (default 1, the id every one-shot request here uses).
+function defaultConnect(sockPath, request, timeoutMs, replyId = 1) {
   return new Promise(resolve => {
     const lines = [];
     let buffer = '';
@@ -54,7 +55,7 @@ function defaultConnect(sockPath, request, timeoutMs) {
       for (let nl; (nl = buffer.indexOf('\n')) >= 0; buffer = buffer.slice(nl + 1)) {
         const line = buffer.slice(0, nl).trim();
         if (!line) continue;
-        try { const o = JSON.parse(line); lines.push(o); if (o && o.tapReply === true && o.id === 1) return finish(); } catch {}      // the answer is in: stop waiting
+        try { const o = JSON.parse(line); lines.push(o); if (o && o.tapReply === true && o.id === replyId) return finish(); } catch {}      // the answer is in: stop waiting
       }
     });
     socket.on('error', finish);
@@ -63,30 +64,138 @@ function defaultConnect(sockPath, request, timeoutMs) {
 }
 
 // Every live server asked in parallel, replies merged and deduped by sessionId (the same session can
-// come from several servers; the freshest copy wins). Resolves [] on any failure, never throws, and a
-// server that neither answers nor fails within timeoutMs is simply skipped.
+// come from several servers; the freshest copy wins, and it remembers which socket it came from, since
+// that is the socket its pending requests and its stop/send calls belong to). Resolves [] on any
+// failure, never throws, and a server that neither answers nor fails within timeoutMs is skipped.
 export async function listSessions({ dir = tapDir(), timeoutMs = 1500, connect = defaultConnect } = {}) {
   try {
     const servers = readTapServers(dir);
     if (servers.length === 0) return [];
-    const answers = await Promise.allSettled(servers.map(server =>
-      withDeadline(Promise.resolve().then(() => connect(server.sock, SESSION_REQUEST, timeoutMs)), timeoutMs)));
+    const answers = await Promise.allSettled(servers.map(async server => ({
+      server,
+      lines: await withDeadline(Promise.resolve().then(() => connect(server.sock, SESSION_REQUEST, timeoutMs)), timeoutMs),
+    })));
     const byId = new Map();
     for (const answer of answers) {
-      if (answer.status !== 'fulfilled' || !Array.isArray(answer.value)) continue;
-      for (const reply of answer.value) {
+      if (answer.status !== 'fulfilled' || !Array.isArray(answer.value.lines)) continue;
+      for (const reply of answer.value.lines) {
         if (!reply || typeof reply !== 'object' || reply.tapReply !== true || reply.id !== 1) continue;
         const sessions = reply.result?.sessions;
         if (!Array.isArray(sessions)) continue;
         for (const session of sessions) {
           if (!session || typeof session !== 'object' || session.sessionId == null) continue;
           const kept = byId.get(session.sessionId);
-          if (!kept || (Number(session.updatedAt) || 0) > (Number(kept.updatedAt) || 0)) byId.set(session.sessionId, session);
+          const at = Number(session.updatedAt) || 0;
+          if (!kept || at > kept.at) byId.set(session.sessionId, { at, session: { ...session, sock: answer.value.server.sock } });
         }
       }
     }
-    return [...byId.values()];
+    return [...byId.values()].map(kept => kept.session);
   } catch { return []; }
+}
+
+// One request over a fresh connection: send one line, take the tap reply that carries our id, close.
+// Returns the reply ({ result } or { error }) or null on any failure.
+async function ask(sock, method, params, timeoutMs = 1500, connect = defaultConnect) {
+  if (!sock || !method) return null;
+  try {
+    const lines = await withDeadline(
+      Promise.resolve().then(() => connect(sock, JSON.stringify({ id: 1, method, params }) + '\n', timeoutMs, 1)), timeoutMs);
+    for (const line of Array.isArray(lines) ? lines : []) {
+      if (line && typeof line === 'object' && line.tapReply === true && line.id === 1) return line;
+    }
+  } catch {}
+  return null;
+}
+
+// Commands that deserve a second look before an allow from the menu bar — but only when ZCode itself
+// flags the request as high risk.
+const RISKY_BITS = ['rm -rf', 'sudo', 'curl ', 'wget ', 'git push', 'npm publish', 'chmod', 'chown', 'dd ', 'mkfs', '> /dev/'];
+const clip = (str, max = 80) => { const s = String(str); return s.length <= max ? s : s.slice(0, max - 1) + '…'; };
+
+// "Run: <command>" / "Edit: <file name>" — the tool plus its key input, never more than 80 characters,
+// plus whether the confirmation dialog is needed before an allow. `detail` stays untruncated for it.
+export function summarizeRequest(params) {
+  const input = params?.input && typeof params.input === 'object' ? params.input : {};
+  const command = typeof input.command === 'string' ? input.command : '';
+  const filePath = typeof input.file_path === 'string' ? input.file_path : '';
+  const toolName = typeof params?.toolName === 'string' && params.toolName ? params.toolName : '';
+  let detail;
+  if (command) detail = `Run: ${command}`;
+  else if (filePath) detail = `Edit: ${filePath.split('/').filter(Boolean).pop() || filePath}`;
+  else detail = toolName || 'Permission request';
+  return {
+    text: clip(detail),
+    detail,
+    risky: params?.riskLevel === 'high' && RISKY_BITS.some(bit => command.includes(bit)),
+  };
+}
+
+// Every live server asked for its pending permission / user-input requests: oldest first, each
+// remembering which socket it came from. Never throws.
+export async function listPending({ dir = tapDir(), timeoutMs = 1500, connect = defaultConnect } = {}) {
+  try {
+    const servers = readTapServers(dir);
+    if (servers.length === 0) return [];
+    const answers = await Promise.allSettled(servers.map(async server => ({
+      server,
+      reply: await ask(server.sock, 'tap/pending', {}, timeoutMs, connect),
+    })));
+    const seen = new Set();
+    const requests = [];
+    for (const answer of answers) {
+      if (answer.status !== 'fulfilled') continue;
+      const { server, reply } = answer.value;
+      const pending = Array.isArray(reply?.result?.pending) ? reply.result.pending : [];
+      for (const entry of pending) {
+        if (!entry || typeof entry !== 'object' || entry.id == null) continue;
+        const key = `${server.sock}\u0000${entry.id}`;
+        if (seen.has(key)) continue;
+        const sessionId = entry.params && typeof entry.params === 'object' ? entry.params.sessionId : undefined;
+        if (sessionId == null) continue;
+        seen.add(key);
+        if (entry.method === 'interaction/requestPermission') {
+          const summarized = summarizeRequest(entry.params);
+          requests.push({
+            requestId: entry.id, sessionId, kind: 'permission',
+            toolName: typeof entry.params?.toolName === 'string' ? entry.params.toolName : '',
+            summary: summarized.text, detail: summarized.detail, risky: summarized.risky === true,
+            sock: server.sock, at: Number(entry.at) || 0,
+          });
+        } else if (entry.method === 'interaction/requestUserInput') {          // a question: never allow/deny
+          requests.push({ requestId: entry.id, sessionId, kind: 'question', toolName: '', summary: '', detail: '', risky: false, sock: server.sock, at: Number(entry.at) || 0 });
+        }
+      }
+    }
+    return requests.sort((a, b) => a.at - b.at).map(({ at, ...request }) => request);
+  } catch { return []; }
+}
+
+// Answer a pending permission request. The first answer wins — a late answer comes back as an error
+// and is just as fine — so this resolves to null (any fine outcome) or the server's refusal reason.
+export async function respondPermission({ sock, requestId, decision, reason, timeoutMs = 1500, connect = defaultConnect } = {}) {
+  const reply = await ask(sock, 'tap/respond', { id: requestId, result: { decision, ...(reason ? { reason } : {}) } }, timeoutMs, connect);
+  return reply?.error ? String(reply.error.message ?? 'refused') : null;
+}
+
+export async function stopSession({ sock, sessionId, timeoutMs = 1500, connect = defaultConnect } = {}) {
+  const reply = await ask(sock, 'session/stop', { sessionId }, timeoutMs, connect);
+  return reply?.error ? String(reply.error.message ?? 'refused') : null;
+}
+
+export async function sendToSession({ sock, sessionId, content, timeoutMs = 1500, connect = defaultConnect } = {}) {
+  const reply = await ask(sock, 'session/send', { sessionId, content }, timeoutMs, connect);
+  return reply?.error ? String(reply.error.message ?? 'refused') : null;
+}
+
+export const NUDGE_MESSAGE = 'You stopped responding. Continue the task from where you left off. If a command was refused, skip it and use file tools only; reply with the single line the order asked for when done.';
+export const RETRY_MESSAGE = 'The last attempt failed. Please try again from where you left off.';
+
+// Nudge a stalled turn: stop it, give the server a moment, then send the continue message.
+export async function nudgeSession({ sock, sessionId, timeoutMs = 1500, connect = defaultConnect, waitMs = 1500 } = {}) {
+  const stopped = await stopSession({ sock, sessionId, timeoutMs, connect });
+  await new Promise(resolve => { const t = setTimeout(resolve, waitMs); t.unref?.(); });
+  return await sendToSession({ sock, sessionId, content: NUDGE_MESSAGE, timeoutMs, connect }) ?? stopped;
 }
 
 // The per-server deadline on top of connect's own timeout, so a connect that never settles (tests, odd
@@ -143,6 +252,8 @@ export function summarize(sessions, now = Date.now()) {
     else if (session.status === 'running') counts.working += 1;
     rows.push({
       id: session.sessionId,
+      sessionId: session.sessionId,
+      sock: typeof session.sock === 'string' ? session.sock : '',
       group: described.light === 'red' ? 0 : described.light === 'amber' ? 1 : session.status === 'running' ? 2 : 3,
       at: Number(session.updatedAt) || 0,
       project: projectName(session),
@@ -154,7 +265,7 @@ export function summarize(sessions, now = Date.now()) {
   }
   rows.sort((a, b) => a.group - b.group || b.at - a.at);
   return {
-    lines: rows.slice(0, MAX_LINES).map(({ id, project, status, done, older, light }) => ({ id, project, status, done, older, light })),
+    lines: rows.slice(0, MAX_LINES).map(({ id, sessionId, sock, project, status, done, older, light }) => ({ id, sessionId, sock, project, status, done, older, light })),
     more: Math.max(0, rows.length - MAX_LINES),
     finished: rows.filter(r => r.done).length,
     counts,
