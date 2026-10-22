@@ -22,11 +22,11 @@ test('describeSession: every rule, with a fixed now', () => {
   assert.deepEqual(describeSession(session({ updatedAt: NOW - 5 * min }), NOW), { light: 'green', text: 'Working' });     // 5 min exactly still counts as working
   assert.deepEqual(describeSession(session({ updatedAt: NOW - 5 * min - 1 }), NOW), { light: 'amber', text: 'Quiet for 5 min' });
   assert.deepEqual(describeSession(session({ updatedAt: NOW - 47 * min }), NOW), { light: 'amber', text: 'Quiet for 47 min' });
-  assert.deepEqual(describeSession(session({ status: 'idle', updatedAt: NOW - 30 * 1000 }), NOW), { light: 'green', text: 'Just now', done: true });
-  assert.deepEqual(describeSession(session({ status: 'idle', updatedAt: NOW - 90 * 1000 }), NOW), { light: 'green', text: '1 min ago', done: true });
-  assert.deepEqual(describeSession(session({ status: 'idle', updatedAt: NOW - 20 * min }), NOW), { light: 'green', text: '20 min ago', done: true });
-  assert.deepEqual(describeSession(session({ status: 'idle', updatedAt: NOW - 61 * min }), NOW), { light: 'green', text: '1 h ago', done: true });
-  assert.deepEqual(describeSession(session({ status: 'idle', updatedAt: NOW - 179 * min }), NOW), { light: 'green', text: '2 h ago', done: true });
+  assert.deepEqual(describeSession(session({ status: 'idle', updatedAt: NOW - 30 * 1000 }), NOW), { light: 'green', text: 'Just now', done: true, older: false });
+  assert.deepEqual(describeSession(session({ status: 'idle', updatedAt: NOW - 90 * 1000 }), NOW), { light: 'green', text: '1 min ago', done: true, older: false });
+  assert.deepEqual(describeSession(session({ status: 'idle', updatedAt: NOW - 20 * min }), NOW), { light: 'green', text: '20 min ago', done: true, older: false });
+  assert.deepEqual(describeSession(session({ status: 'idle', updatedAt: NOW - 61 * min }), NOW), { light: 'green', text: '1 h ago', done: true, older: true });
+  assert.deepEqual(describeSession(session({ status: 'idle', updatedAt: NOW - 179 * min }), NOW), { light: 'green', text: '2 h ago', done: true, older: true });
   assert.equal(describeSession(session({ status: 'idle', updatedAt: NOW - 180 * min - 1 }), NOW), null);                  // finished too long ago
   assert.equal(describeSession(session({ status: 'paused' }), NOW), null);
   assert.equal(describeSession(session({ status: undefined }), NOW), null);

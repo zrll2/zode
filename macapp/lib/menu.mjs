@@ -50,7 +50,7 @@ function workItems(state, actions) {
   const icons = state.icons ?? {};
   const fold = state.foldFinished === true;
   // The header line carries a right-aligned "↻ Refresh" and is itself the button: it re-reads ZCode and reopens the menu.
-  const HEADER = { project: 'ZCode right now', status: '↻ Refresh', px: work.headerPx };
+  const HEADER = { project: 'ZCode right now', status: 'Refresh', px: work.headerPx };
   const aligned = alignedLabels([HEADER, ...work.lines], work.metrics);
   const headerLabel = aligned[0];
   const labels = aligned.slice(1);
@@ -61,10 +61,12 @@ function workItems(state, actions) {
     click: () => actions.showZCode(),
   });
   const rows = work.lines.map((line, i) => ({ line, item: entry(line, i) }));
-  const active = rows.filter(r => !(fold && r.line.done)).map(r => r.item);
-  const finished = fold ? rows.filter(r => r.line.done).map(r => r.item) : [];
+  // Finished more than an hour ago folds into its own submenu by default; "Fold finished" folds every finished line.
+  const folded = r => r.line.done && (fold || r.line.older);
+  const active = rows.filter(r => !folded(r)).map(r => r.item);
+  const tucked = rows.filter(folded).map(r => r.item);
   const items = [{ label: headerLabel, click: () => actions.refreshWork?.() }, ...active];
-  if (finished.length) items.push({ label: `Finished (${finished.length})`, submenu: finished });
+  if (tucked.length) items.push({ label: fold ? `Finished (${tucked.length})` : `Finished over an hour ago (${tucked.length})`, submenu: tucked });
   if (work.more > 0) items.push({ label: `+${work.more} more`, enabled: false });
   if (work.lines.some(l => l.done)) items.push({ label: 'Fold finished', type: 'checkbox', checked: fold, click: () => actions.toggleFoldFinished?.() });
   items.push({ type: 'separator' });

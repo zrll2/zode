@@ -116,10 +116,10 @@ export function describeSession(session, now = Date.now()) {
   }
   if (status === 'idle' && quiet <= 3 * 60 * MIN) {                                   // finished within the last 3 hours
     return quiet < MIN
-      ? { light: 'green', text: 'Just now', done: true }
+      ? { light: 'green', text: 'Just now', done: true, older: false }
       : quiet < 60 * MIN
-        ? { light: 'green', text: `${Math.floor(quiet / MIN)} min ago`, done: true }
-        : { light: 'green', text: `${Math.floor(quiet / (60 * MIN))} h ago`, done: true };
+        ? { light: 'green', text: `${Math.floor(quiet / MIN)} min ago`, done: true, older: false }
+        : { light: 'green', text: `${Math.floor(quiet / (60 * MIN))} h ago`, done: true, older: true };   // over an hour: the menu folds these by default
   }
   return null;
 }
@@ -148,12 +148,13 @@ export function summarize(sessions, now = Date.now()) {
       project: projectName(session),
       status: described.text,
       done: described.done === true,
+      older: described.older === true,
       light: described.light,
     });
   }
   rows.sort((a, b) => a.group - b.group || b.at - a.at);
   return {
-    lines: rows.slice(0, MAX_LINES).map(({ id, project, status, done, light }) => ({ id, project, status, done, light })),
+    lines: rows.slice(0, MAX_LINES).map(({ id, project, status, done, older, light }) => ({ id, project, status, done, older, light })),
     more: Math.max(0, rows.length - MAX_LINES),
     finished: rows.filter(r => r.done).length,
     counts,

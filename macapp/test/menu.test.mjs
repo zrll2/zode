@@ -151,7 +151,7 @@ test('work block: header, one clickable lit line per session, +N more, then the 
     more: 2,
   })), actions);
   const text = i => i.label.replace(/[\u2002\u2003\u2009]+/g, ' | ');         // the status sits in its own column, after wide spaces
-  assert.deepEqual(t.slice(0, 7).map(i => (i.label === undefined ? undefined : text(i))), ['ZCode right now | ↻ Refresh', 'web | Working', 'cli | Waiting for you', 'No workspace | Failed', 'docs | 3 min ago', '+2 more', 'Fold finished']);
+  assert.deepEqual(t.slice(0, 7).map(i => (i.label === undefined ? undefined : text(i))), ['ZCode right now | Refresh', 'web | Working', 'cli | Waiting for you', 'No workspace | Failed', 'docs | 3 min ago', '+2 more', 'Fold finished']);
   assert.notEqual(t[0].enabled, false);                 // the header is the refresh button
   calls.length = 0; t[0].click();
   assert.deepEqual(calls, ['refreshWork']);
@@ -228,4 +228,19 @@ test('alignedLabels with measured widths: every line has the same total width (r
   };
   const totals = rows.map((r, i) => widthOf(r, lines[i]));
   assert.ok(Math.max(...totals) - Math.min(...totals) <= 2.6);          // within one thin space
+});
+
+test('finished over an hour ago folds into its own submenu by default; recent finished stay inline', () => {
+  const lines = [
+    { id: 'a', project: 'web', status: 'Working', light: 'green', done: false, older: false },
+    { id: 'b', project: 'docs', status: '3 min ago', light: 'green', done: true, older: false },
+    { id: 'c', project: 'cli', status: '2 h ago', light: 'green', done: true, older: true },
+    { id: 'd', project: 'api', status: '1 h ago', light: 'green', done: true, older: true },
+  ];
+  const t = buildMenuTemplate(state(withWork({ lines })), actions);
+  assert.ok(t.some(i => /^docs/.test(i.label ?? '')));                                 // the 3 min old one stays inline
+  assert.equal(t.some(i => /^cli/.test(i.label ?? '')), false);                        // the 2 h old one does not
+  const sub = t.find(i => i.label === 'Finished over an hour ago (2)');
+  assert.equal(sub.submenu.length, 2);
+  assert.equal(sub.submenu[0].icon, icons.tick);
 });
