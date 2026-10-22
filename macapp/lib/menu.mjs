@@ -7,7 +7,7 @@ const HINT = 'Not encrypted. Use Tailscale away from home.';
 // Menus cannot right-align a second piece of text, so each line is padded with spaces until the whole line has
 // the same width: the status then ends at one right edge. Widths are measured in the real font by the app
 // (state.work.metrics) and fall back to a rough per-character estimate (em) in tests and before the first measure.
-const EM = '\u2003', EN = '\u2002', THIN = '\u2009';
+const NBSP = '\u00a0';                                               // a plain no-break space: the same glyph (and width) in the menu font and in the measuring canvas
 export function textWidth(str) {                                      // estimate, in em
   let w = 0;
   for (const ch of String(str)) {
@@ -21,14 +21,9 @@ export function textWidth(str) {                                      // estimat
   }
   return w;
 }
-const ESTIMATE = { em: 1, en: 0.5, thin: 0.2 };                      // space widths in the same unit
-export function padTo(width, sp = ESTIMATE) {                         // spaces totalling about `width`
-  let out = '';
-  let left = Math.max(0, width);
-  while (left >= sp.em) { out += EM; left -= sp.em; }
-  if (left >= sp.en) { out += EN; left -= sp.en; }
-  while (left >= sp.thin * 0.5) { out += THIN; left -= sp.thin; }
-  return out;
+const ESTIMATE = { space: 0.26 };                                     // width of one space in the same unit
+export function padTo(width, sp = ESTIMATE) {                         // as many spaces as come closest to `width`
+  return NBSP.repeat(Math.max(0, Math.round(width / sp.space)));
 }
 // "<project><spaces><status>" with every status ending at the same right edge.
 // lines[i].px = { project, status } (measured) when available; metrics = { em, en, thin, gap } in the same unit.
@@ -36,7 +31,7 @@ export function alignedLabels(lines, metrics) {
   const measured = !!metrics && lines.every(l => l.px && Number.isFinite(l.px.project) && Number.isFinite(l.px.status));
   const w = l => (measured ? { p: l.px.project, s: l.px.status } : { p: textWidth(l.project), s: textWidth(l.status) });
   const sp = measured ? metrics : ESTIMATE;
-  const gap = measured && Number.isFinite(metrics.gap) ? metrics.gap : 0.7;
+  const gap = measured && Number.isFinite(metrics.gap) ? metrics.gap : 0.5;
   const total = Math.max(0, ...lines.map(l => w(l).p + w(l).s)) + gap;
   return lines.map(l => `${l.project}${padTo(total - w(l).p - w(l).s, sp)}${l.status}`);
 }

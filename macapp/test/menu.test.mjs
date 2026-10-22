@@ -150,7 +150,7 @@ test('work block: header, one clickable lit line per session, +N more, then the 
     ],
     more: 2,
   })), actions);
-  const text = i => i.label.replace(/[\u2002\u2003\u2009]+/g, ' | ');         // the status sits in its own column, after wide spaces
+  const text = i => i.label.replace(/\u00a0+/g, ' | ');         // the status sits in its own column, after wide spaces
   assert.deepEqual(t.slice(0, 7).map(i => (i.label === undefined ? undefined : text(i))), ['ZCode right now | Refresh', 'web | Working', 'cli | Waiting for you', 'No workspace | Failed', 'docs | 3 min ago', '+2 more', 'Fold finished']);
   assert.notEqual(t[0].enabled, false);                 // the header is the refresh button
   calls.length = 0; t[0].click();
@@ -187,7 +187,7 @@ test('work block: nothing active, nothing added — the template looks exactly a
 test('alignedLabels: statuses start in one column, wider names get less padding', () => {
   const rows = alignedLabels([{ project: 'zode', status: 'Working' }, { project: 'onetrend-trade-anyway-wt', status: '8 min ago' }, { project: 'TikTok课程培训', status: 'Just now' }]);
   assert.ok(rows[0].startsWith('zode') && rows[0].endsWith('Working'));
-  const padLen = r => r.match(/[\u2002\u2003\u2009]+/)[0].length;
+  const padLen = r => r.match(/\u00a0+/)[0].length;
   assert.ok(padLen(rows[0]) > padLen(rows[1]));          // the short name is padded more than the longest one
   assert.equal(alignedLabels([]).length, 0);
   assert.ok(textWidth('TikTok课程培训') > textWidth('TikTok'));
@@ -219,15 +219,14 @@ test('alignedLabels with measured widths: every line has the same total width (r
     { project: 'onetrend-trade-anyway-wt', status: '8 min ago', px: { project: 150, status: 55 } },
     { project: 'bossy', status: 'Just now', px: { project: 36, status: 52 } },
   ];
-  const metrics = { em: 13, en: 6.5, thin: 2.6, gap: 26 };
+  const metrics = { space: 3.6, gap: 14 };
   const rows = alignedLabels(lines, metrics);
   const widthOf = (row, l) => {
-    const pad = row.match(/[\u2002\u2003\u2009]+/)[0];
-    const w = [...pad].reduce((a, c) => a + (c === '\u2003' ? 13 : c === '\u2002' ? 6.5 : 2.6), 0);
-    return l.px.project + w + l.px.status;
+    const pad = row.match(/\u00a0+/)[0];
+    return l.px.project + pad.length * 3.6 + l.px.status;
   };
   const totals = rows.map((r, i) => widthOf(r, lines[i]));
-  assert.ok(Math.max(...totals) - Math.min(...totals) <= 2.6);          // within one thin space
+  assert.ok(Math.max(...totals) - Math.min(...totals) <= 3.6);          // within one space
 });
 
 test('finished over an hour ago folds into its own submenu by default; recent finished stay inline', () => {

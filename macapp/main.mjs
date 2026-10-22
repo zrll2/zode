@@ -158,16 +158,17 @@ export async function startZode({ electron, resourcesDir } = {}) {
     async function withMeasures(summary) {
       const lines = summary.lines;
       if (!lines.length) return summary;
-      const spaces = ['\u2003', '\u2002', '\u2009'];
+      const spaces = ['\u00a0'];
       const w = await measureTexts([...spaces, ...lines.map(l => l.project), ...lines.map(l => l.status), 'ZCode right now', 'Refresh']);
+      const SPACES = spaces.length;
       if (!w) return summary;
-      const [em, en, thin] = w;
+      const [space] = w;
       const n = lines.length;
       return {
         ...summary,
-        metrics: { em, en, thin, gap: em * 0.5 },
-        headerPx: { project: w[3 + 2 * n], status: w[4 + 2 * n] },
-        lines: lines.map((l, i) => ({ ...l, px: { project: w[3 + i], status: w[3 + n + i] } })),
+        metrics: { space, gap: space * 4 },
+        headerPx: { project: w[SPACES + 2 * n], status: w[SPACES + 2 * n + 1] },
+        lines: lines.map((l, i) => ({ ...l, px: { project: w[SPACES + i], status: w[SPACES + n + i] } })),
       };
     }
 
