@@ -12,3 +12,4 @@ zcode.real.cjs
 *.asar
 .env
 .env.*
+mac/release/
