@@ -11,6 +11,7 @@ import { detectAddresses, defaultAddress } from './lib/addresses.mjs';
 import { loadSettings, saveSettings } from './lib/settings.mjs';
 import { buildMenuTemplate } from './lib/menu.mjs';
 import { updateState, rebuildScript, checkRelease } from './lib/updates.mjs';
+import { listSessions, readTapServers, summarize } from './lib/sessions.mjs';
 
 const HOME = os.homedir();
 const SETTINGS_FILE = path.join(HOME, '.zode', 'settings.json');
@@ -21,6 +22,8 @@ const UPDATE_LOG = path.join(HOME, '.zode', 'update.log');
 const UPDATE_CHECK_MS = 30 * 60 * 1000;
 const RELEASE_CHECK_DELAY_MS = 30 * 1000;             // after start; startup never waits on the network
 const RELEASE_CHECK_MS = 6 * 60 * 60 * 1000;
+const WORK_TIMEOUT_MS = 1500;                         // per tap socket, and the cap on the tray-click wait
+const WORK_POLL_MS = 30 * 1000;                       // background refresh while a ZCode server is live
 
 const appendLog = (msg) => { try { fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true }); fs.appendFileSync(LOG_FILE, `${new Date().toISOString()} ${msg}\n`); } catch {} };
 const readRepoHome = () => { try { return fs.readFileSync(HOME_FILE, 'utf8').trim() || null; } catch { return null; } };
@@ -36,6 +39,14 @@ export async function startZode({ electron, resourcesDir } = {}) {
     const { app, Tray, Menu, BrowserWindow, ipcMain, clipboard, dialog, nativeImage } = electron;
     await app.whenReady();
 
+    // Status lights for the ZCode-now lines at the top of the menu (plain PNGs, so they keep their color).
+    const dotIcons = {
+      green: nativeImage.createFromPath(path.join(res, 'dotGreen.png')),
+      amber: nativeImage.createFromPath(path.join(res, 'dotAmber.png')),
+      red: nativeImage.createFromPath(path.join(res, 'dotRed.png')),
+      grey: nativeImage.createFromPath(path.join(res, 'dotGrey.png')),
+    };
+
     let settings = loadSettings(SETTINGS_FILE);
     let addresses = detectAddresses();
     let relay = null, tray = null, pairWindow = null, currentPairing = null, pairedCount = 0;
@@ -50,6 +61,11 @@ export async function startZode({ electron, resourcesDir } = {}) {
     // A newer ZCode release online than the installed original, from scripts/update-zcode.sh --check.
     let release = { available: false, latest: null, installed: null };
     let releaseCheck = null;
+    // What ZCode is doing right now, read from the tap sockets; the menu only ever sees the cached value.
+    let work = { lines: [], more: 0, counts: { working: 0, waiting: 0, failed: 0 } };
+    let workActive = 0;                                // the active count last logged, so a change logs once
+    let workRefresh = null;
+    let workPoll = null;
 
     const chosen = () => addresses.find(a => a.id === settings.addressId) ?? defaultAddress(addresses);
     const publicUrlFor = a => `ws://${a.ip}:${settings.port}`;
@@ -115,6 +131,41 @@ export async function startZode({ electron, resourcesDir } = {}) {
       return releaseCheck;
     }
 
+    // "Zode: 2 working, 1 waiting" — the nonzero parts only, or plain "Zode" when nothing is active.
+    function workTooltip(counts) {
+      const parts = [];
+      if (counts.failed) parts.push(`${counts.failed} failed`);
+      if (counts.working) parts.push(`${counts.working} working`);
+      if (counts.waiting) parts.push(`${counts.waiting} waiting`);
+      return parts.length ? `Zode: ${parts.join(', ')}` : 'Zode';
+    }
+
+    // One shared listing across every live ZCode server (1.5 s per socket, never twice at once). The
+    // menu and the tooltip read only the cached `work`, so a slow refresh keeps the previous lines.
+    function refreshSessions() {
+      if (workRefresh) return workRefresh;
+      workRefresh = (async () => {
+        try {
+          work = summarize(await listSessions({ timeoutMs: WORK_TIMEOUT_MS }), Date.now());
+          const active = work.counts.working + work.counts.waiting + work.counts.failed;
+          if (active !== workActive) {
+            workActive = active;
+            appendLog(`zode: ${active} active ZCode ${active === 1 ? 'conversation' : 'conversations'}`);
+          }
+          try { tray?.setToolTip(workTooltip(work.counts)); } catch {}
+        } catch (err) { appendLog(`zode: sessions: ${err?.stack || err}`); }
+      })().finally(() => { workRefresh = null; });
+      return workRefresh;
+    }
+
+    // Fresh lines every 30 s while a ZCode server is live. A tick with none is one local readdir that
+    // touches no sockets, so nothing runs (and no server is asked) while ZCode is closed.
+    function pollSessions() {
+      if (workPoll) return;
+      workPoll = setInterval(() => { if (readTapServers().length > 0) refreshSessions(); }, WORK_POLL_MS);
+      workPoll.unref?.();
+    }
+
     function menuState() {
       const devices = relay ? relay.listDevices() : [];
       return {
@@ -127,6 +178,8 @@ export async function startZode({ electron, resourcesDir } = {}) {
         launchAtLogin: settings.launchAtLogin,
         update,
         release,
+        work,
+        icons: dotIcons,
       };
     }
 
@@ -256,11 +309,17 @@ export async function startZode({ electron, resourcesDir } = {}) {
     if (icon.isEmpty()) appendLog('zode: trayTemplate.png missing next to the bundle; no menu bar icon (use `./zode pair`).');
     else {
       tray = new Tray(icon); tray.setToolTip('Zode');
-      // The menu is built on click, after a version check, rather than set ahead of time: on macOS a preset
-      // context menu swallows the click event, so there would be no moment to re-check before it opens.
+      // The menu is built on click, after a version check and a session refresh, rather than set ahead
+      // of time: on macOS a preset context menu swallows the click event, so there would be no moment
+      // to re-check before it opens. Both checks together are capped at ~1.5 s; whatever has not landed
+      // by then is simply not in this menu yet and shows up on the next click.
       const popMenu = () => { try { tray.popUpContextMenu(Menu.buildFromTemplate(buildMenuTemplate(menuState(), actions))); } catch (err) { appendLog(`zode: ${err?.stack || err}`); } };
-      tray.on('click', () => { checkUpdate().then(popMenu, popMenu); });
-      tray.on('right-click', popMenu);
+      const popMenuWhenReady = () => {
+        const cap = new Promise(resolve => { const t = setTimeout(resolve, WORK_TIMEOUT_MS); t.unref?.(); });
+        Promise.race([Promise.allSettled([checkUpdate(), refreshSessions()]), cap]).then(popMenu, popMenu);
+      };
+      tray.on('click', popMenuWhenReady);
+      tray.on('right-click', popMenuWhenReady);
     }
 
     app.setLoginItemSettings({ openAtLogin: settings.launchAtLogin });
@@ -270,6 +329,8 @@ export async function startZode({ electron, resourcesDir } = {}) {
     setInterval(checkUpdate, UPDATE_CHECK_MS);
     setTimeout(checkReleaseOnce, RELEASE_CHECK_DELAY_MS);
     setInterval(checkReleaseOnce, RELEASE_CHECK_MS);
+    refreshSessions();
+    pollSessions();
     await applyRelay();
   } catch (err) {
     appendLog(`zode: ${err?.stack || err}`);

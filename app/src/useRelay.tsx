@@ -7,6 +7,7 @@ import React, {
   useRef,
   useState,
 } from "react";
+import { friendlyError } from "./friendlyError";
 import * as Linking from "expo-linking";
 import { RelayClient, type RelayStatus } from "./relay/client";
 import type { RelayMessage, RelayServer } from "./relay/protocol";
@@ -95,7 +96,7 @@ export function RelayProvider({ children }: { children: React.ReactNode }) {
     setDemo(false);
     setClient(next);
     next.connect().catch((e: any) => {
-      setLastError(e?.message ?? "Connection failed.");
+      setLastError(friendlyError(e));
     });
   }, []);
 

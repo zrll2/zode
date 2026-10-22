@@ -8,13 +8,21 @@ phone ──WebSocket──▶ relay (your Mac) ──local socket──▶ Zode
 
 ## Pair
 
-After `./zode install` the relay runs inside Zode.app — there is nothing to start.
+You need: your Mac awake, Zode open on it (a **Z** in the menu bar), and the phone on the same Wi-Fi (or Tailscale, see below).
 
-1. Click the **Zode icon in the menu bar** of your Mac.
-2. Choose **Pair a phone…**. A window shows a QR code and an 8 character code.
-3. In Zode on your phone, tap **Scan QR code** and point it here (or paste the pairing text). The phone gets its own token.
+1. On the Mac, click the **Z in the menu bar** and choose **Pair a phone…**. A window shows a QR code.
+2. In Zode on the phone, tap **Scan QR code** and point it at the window (or paste the pairing text under "Paste pairing text"). The phone gets its own key.
 
-The same menu shows whether the relay is running, which address it is reachable on, and the paired phones (`Revoke …` removes one). `Relay on` turns the relay off and on.
+The same menu shows whether the relay is running, which address it is reachable on, and the paired phones (`Revoke …` removes one). `Relay on` turns it off and on.
+
+### If the phone says it can't reach your Mac
+Check these in order:
+1. The Mac is awake (not asleep, lid open or a display attached) and Zode is open.
+2. The phone and the Mac are on the same Wi-Fi. Guest or "isolated" Wi-Fi networks block this.
+3. A VPN on the phone or Mac is off, or both use Tailscale.
+4. In the menu bar, **Reachable from** shows the address the phone should use. If it changed (new Wi-Fi), pair again.
+
+If a code stops working it has probably expired: choose **Pair a phone…** again for a new one.
 
 ## Reach your Mac from outside your home
 
@@ -59,11 +67,14 @@ The app and the terminal relay share `~/.zode/relay`, so a phone paired with one
 
 ## What the phone can do
 
-- List sessions, read history, send messages, stop a turn, start a new session (`plan` or `edit`).
-- Follow a running session live and catch up after a dropped connection.
+- See every conversation: needs-you and running at the top, then by day. Archive a conversation on the phone (a swipe).
+- Read the work live, send messages, stop a turn, start a new conversation.
+- Rename a conversation, change the model and the thinking level, and see usage.
+- Attach photos and documents (up to 8 MB each).
+- Choose how careful ZCode is: Plan (reads only), Edit (can change files) or Guarded (asks before each change).
 
-What it cannot do: `yolo` or `build` modes, change settings, or call any method outside the allow list in the relay.
+What it cannot do: `yolo` or `build` modes, change settings, or call anything outside the relay's allow list. Deleting a conversation is not possible from outside ZCode, so there is no delete button.
 
 ## Known limit
 
-Answering permission requests from the phone is not wired up yet. The approval sheet exists in the app, and the bridge can already answer requests, but the phone does not use it yet. Use `edit` mode, which does not ask.
+In Guarded mode ZCode asks before each change, and that question can only be answered in the ZCode window on the Mac for now. The phone shows the conversation as needing you; answering from the phone is not built yet. Use Edit mode if you want to work only from the phone.

@@ -49,7 +49,8 @@ outer: while (Date.now() < end) {
   if (Date.now() - lastBeat >= beatEvery) {                 // probe every 5 min: stderr line + <events>.heartbeat.json
     lastBeat = Date.now();
     const list = await tool('zcode_sessions', {}); const me = (list?.sessions ?? []).find(x => x.sessionId === sid);
-    const beat = { at: new Date().toISOString(), elapsed_min: Math.round((Date.now() - t0) / 60000), events: events.length, idle_s: w.idle_s, agent_status: me?.status ?? 'unknown', last: events.at(-1)?.m ?? null };
+    let changed = []; try { changed = execFileSync('git', ['-C', wt, 'status', '--porcelain'], { encoding: 'utf8' }).split('\n').filter(Boolean).map(l => l.slice(3)); } catch {}
+    const beat = { at: new Date().toISOString(), elapsed_min: Math.round((Date.now() - t0) / 60000), events: events.length, idle_s: w.idle_s, agent_status: me?.status ?? 'unknown', last: events.at(-1)?.m ?? null, changed_files: changed.length, changed: changed.slice(0, 8), approvals: approvals.length };
     console.error('[heartbeat] ' + JSON.stringify(beat));
     if (arg('events')) try { fs.writeFileSync(path.resolve(arg('events')).replace(/\.jsonl$/, '') + '.heartbeat.json', JSON.stringify(beat)); } catch {}
   }
