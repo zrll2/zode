@@ -36,7 +36,7 @@ export function alignedLabels(lines, metrics) {
   const measured = !!metrics && lines.every(l => l.px && Number.isFinite(l.px.project) && Number.isFinite(l.px.status));
   const w = l => (measured ? { p: l.px.project, s: l.px.status } : { p: textWidth(l.project), s: textWidth(l.status) });
   const sp = measured ? metrics : ESTIMATE;
-  const gap = measured && Number.isFinite(metrics.gap) ? metrics.gap : 2;
+  const gap = measured && Number.isFinite(metrics.gap) ? metrics.gap : 0.7;
   const total = Math.max(0, ...lines.map(l => w(l).p + w(l).s)) + gap;
   return lines.map(l => `${l.project}${padTo(total - w(l).p - w(l).s, sp)}${l.status}`);
 }

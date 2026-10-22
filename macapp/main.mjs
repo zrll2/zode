@@ -165,7 +165,7 @@ export async function startZode({ electron, resourcesDir } = {}) {
       const n = lines.length;
       return {
         ...summary,
-        metrics: { em, en, thin, gap: em * 2 },
+        metrics: { em, en, thin, gap: em * 0.7 },
         lines: lines.map((l, i) => ({ ...l, px: { project: w[3 + i], status: w[3 + n + i] } })),
       };
     }
