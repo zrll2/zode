@@ -102,7 +102,7 @@ test('work block: nothing active, nothing added — the template looks exactly a
 });
 
 test('alignedLabels: statuses start in one column, wider names get less padding', () => {
-  const rows = alignedLabels([{ project: 'zode', status: 'Working' }, { project: 'onetrend-trade-anyway-wt', status: '8 min ago' }, { project: 'TikTok课程培训', status: 'Just now' }]);
+  const rows = alignedLabels([{ project: 'zode', status: 'Working' }, { project: 'shop-api-wt', status: '8 min ago' }, { project: 'TikTok课程培训', status: 'Just now' }]);
   assert.ok(rows[0].startsWith('zode') && rows[0].endsWith('Working'));
   const padLen = r => r.match(/\u00a0+/)[0].length;
   assert.ok(padLen(rows[0]) > padLen(rows[1]));          // the short name is padded more than the longest one
@@ -133,8 +133,8 @@ test('fold finished: finished lines move into a Finished (N) submenu; unfolded s
 test('alignedLabels with measured widths: every line has the same total width (right edge)', () => {
   const lines = [
     { project: 'zode', status: 'Working', px: { project: 30, status: 50 } },
-    { project: 'onetrend-trade-anyway-wt', status: '8 min ago', px: { project: 150, status: 55 } },
-    { project: 'bossy', status: 'Just now', px: { project: 36, status: 52 } },
+    { project: 'shop-api-wt', status: '8 min ago', px: { project: 150, status: 55 } },
+    { project: 'billing', status: 'Just now', px: { project: 36, status: 52 } },
   ];
   const metrics = { space: 3.6, gap: 14 };
   const rows = alignedLabels(lines, metrics);
