@@ -133,3 +133,45 @@ test('without an available release the menu is unchanged, and the rebuild item s
   t[0].click();
   assert.deepEqual(calls, ['rebuild']);
 });
+
+// The ZCode-now block: what ZCode is doing right now, at the top of the menu.
+const icons = { green: { name: 'green' }, amber: { name: 'amber' }, red: { name: 'red' }, grey: { name: 'grey' } };
+const withWork = over => ({ icons, work: { lines: [], more: 0, ...over } });
+
+test('work block: header, one clickable lit line per session, +N more, then the usual menu', () => {
+  const t = buildMenuTemplate(state(withWork({
+    lines: [
+      { id: 'w1', label: 'web — Working', light: 'green' },
+      { id: 'w2', label: 'cli — Waiting for you', light: 'amber' },
+      { id: 'w3', label: 'Failed', light: 'red' },
+    ],
+    more: 2,
+  })), actions);
+  assert.deepEqual(t.slice(0, 6).map(i => i.label), ['ZCode right now', 'web — Working', 'cli — Waiting for you', 'Failed', '+2 more', undefined]);
+  assert.equal(t[0].enabled, false);
+  assert.equal(t[1].icon, icons.green);                 // the loaded nativeImages pass through untouched
+  assert.equal(t[2].icon, icons.amber);
+  assert.equal(t[3].icon, icons.red);
+  assert.equal(t[4].enabled, false);                    // the +N more stub is not clickable
+  assert.equal(t[5].type, 'separator');
+  assert.ok(t.slice(6).some(i => i.label === 'Relay running · no phones paired'));   // the usual menu follows
+  calls.length = 0;
+  t[1].click();
+  assert.deepEqual(calls, ['showZCode']);               // a line focuses the ZCode window
+});
+
+test('work block: lines without overflow get no +N stub', () => {
+  const t = buildMenuTemplate(state(withWork({ lines: [{ id: 'w1', label: 'zode — Working', light: 'green' }] })), actions);
+  assert.equal(t[2].type, 'separator');
+  assert.equal(t.some(i => typeof i.label === 'string' && i.label.startsWith('+')), false);
+});
+
+test('work block: nothing active, nothing added — the template looks exactly as before', () => {
+  const base = buildMenuTemplate(state(), actions);
+  assert.equal(base.some(i => i.label === 'ZCode right now'), false);
+  for (const s of [state({ work: { lines: [], more: 0 } }), state({ work: null }), state({ work: undefined }), state()]) {
+    const t = buildMenuTemplate(s, actions);
+    assert.equal(t.length, base.length);                              // no items added
+    assert.deepEqual(t.map(i => i.label), base.map(i => i.label));    // same labels in the same order
+  }
+});

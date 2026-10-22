@@ -1,6 +1,27 @@
 // The menu bar (tray) menu as plain template objects, so it can be built and tested without Electron.
 const HINT = 'Not encrypted. Use Tailscale away from home.';
 
+// The ZCode-now block for the top of the menu: a disabled header, one clickable line per active
+// conversation with its status light, a +N more stub, and a separator. The lights arrive as opaque
+// icon values in state.icons, so this stays testable without Electron.
+function workItems(state, actions) {
+  const work = state.work;
+  if (!work || !Array.isArray(work.lines) || work.lines.length === 0) return [];
+  const icons = state.icons ?? {};
+  const items = [{ label: 'ZCode right now', enabled: false }];
+  for (const line of work.lines) {
+    items.push({
+      id: line.id != null ? `work-${line.id}` : undefined,
+      label: line.label,
+      icon: icons[line.light],
+      click: () => actions.showZCode(),
+    });
+  }
+  if (work.more > 0) items.push({ label: `+${work.more} more`, enabled: false });
+  items.push({ type: 'separator' });
+  return items;
+}
+
 export function buildMenuTemplate(state, actions) {
   const devices = state.devices ?? [];
   const phones = state.phones ?? devices.length;
@@ -12,6 +33,8 @@ export function buildMenuTemplate(state, actions) {
   const update = state.update;                                     // { available, originalVersion, runningVersion }
   const release = state.release;                                   // { available, latest, installed } from the release check
   return [
+    // What ZCode is doing right now: one line per active conversation, red first.
+    ...workItems(state, actions),
     // A newer release online: one click runs scripts/update-zcode.sh, which includes the rebuild,
     // so the plain rebuild item is not shown next to it.
     ...(release?.available ? [
