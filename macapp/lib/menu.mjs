@@ -49,7 +49,11 @@ function workItems(state, actions) {
   if (!work || !Array.isArray(work.lines) || work.lines.length === 0) return [];
   const icons = state.icons ?? {};
   const fold = state.foldFinished === true;
-  const labels = alignedLabels(work.lines, work.metrics);
+  // The header line carries a right-aligned "↻ Refresh" and is itself the button: it re-reads ZCode and reopens the menu.
+  const HEADER = { project: 'ZCode right now', status: '↻ Refresh', px: work.headerPx };
+  const aligned = alignedLabels([HEADER, ...work.lines], work.metrics);
+  const headerLabel = aligned[0];
+  const labels = aligned.slice(1);
   const entry = (line, i) => ({
     id: line.id != null ? `work-${line.id}` : undefined,
     label: labels[i],
@@ -59,7 +63,7 @@ function workItems(state, actions) {
   const rows = work.lines.map((line, i) => ({ line, item: entry(line, i) }));
   const active = rows.filter(r => !(fold && r.line.done)).map(r => r.item);
   const finished = fold ? rows.filter(r => r.line.done).map(r => r.item) : [];
-  const items = [{ label: 'ZCode right now', enabled: false }, ...active];
+  const items = [{ label: headerLabel, click: () => actions.refreshWork?.() }, ...active];
   if (finished.length) items.push({ label: `Finished (${finished.length})`, submenu: finished });
   if (work.more > 0) items.push({ label: `+${work.more} more`, enabled: false });
   if (work.lines.some(l => l.done)) items.push({ label: 'Fold finished', type: 'checkbox', checked: fold, click: () => actions.toggleFoldFinished?.() });

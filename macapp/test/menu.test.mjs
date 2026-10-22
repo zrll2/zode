@@ -12,6 +12,7 @@ const actions = {
   selectAddress: (id) => calls.push('select:' + id),
   toggleLaunchAtLogin: () => calls.push('login'),
   toggleFoldFinished: () => calls.push('toggleFoldFinished'),
+  refreshWork: () => calls.push('refreshWork'),
   showZCode: () => calls.push('showZCode'),
   about: () => calls.push('about'),
   rebuild: () => calls.push('rebuild'),
@@ -150,8 +151,10 @@ test('work block: header, one clickable lit line per session, +N more, then the 
     more: 2,
   })), actions);
   const text = i => i.label.replace(/[\u2002\u2003\u2009]+/g, ' | ');         // the status sits in its own column, after wide spaces
-  assert.deepEqual(t.slice(0, 7).map(i => (i.label === undefined ? undefined : text(i))), ['ZCode right now', 'web | Working', 'cli | Waiting for you', 'No workspace | Failed', 'docs | 3 min ago', '+2 more', 'Fold finished']);
-  assert.equal(t[0].enabled, false);
+  assert.deepEqual(t.slice(0, 7).map(i => (i.label === undefined ? undefined : text(i))), ['ZCode right now | ↻ Refresh', 'web | Working', 'cli | Waiting for you', 'No workspace | Failed', 'docs | 3 min ago', '+2 more', 'Fold finished']);
+  assert.notEqual(t[0].enabled, false);                 // the header is the refresh button
+  calls.length = 0; t[0].click();
+  assert.deepEqual(calls, ['refreshWork']);
   assert.equal(t[1].icon, icons.green);                 // the loaded nativeImages pass through untouched
   assert.equal(t[2].icon, icons.amber);
   assert.equal(t[3].icon, icons.red);
