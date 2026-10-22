@@ -12,6 +12,8 @@ asar: true
 extraResources:                      # the "engine kit": what the setup wizard needs to build ZCode Engine.app
   - from: ../scripts/build-tap.sh
     to: engine-kit/scripts/build-tap.sh
+  - from: ../scripts/update-zcode.sh
+    to: engine-kit/scripts/update-zcode.sh
   - from: ../bridge/agent-wrapper.mjs
     to: engine-kit/bridge/agent-wrapper.mjs
 mac:

@@ -17,6 +17,8 @@ const actions = {
   openEngine: () => calls.push('openEngine'),
   about: () => calls.push('about'),
   quit: () => calls.push('quit'),
+  updateZcode: () => calls.push('updateZcode'),
+  rebuildEngine: () => calls.push('rebuildEngine'),
 };
 const addresses = [
   { id: 'tailscale', label: 'Tailscale (100.64.0.1)', ip: '100.64.0.1' },
@@ -41,16 +43,101 @@ test('a long error line is cut at 80 characters', () => {
   assert.ok(label.startsWith('Relay error: '));
 });
 
+// The ZCode-now block: what ZCode is doing right now, at the top of the menu.
+const icons = { green: { name: 'green' }, amber: { name: 'amber' }, red: { name: 'red' }, grey: { name: 'grey' } };
+const withWork = over => ({ icons, work: { lines: [], more: 0, ...over } });
+
+test('work block: header, one clickable lit line per session, +N more, then the usual menu', () => {
+  const t = buildMenuTemplate(state(withWork({
+    lines: [
+      { id: 'w1', label: 'web — Working', light: 'green' },
+      { id: 'w2', label: 'cli — Waiting for you', light: 'amber' },
+      { id: 'w3', label: 'Failed', light: 'red' },
+    ],
+    more: 2,
+  })), actions);
+  assert.deepEqual(t.slice(0, 6).map(i => i.label), ['ZCode right now', 'web — Working', 'cli — Waiting for you', 'Failed', '+2 more', undefined]);
+  assert.equal(t[0].enabled, false);
+  assert.equal(t[1].icon, icons.green);                 // the loaded nativeImages pass through untouched
+  assert.equal(t[2].icon, icons.amber);
+  assert.equal(t[3].icon, icons.red);
+  assert.equal(t[4].enabled, false);                    // the +N more stub is not clickable
+  assert.equal(t[5].type, 'separator');
+  assert.ok(t.slice(6).some(i => i.label === 'Relay running · no phones paired'));   // the usual menu follows
+  calls.length = 0;
+  t[1].click();
+  assert.deepEqual(calls, ['openEngine']);              // a line opens the Engine app
+});
+
+test('work block: lines without overflow get no +N stub', () => {
+  const t = buildMenuTemplate(state(withWork({ lines: [{ id: 'w1', label: 'zode — Working', light: 'green' }] })), actions);
+  assert.equal(t[2].type, 'separator');
+  assert.equal(t.some(i => typeof i.label === 'string' && i.label.startsWith('+')), false);
+});
+
+test('work block: nothing active, nothing added — the template looks exactly as before', () => {
+  const base = buildMenuTemplate(state(), actions);
+  assert.equal(base.some(i => i.label === 'ZCode right now'), false);
+  for (const s of [state({ work: { lines: [], more: 0 } }), state({ work: null }), state({ work: undefined }), state()]) {
+    const t = buildMenuTemplate(s, actions);
+    assert.equal(t.length, base.length);                              // no items added
+    assert.deepEqual(t.map(i => i.label), base.map(i => i.label));    // same labels in the same order
+  }
+});
+
+test('release update item leads the menu; the engine rebuild item is hidden because the update includes it', () => {
+  const update = { available: true, originalVersion: '3.15.3', engineVersion: '3.15.2' };
+  const release = { available: true, latest: '3.16.2', installed: '3.15.3' };
+  const t = buildMenuTemplate(state({ update, release }), actions);
+  assert.equal(t[0].label, 'ZCode 3.16.2 is available. Update ZCode…');
+  assert.equal(t[1].type, 'separator');
+  assert.equal(t[2].label, 'Relay running · no phones paired');          // the usual menu follows unchanged
+  assert.equal(JSON.stringify(t).includes('Rebuild the engine'), false);
+  calls.length = 0;
+  t[0].click();
+  assert.deepEqual(calls, ['updateZcode']);
+});
+
+test('release item falls back to a generic label when the version is missing', () => {
+  const t = buildMenuTemplate(state({ release: { available: true, latest: null, installed: null } }), actions);
+  assert.equal(t[0].label, 'A new ZCode is available. Update ZCode…');
+  assert.equal(t[1].type, 'separator');
+});
+
+test('the engine rebuild item appears only when the original is newer and no release is online', () => {
+  const update = { available: true, originalVersion: '3.16.2', engineVersion: '3.15.3' };
+  const t = buildMenuTemplate(state({ update }), actions);
+  assert.equal(t[0].label, 'ZCode 3.16.2 is installed. Rebuild the engine…');
+  assert.equal(t[1].type, 'separator');
+  assert.equal(t[2].label, 'Relay running · no phones paired');
+  calls.length = 0;
+  t[0].click();
+  assert.deepEqual(calls, ['rebuildEngine']);
+
+  for (const s of [state(), state({ update: undefined }), state({ update: { available: false, originalVersion: '3.15.3', engineVersion: '3.15.3' } })]) {
+    const u = buildMenuTemplate(s, actions);
+    assert.equal(u[0].label, 'Relay running · no phones paired');
+    assert.equal(JSON.stringify(u).includes('Rebuild the engine'), false);
+    assert.equal(u.length, t.length - 2);
+  }
+
+  const withRelease = buildMenuTemplate(state({ update, release: { available: true, latest: '3.16.2', installed: '3.15.3' } }), actions);
+  assert.equal(withRelease[0].label, 'ZCode 3.16.2 is available. Update ZCode…');
+  assert.equal(JSON.stringify(withRelease).includes('Rebuild the engine'), false);
+});
+
 test('the ZCode connection line follows tapAlive', () => {
   const t = buildMenuTemplate(state(), actions);
-  assert.equal(t[1].label, 'ZCode connected');
-  assert.equal(t[1].enabled, false);
+  const offset = t.findIndex(i => i.label === 'Relay running · no phones paired') + 1;
+  assert.equal(t[offset].label, 'ZCode connected');
+  assert.equal(t[offset].enabled, false);
   const waiting = buildMenuTemplate(state({ tapAlive: false }), actions);
-  assert.equal(waiting[1].label, 'Waiting for ZCode');
-  assert.equal(buildMenuTemplate(state({ tapAlive: undefined }), actions)[1].label, 'Waiting for ZCode');
+  assert.equal(waiting[offset].label, 'Waiting for ZCode');
+  assert.equal(buildMenuTemplate(state({ tapAlive: undefined }), actions)[offset].label, 'Waiting for ZCode');
 });
 
 test('pair item, paired phones submenu, relay checkbox', () => {
+  calls.length = 0;                                                 // earlier tests clicked their items too
   const devices = [{ id: 'dev1', name: 'iphone' }, { id: 'dev2', name: 'pixel' }];
   const t = buildMenuTemplate(state({ phones: 2, devices }), actions);
   byLabel(t, 'Pair a phone…').click();
@@ -120,7 +207,7 @@ test('the engine item opens the Engine when found, and is a disabled notice when
   }
 });
 
-test('about and quit; no update items and no old ZCode window item', () => {
+test('about and quit; no old update/rebuild wording, no old ZCode window item', () => {
   const t = buildMenuTemplate(state(), actions);
   byLabel(t, 'About Zode').click();
   byLabel(t, 'Quit Zode').click();
@@ -128,7 +215,7 @@ test('about and quit; no update items and no old ZCode window item', () => {
   assert.ok(calls.includes('quit'));
   assert.equal(t[t.length - 1].label, 'Quit Zode');
   const json = JSON.stringify(t);
-  assert.equal(json.includes('Rebuild'), false);
-  assert.equal(json.includes('Update'), false);
+  assert.equal(json.includes('Rebuild Zode'), false);              // the old app rebuilt itself; this one rebuilds the engine
+  assert.equal(json.includes('Update ZCode and rebuild'), false);
   assert.equal(json.includes('Open ZCode window'), false);
 });

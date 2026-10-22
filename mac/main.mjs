@@ -4,6 +4,7 @@
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
+import { spawn } from 'node:child_process';
 import { app, Tray, Menu, BrowserWindow, ipcMain, clipboard, dialog, nativeImage, shell, powerSaveBlocker } from 'electron';
 import QRCode from 'qrcode';
 import { createRelay } from '../relay/service.mjs';
@@ -12,13 +13,30 @@ import { loadSettings, saveSettings } from './lib/settings.mjs';
 import { buildMenuTemplate } from './lib/menu.mjs';
 import { setupSteps, parseBuildProgress, friendlySetupError, kitDir } from './lib/setup.mjs';
 import { isRunning, quitApp, tapAlive, findOriginal, findEngine, findOldIntegrated, runBuild } from './lib/system.mjs';
+import { readVersion, compareVersions, checkRelease, engineRebuildScript } from './lib/updates.mjs';
+import { listSessions, readTapServers, summarize } from './lib/sessions.mjs';
 
 const HOME = os.homedir();
 const SETTINGS_FILE = path.join(HOME, '.zode', 'settings.json');
 const LOG_FILE = path.join(HOME, '.zode', 'mac-app.log');
 const DOWNLOAD_URL = 'https://zcode.z.ai';
+const UPDATE_LOG = path.join(HOME, '.zode', 'update.log');
+const REBUILD_LOG = path.join(HOME, '.zode', 'rebuild.log');
+const UPDATE_CHECK_MS = 30 * 60 * 1000;
+const RELEASE_CHECK_DELAY_MS = 30 * 1000;             // after start; startup never waits on the network
+const RELEASE_CHECK_MS = 6 * 60 * 60 * 1000;
+const WORK_TIMEOUT_MS = 1500;                         // per tap socket, and the cap on the tray-click wait
+const WORK_POLL_MS = 30 * 1000;                       // background refresh while a ZCode server is live
 
 const appendLog = (msg) => { try { fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true }); fs.appendFileSync(LOG_FILE, `${new Date().toISOString()} ${msg}\n`); } catch {} };
+
+// The last non-empty line of a log file ('' when unreadable): what failed, in the script's own words.
+const lastLogLine = (file) => {
+  try {
+    const lines = fs.readFileSync(file, 'utf8').trimEnd().split('\n');
+    return (lines[lines.length - 1] ?? '').trim();
+  } catch { return ''; }
+};
 
 // A rejected promise from a menu click must not vanish silently (nor take the app down).
 process.on('unhandledRejection', err => appendLog(`zode: unhandled rejection: ${err?.stack || err}`));
@@ -46,6 +64,14 @@ async function start() {
   try {
     try { app.dock?.hide(); } catch (err) { appendLog(`zode: dock: ${err?.stack || err}`); }
 
+    // Status lights for the ZCode-now lines at the top of the menu (plain PNGs, so they keep their color).
+    const dotIcons = {
+      green: nativeImage.createFromPath(path.join(res, 'dotGreen.png')),
+      amber: nativeImage.createFromPath(path.join(res, 'dotAmber.png')),
+      red: nativeImage.createFromPath(path.join(res, 'dotRed.png')),
+      grey: nativeImage.createFromPath(path.join(res, 'dotGrey.png')),
+    };
+
     let settings = loadSettings(SETTINGS_FILE);
     let addresses = detectAddresses();
     let relay = null, tray = null, pairWindow = null, currentPairing = null, pairedCount = 0;
@@ -53,6 +79,20 @@ async function start() {
     let quitting = false;
     let enginePath = null;
     let tapUp = false;
+    const kit = kitDir({ packaged: app.isPackaged, resourcesPath: process.resourcesPath, devRoot: devRoot() });
+    // When the original ZCode is newer than the Engine copy (update), or a newer release is online
+    // (release), the menu offers to rebuild the Engine, or to update ZCode.
+    let originalPath = null;
+    let update = { available: false, originalVersion: null, engineVersion: null };
+    let updateCheck = null;
+    let release = { available: false, latest: null, installed: null };
+    let releaseCheck = null;
+    let updating = false;                              // one engine job (update or rebuild) at a time
+    // What ZCode is doing right now, read from the tap sockets; the menu only ever sees the cached value.
+    let work = { lines: [], more: 0, counts: { working: 0, waiting: 0, failed: 0 } };
+    let workActive = 0;                                // the active count last logged, so a change logs once
+    let workRefresh = null;
+    let workPoll = null;
 
     const chosen = () => addresses.find(a => a.id === settings.addressId) ?? defaultAddress(addresses);
     const publicUrlFor = a => `ws://${a.ip}:${settings.port}`;
@@ -65,6 +105,7 @@ async function start() {
     const startError = err => err?.code === 'EADDRINUSE'
       ? `port ${settings.port} is in use. Is the old Zode still running?`
       : (err?.message ?? String(err));
+    const say = opts => { try { dialog.showMessageBox(opts).catch(() => {}); } catch { /* never */ } };
 
     // (Re)create the relay from the current settings. A failed start keeps the app alive and shows in the menu.
     async function applyRelay() {
@@ -94,6 +135,84 @@ async function start() {
       } catch (err) { appendLog(`zode: keep awake: ${err?.stack || err}`); }
     }
 
+    // Is the original ZCode newer than the Engine copy? Two Info.plist reads, cheap enough to run on
+    // every tray click too. Shared while in flight.
+    function checkUpdate() {
+      if (updateCheck) return updateCheck;
+      updateCheck = (async () => {
+        try {
+          const [origV, engineV] = await Promise.all([
+            readVersion(originalPath),
+            enginePath ? readVersion(enginePath) : Promise.resolve(null),
+          ]);
+          const next = { available: !!(origV && engineV && compareVersions(origV, engineV) > 0), originalVersion: origV, engineVersion: engineV };
+          const changed = ['available', 'originalVersion', 'engineVersion'].some(k => next[k] !== update[k]);
+          update = next;
+          if (changed) {
+            appendLog(`zode: original ZCode is ${next.originalVersion ?? 'missing'}, the engine is ${next.engineVersion ?? 'missing'}${next.available ? '; offering a rebuild' : ''}`);
+            refresh();
+          }
+        } catch (err) { appendLog(`zode: update check: ${err?.stack || err}`); }
+      })().finally(() => { updateCheck = null; });
+      return updateCheck;
+    }
+
+    // Is a newer ZCode release online than the installed original? scripts/update-zcode.sh --check
+    // answers in one JSON line (up to ~15 s of network). Run 30 s after start and then every 6
+    // hours, never twice at once; the tray click only ever reads the cached value.
+    function checkReleaseOnce() {
+      if (releaseCheck) return releaseCheck;
+      releaseCheck = checkRelease({ repo: kit, env: { ...process.env, ZCODE_APP: originalPath, ZODE_APP: enginePath } })
+        .then(next => {
+          if (next) {
+            const changed = ['available', 'latest', 'installed'].some(k => next[k] !== release[k]);
+            release = { available: next.available === true, latest: next.latest, installed: next.installed };
+            if (changed) {
+              appendLog(`zode: release check: latest ZCode release is ${release.latest ?? 'unknown'}${release.available ? `; installed original is ${release.installed ?? 'unknown'}; offering the update` : ''}`);
+              refresh();
+            }
+          }
+        })
+        .catch(err => appendLog(`zode: release check: ${err?.stack || err}`))
+        .finally(() => { releaseCheck = null; });
+      return releaseCheck;
+    }
+
+    // "Zode: 2 working, 1 waiting" — the nonzero parts only, or plain "Zode" when nothing is active.
+    function workTooltip(counts) {
+      const parts = [];
+      if (counts.failed) parts.push(`${counts.failed} failed`);
+      if (counts.working) parts.push(`${counts.working} working`);
+      if (counts.waiting) parts.push(`${counts.waiting} waiting`);
+      return parts.length ? `Zode: ${parts.join(', ')}` : 'Zode';
+    }
+
+    // One shared listing across every live ZCode server (1.5 s per socket, never twice at once). The
+    // menu and the tooltip read only the cached `work`, so a slow refresh keeps the previous lines.
+    function refreshSessions() {
+      if (workRefresh) return workRefresh;
+      workRefresh = (async () => {
+        try {
+          work = summarize(await listSessions({ timeoutMs: WORK_TIMEOUT_MS }), Date.now());
+          const active = work.counts.working + work.counts.waiting + work.counts.failed;
+          if (active !== workActive) {
+            workActive = active;
+            appendLog(`zode: ${active} active ZCode ${active === 1 ? 'conversation' : 'conversations'}`);
+          }
+          try { tray?.setToolTip(workTooltip(work.counts)); } catch { /* no tray yet */ }
+        } catch (err) { appendLog(`zode: sessions: ${err?.stack || err}`); }
+      })().finally(() => { workRefresh = null; });
+      return workRefresh;
+    }
+
+    // Fresh lines every 30 s while a ZCode server is live. A tick with none is one local readdir that
+    // touches no sockets, so nothing runs (and no server is asked) while ZCode is closed.
+    function pollSessions() {
+      if (workPoll) return;
+      workPoll = setInterval(() => { if (readTapServers().length > 0) refreshSessions(); }, WORK_POLL_MS);
+      workPoll.unref?.();
+    }
+
     function menuState() {
       const devices = relay ? relay.listDevices() : [];
       return {
@@ -108,6 +227,10 @@ async function start() {
         setupDone: settings.setupDone,
         tapAlive: tapUp,
         engine: { path: enginePath },
+        update,
+        release,
+        work,
+        icons: dotIcons,
       };
     }
 
@@ -122,6 +245,101 @@ async function start() {
       if (devices.length > pairedCount) currentPairing = null;      // a phone just used the shown code
       pairedCount = devices.length;
       try { pingPairWindow(); } catch (err) { appendLog(`zode: ${err?.stack || err}`); }
+    }
+
+    // One click for the whole update: the detached scripts/update-zcode.sh updates the original ZCode,
+    // rebuilds the Engine from it and reopens the Engine. Zode itself is NOT quit and NOT restarted —
+    // its relay lives here now, not in the app being replaced — so there is no --pid and no quit.
+    async function updateZcode() {
+      try {
+        if (updating) return;
+        const latest = release.latest ?? 'a new version';
+        const { response } = await dialog.showMessageBox({
+          type: 'warning', buttons: ['Update', 'Cancel'], defaultId: 0, cancelId: 1,
+          message: `Update ZCode to ${latest}?`,
+          detail: 'Zode downloads the same release ZCode would, updates ZCode and rebuilds the Engine. This takes a few minutes, and any running ZCode tasks will stop. Zode itself stays running. Continue?',
+        });
+        if (response !== 0) return;
+        const engineTarget = enginePath || await findEngine().catch(() => null);
+        const script = path.join(kit, 'scripts', 'update-zcode.sh');
+        if (!fs.existsSync(script)) {
+          say({ type: 'error', message: 'Zode cannot find its updater.', detail: `Expected it at ${script}. Reinstall Zode, or run ./zode install in the Zode repo.` });
+          return;
+        }
+        updating = true;
+        fs.mkdirSync(path.dirname(UPDATE_LOG), { recursive: true });
+        const logFd = fs.openSync(UPDATE_LOG, 'a');
+        const child = spawn('/bin/bash', [script, '--yes'], { detached: true, stdio: ['ignore', logFd, logFd], env: { ...process.env, ZCODE_APP: originalPath, ZODE_APP: engineTarget, ZODE_ENGINE: '1' } });
+        child.on('error', err => appendLog(`zode: update: ${err?.stack || err}`));
+        child.unref();
+        fs.closeSync(logFd);
+        say({ type: 'info', message: 'Updating ZCode…', detail: 'This takes a few minutes. Zode stays running.' });
+        appendLog(`zode: updating ZCode to ${latest} with ${script} (log: ${UPDATE_LOG})`);
+        child.on('close', async code => {
+          updating = false;
+          try {
+            if (code === 0) {
+              enginePath = await findEngine().catch(() => null);
+              const newVersion = await readVersion(originalPath);
+              say({ type: 'info', message: `ZCode is now ${newVersion || release.latest || 'up to date'}`, detail: 'The Engine was rebuilt from it and reopened.' });
+              appendLog(`zode: update finished; ZCode is now ${newVersion ?? 'unknown'}`);
+              checkUpdate();
+              checkReleaseOnce();
+            } else {
+              const last = lastLogLine(UPDATE_LOG);
+              say({ type: 'error', message: 'Updating ZCode failed.', detail: `${last || 'No details were logged.'}\n\nFull log: ${UPDATE_LOG}` });
+              appendLog(`zode: update failed (exit ${code}); last log line: ${last}`);
+            }
+          } catch (err) { appendLog(`zode: update result: ${err?.stack || err}`); }
+        });
+      } catch (err) { appendLog(`zode: update: ${err?.stack || err}`); updating = false; }
+    }
+
+    // Rebuild the Engine from the newer original ZCode. The work happens in a detached shell
+    // (engineRebuildScript) so a slow build never blocks the app; whether a ZCode turn is in
+    // progress is not visible from here, so the dialog warns about it instead of refusing.
+    async function rebuildEngine() {
+      try {
+        if (updating) return;
+        const version = update.originalVersion ?? 'the installed version';
+        const { response } = await dialog.showMessageBox({
+          type: 'warning', buttons: ['Rebuild', 'Cancel'], defaultId: 0, cancelId: 1,
+          message: `Rebuild the Engine from ZCode ${version}?`,
+          detail: 'The Engine quits, is rebuilt from your original ZCode and reopens. This takes about a minute, and running ZCode tasks will stop. Zode itself stays running. Continue?',
+        });
+        if (response !== 0) return;
+        const engineTarget = enginePath || await findEngine().catch(() => null);
+        if (!engineTarget) { say({ type: 'error', message: 'There is no Engine to rebuild.', detail: 'Run “Set up ZCode…” first.' }); return; }
+        const buildScript = path.join(kit, 'scripts', 'build-tap.sh');
+        if (!fs.existsSync(buildScript)) {
+          say({ type: 'error', message: 'Zode cannot find its builder.', detail: `Expected it at ${buildScript}. Reinstall Zode, or run ./zode install in the Zode repo.` });
+          return;
+        }
+        updating = true;
+        fs.mkdirSync(path.dirname(REBUILD_LOG), { recursive: true });
+        const logFd = fs.openSync(REBUILD_LOG, 'a');
+        const child = spawn('/bin/bash', ['-c', engineRebuildScript({ repo: kit, enginePath: engineTarget })], { detached: true, stdio: ['ignore', logFd, logFd] });
+        child.on('error', err => appendLog(`zode: rebuild: ${err?.stack || err}`));
+        child.unref();
+        fs.closeSync(logFd);
+        say({ type: 'info', message: 'Rebuilding the Engine…', detail: 'This takes about a minute. Zode stays running.' });
+        appendLog(`zode: rebuilding the engine from ZCode ${version} (log: ${REBUILD_LOG})`);
+        child.on('close', async code => {
+          updating = false;
+          try {
+            if (code === 0) {
+              enginePath = await findEngine().catch(() => null);
+              say({ type: 'info', message: 'The Engine is rebuilt.', detail: `It is now based on ZCode ${version} and has been reopened.` });
+              appendLog(`zode: engine rebuild finished`);
+              checkUpdate();
+            } else {
+              const last = lastLogLine(REBUILD_LOG);
+              say({ type: 'error', message: 'Rebuilding the Engine failed.', detail: `${last || 'No details were logged.'}\n\nFull log: ${REBUILD_LOG}` });
+              appendLog(`zode: engine rebuild failed (exit ${code}); last log line: ${last}`);
+            }
+          } catch (err) { appendLog(`zode: rebuild result: ${err?.stack || err}`); }
+        });
+      } catch (err) { appendLog(`zode: rebuild: ${err?.stack || err}`); updating = false; }
     }
 
     const actions = {
@@ -145,6 +363,8 @@ async function start() {
         detail: `Version ${app.getVersion()}\n\nClaude Code decides. ZCode writes. You watch from your phone.\n\nThe relay runs in this menu bar app; ZCode itself is untouched.`,
       }),
       quit: () => app.quit(),
+      updateZcode: () => updateZcode(),
+      rebuildEngine: () => rebuildEngine(),
     };
 
     async function pairingView() {
@@ -200,14 +420,14 @@ async function start() {
 
     async function setupSnapshot() {
       try {
-        const [originalPath, engineP, oldPath, tap] = await Promise.all([findOriginal(), findEngine(), findOldIntegrated(), tapAlive()]);
+        const [foundOriginal, engineP, oldPath, tap] = await Promise.all([findOriginal(), findEngine(), findOldIntegrated(), tapAlive()]);
         const [originalRunning, oldRunning] = await Promise.all([
-          originalPath ? isRunning(originalPath) : Promise.resolve(false),
+          foundOriginal ? isRunning(foundOriginal) : Promise.resolve(false),
           oldPath ? isRunning(oldPath) : Promise.resolve(false),
         ]);
         return {
-          steps: setupSteps({ originalExists: !!originalPath, engineExists: !!engineP, tapAlive: tap, setupDone: settings.setupDone === true }),
-          original: { exists: !!originalPath, path: originalPath, running: originalRunning },
+          steps: setupSteps({ originalExists: !!foundOriginal, engineExists: !!engineP, tapAlive: tap, setupDone: settings.setupDone === true }),
+          original: { exists: !!foundOriginal, path: foundOriginal, running: originalRunning },
           engine: { exists: !!engineP, path: engineP },
           oldApp: { exists: !!oldPath, path: oldPath, running: oldRunning },
           tapAlive: tap,
@@ -234,8 +454,8 @@ async function start() {
       sendSetupEvent({ type: 'build', label: build.label, percent: 0, line: null });
       try {
         // Only one ZCode copy may run at a time; an open original or old copy blocks the build.
-        const [originalPath, oldPath] = await Promise.all([findOriginal(), findOldIntegrated()]);
-        if (originalPath && await isRunning(originalPath)) {
+        const [foundOriginal, oldPath] = await Promise.all([findOriginal(), findOldIntegrated()]);
+        if (foundOriginal && await isRunning(foundOriginal)) {
           build.running = false;
           return { started: false, blocked: 'zcode' };
         }
@@ -243,7 +463,6 @@ async function start() {
           build.running = false;
           return { started: false, blocked: 'old' };
         }
-        const kit = kitDir({ packaged: app.isPackaged, resourcesPath: process.resourcesPath, devRoot: devRoot() });
         if (!kit || !fs.existsSync(path.join(kit, 'scripts', 'build-tap.sh'))) {
           build.running = false;
           build.error = friendlySetupError('');
@@ -287,8 +506,8 @@ async function start() {
     ipcMain.handle('zode:setupStartBuild', () => startBuild());
     ipcMain.handle('zode:setupQuitBlocking', async () => {
       try {
-        const [originalPath, oldPath] = await Promise.all([findOriginal(), findOldIntegrated()]);
-        if (originalPath && await isRunning(originalPath)) return { ok: await quitApp('dev.zcode.app', originalPath) };
+        const [foundOriginal, oldPath] = await Promise.all([findOriginal(), findOldIntegrated()]);
+        if (foundOriginal && await isRunning(foundOriginal)) return { ok: await quitApp('dev.zcode.app', foundOriginal) };
         if (oldPath && await isRunning(oldPath)) return { ok: await quitApp('dev.zode.app', oldPath) };
         return { ok: true };
       } catch (err) { appendLog(`zode: quit blocking app: ${err?.stack || err}`); return { ok: false }; }
@@ -347,17 +566,26 @@ async function start() {
     if (icon.isEmpty()) appendLog('zode: assets/trayTemplate.png missing from dist; no menu bar icon.');
     else {
       tray = new Tray(icon); tray.setToolTip('Zode');
-      // The menu is built on click rather than set ahead of time: on macOS a preset context menu swallows
-      // the click event, and the connection state is only worth looking up right then.
-      const popMenu = async () => {
-        try {
-          enginePath = await findEngine();
-          tapUp = await tapAlive();
-          tray.popUpContextMenu(Menu.buildFromTemplate(buildMenuTemplate(menuState(), actions)));
-        } catch (err) { appendLog(`zode: ${err?.stack || err}`); }
+      // The menu is built on click, after a version check and a session refresh, rather than set ahead
+      // of time: on macOS a preset context menu swallows the click event, so there would be no moment
+      // to re-check before it opens. The checks together are capped at ~1.5 s; whatever has not landed
+      // by then is simply not in this menu yet and shows up on the next click. The release check (up
+      // to 15 s of network) only ever runs on its schedule; the click reads the cached value.
+      const popMenu = () => { try { tray.popUpContextMenu(Menu.buildFromTemplate(buildMenuTemplate(menuState(), actions))); } catch (err) { appendLog(`zode: ${err?.stack || err}`); } };
+      const popMenuWhenReady = () => {
+        (async () => {
+          try {
+            originalPath = await findOriginal();
+            enginePath = await findEngine();
+            tapUp = await tapAlive();
+          } catch { /* keep the cached values */ }
+          const cap = new Promise(resolve => { const t = setTimeout(resolve, WORK_TIMEOUT_MS); t.unref?.(); });
+          await Promise.race([Promise.allSettled([checkUpdate(), refreshSessions()]), cap]);
+          popMenu();
+        })();
       };
-      tray.on('click', () => { popMenu(); });
-      tray.on('right-click', () => { popMenu(); });
+      tray.on('click', popMenuWhenReady);
+      tray.on('right-click', popMenuWhenReady);
     }
 
     app.setLoginItemSettings({ openAtLogin: settings.launchAtLogin });
@@ -367,6 +595,7 @@ async function start() {
     // The old integrated copy holds the phone connection for itself (same settings, same paired
     // phones, same port). Ask before the relay starts, so the user never sees a port error first.
     enginePath = await findEngine();
+    originalPath = await findOriginal();
     try {
       const oldPath = await findOldIntegrated();
       if (oldPath && await isRunning(oldPath)) {
@@ -384,6 +613,13 @@ async function start() {
     } catch (err) { appendLog(`zode: old copy check: ${err?.stack || err}`); }
 
     await applyRelay();
+
+    checkUpdate();
+    setInterval(checkUpdate, UPDATE_CHECK_MS);
+    setTimeout(checkReleaseOnce, RELEASE_CHECK_DELAY_MS);
+    setInterval(checkReleaseOnce, RELEASE_CHECK_MS);
+    refreshSessions();
+    pollSessions();
 
     // First run, or the Engine is gone: walk through setup.
     if (!settings.setupDone || !enginePath) showSetupWindow();
