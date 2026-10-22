@@ -9,11 +9,11 @@ import path from 'node:path';
 const ok = (m) => console.log('OK   ' + m), bad = (m) => { console.log('FAIL ' + m); failed++; }; let failed = 0;
 const sh = (c, a) => { try { return execFileSync(c, a, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { return ''; } };
 
-// 1. Zode.app (the signed copy with the tee wrapper) must be running
-const tapApp = ['/Applications/Zode.app', path.join(os.homedir(), 'Applications/Zode.app'), path.join(os.homedir(), 'Applications/ZCode-Tap.app')].find(p => fs.existsSync(p)) || '/Applications/Zode.app';  // old name and location still work
-if (!fs.existsSync(tapApp)) bad('Zode.app missing at /Applications. Run `zode install`.');
-else if (!sh('pgrep', ['-f', path.basename(tapApp) + '/Contents/Frameworks'])) bad('Zode.app is not running. Start it:  open /Applications/Zode.app   (quit the original ZCode first)');
-else ok('Zode.app is running');
+// 1. The Engine app must be running (ZCode Engine.app, or an old Zode.app copy with the tap wrapper)
+const tapApp = ['/Applications/ZCode Engine.app', path.join(os.homedir(), 'Applications/ZCode Engine.app'), '/Applications/Zode.app', path.join(os.homedir(), 'Applications/Zode.app'), path.join(os.homedir(), 'Applications/ZCode-Tap.app')].find(p => fs.existsSync(p)) || '/Applications/ZCode Engine.app';  // old names and locations still work
+if (!fs.existsSync(tapApp)) bad('No ZCode Engine.app (or old Zode.app copy) found. Run `zode install`.');
+else if (!sh('pgrep', ['-f', path.basename(tapApp) + '/Contents/Frameworks'])) bad(`${path.basename(tapApp)} is not running. Start it:  open "${tapApp}"   (quit the original ZCode first)`);
+else ok(`${path.basename(tapApp)} is running`);
 
 // 2. tap sockets
 const dir = path.join(os.homedir(), '.zcode-tap');

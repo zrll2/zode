@@ -1,5 +1,6 @@
 #!/bin/bash
-# Update the original ZCode from the official release manifest, then rebuild Zode.app from it.
+# Update the original ZCode from the official release manifest, then rebuild the copy from it
+# (ZCode Engine.app, or an old integrated Zode.app — the Zode menu bar app is not touched).
 #
 # Why not ZCode's own updater: it aborts while any copy of the app is still running, and it cannot
 # install over the re-signed Zode.app at all. This script fetches the same zip the updater would
@@ -8,9 +9,11 @@
 # state in place (or restores it).
 #
 #   ZCODE_APP          original app (default /Applications/ZCode.app)
-#   ZODE_APP           the copy (default /Applications/Zode.app, or ~/Applications when
-#                      /Applications is not writable — same rule as scripts/build-tap.sh)
-#   ZODE_NO_OPEN=1     do not reopen Zode.app at the end (for tests)
+#   ZODE_APP           the copy to update and rebuild. When unset: /Applications/ZCode Engine.app
+#                      (~/Applications when /Applications is not writable), else an old integrated
+#                      Zode.app (one with Contents/Resources/zode/boot.cjs), else the plain Zode.app
+#                      default — same path rule as scripts/build-tap.sh
+#   ZODE_NO_OPEN=1     do not reopen the copy at the end (for tests)
 #   ZODE_NO_NOTIFY=1   no macOS failure notification
 #
 # Everything printed is also appended, one timestamped line at a time, to ~/.zode/update.log.
@@ -19,8 +22,10 @@ set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 ORIG_APP="${ZCODE_APP:-/Applications/ZCode.app}"
 if [ -n "${ZODE_APP:-}" ]; then ZODE_APP_PATH="$ZODE_APP"; else
-  if [ -d /Applications/Zode.app ]; then ZODE_APP_PATH="/Applications/Zode.app"
-  elif [ -d "$HOME/Applications/Zode.app" ]; then ZODE_APP_PATH="$HOME/Applications/Zode.app"
+  if [ -d "/Applications/ZCode Engine.app" ]; then ZODE_APP_PATH="/Applications/ZCode Engine.app"
+  elif [ -d "$HOME/Applications/ZCode Engine.app" ]; then ZODE_APP_PATH="$HOME/Applications/ZCode Engine.app"
+  elif [ -d "/Applications/Zode.app" ] && [ -f "/Applications/Zode.app/Contents/Resources/zode/boot.cjs" ]; then ZODE_APP_PATH="/Applications/Zode.app"
+  elif [ -d "$HOME/Applications/Zode.app" ] && [ -f "$HOME/Applications/Zode.app/Contents/Resources/zode/boot.cjs" ]; then ZODE_APP_PATH="$HOME/Applications/Zode.app"
   elif [ -w /Applications ]; then ZODE_APP_PATH="/Applications/Zode.app"
   else ZODE_APP_PATH="$HOME/Applications/Zode.app"; fi
 fi
@@ -43,8 +48,8 @@ Usage: update-zcode.sh [--check] [--yes] [--no-rebuild] [--pid N]
 
   --check        print one JSON line (installed, latest, available, zode) and exit
   --yes          update without asking for confirmation
-  --no-rebuild   update the original ZCode but leave Zode.app untouched
-  --pid N        wait (at most 60 s) for process N to exit first; used when Zode.app launches
+  --no-rebuild   update the original ZCode but leave the copy (Engine or Zode.app) untouched
+  --pid N        wait (at most 60 s) for process N to exit first; used when the copy launches
                  this script and quits itself
 
 Environment: ZCODE_APP, ZODE_APP, ZODE_NO_OPEN=1, ZODE_NO_NOTIFY=1. Log: ~/.zode/update.log
@@ -77,9 +82,9 @@ fail() {  # fail <step> <reason>: report, notify (best effort), exit 1
   exit 1
 }
 
-quit_app() {  # quit_app <apple-script bundle id> <pgrep pattern>: quit gracefully, then kill
+quit_app() {  # quit_app <apple-script bundle id (may be empty)> <pgrep pattern>: quit gracefully, then kill
   local app_id="$1" pattern="$2" n=0
-  if pgrep -f "$pattern" >/dev/null 2>&1; then
+  if [ -n "$app_id" ] && pgrep -f "$pattern" >/dev/null 2>&1; then
     osascript -e "tell application id \"$app_id\" to quit" >/dev/null 2>&1 || true
     while pgrep -f "$pattern" >/dev/null 2>&1 && [ "$n" -lt 10 ]; do
       n=$((n + 1)); sleep 1
@@ -98,6 +103,12 @@ app_version() {  # app_version <app path>: CFBundleShortVersionString, empty whe
   local app="$1"
   if [ ! -d "$app" ]; then return 0; fi
   /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$app/Contents/Info.plist" 2>/dev/null || true
+}
+
+app_bundle_id() {  # app_bundle_id <app path>: CFBundleIdentifier, empty when unreadable
+  local app="$1"
+  if [ ! -d "$app" ]; then return 0; fi
+  /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$app/Contents/Info.plist" 2>/dev/null || true
 }
 
 app_team_id() {  # app_team_id <app path>: codesign TeamIdentifier, empty when unsigned
@@ -222,7 +233,7 @@ confirm_update() {
   if [ ! -t 0 ]; then
     fail 1 "no terminal to confirm the update; rerun with --yes"
   fi
-  printf 'Update ZCode %s -> %s and rebuild Zode.app? [y/N] ' "$INSTALLED" "$LATEST" >&9
+  printf 'Update ZCode %s -> %s and rebuild %s? [y/N] ' "$INSTALLED" "$LATEST" "$TARGET_LABEL" >&9
   read -r answer
   case "$answer" in
     y|Y|yes|Yes|YES) return 0 ;;
@@ -294,14 +305,15 @@ verify_step() {  # step 3: nothing outside ~/.zode/updates is touched here
 }
 
 quit_step() {  # step 4: any surviving process breaks the swap
-  echo "[4/7] Quitting ZCode and Zode"
+  echo "[4/7] Quitting ZCode and ${TARGET_LABEL%.app}"
   quit_app "dev.zcode.app" "$ORIG_APP/"
-  quit_app "dev.zode.app" "$ZODE_APP_PATH/"
+  quit_app "$ZODE_APP_ID" "$ZODE_APP_PATH/"     # bundle id read from the target's Info.plist
+  # The Zode menu bar app (bundle id dev.zode.mac) is deliberately not quit: its relay keeps running.
   if pgrep -f "$ORIG_APP/" >/dev/null 2>&1; then
     fail 4 "ZCode is still running ($ORIG_APP); quit it and rerun"
   fi
   if pgrep -f "$ZODE_APP_PATH/" >/dev/null 2>&1; then
-    fail 4 "Zode is still running ($ZODE_APP_PATH); quit it and rerun"
+    fail 4 "$TARGET_LABEL is still running ($ZODE_APP_PATH); quit it and rerun"
   fi
 }
 
@@ -336,24 +348,31 @@ replace_step() {  # step 5
 }
 
 rebuild_zode() {  # build into a temp folder first, so a failed build never removes the old copy
+  local tmp_app rc=0
   mkdir -p "$UPDATES_DIR"
   export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"  # build-tap.sh needs node; a GUI app's PATH may lack it
   BUILD_TMP="$(mktemp -d "$UPDATES_DIR/rebuild.XXXXXXXX")" || fail 6 "could not create a temp folder"
-  if ! ZODE_TAP_APP="$BUILD_TMP/Zode.app" bash "$REPO/scripts/build-tap.sh"; then
+  tmp_app="$BUILD_TMP/$(basename "$ZODE_APP_PATH")"
+  if [ "$IS_ENGINE" -eq 1 ]; then
+    if ! ZODE_TAP_APP="$tmp_app" ZODE_ENGINE=1 bash "$REPO/scripts/build-tap.sh"; then rc=1; fi
+  else
+    if ! ZODE_TAP_APP="$tmp_app" bash "$REPO/scripts/build-tap.sh"; then rc=1; fi
+  fi
+  if [ "$rc" -ne 0 ]; then
     rm -rf "$BUILD_TMP"; BUILD_TMP=""
-    echo "Rebuilding Zode.app failed. The new ZCode is installed; your Zode.app is unchanged."
+    echo "Rebuilding $TARGET_LABEL failed. The new ZCode is installed; your existing copy is unchanged."
     echo "Fix: cd \"$REPO\" && ./zode install"
     fail 6 "scripts/build-tap.sh failed"
   fi
   local old="$ZODE_APP_PATH.old"
   if [ -d "$ZODE_APP_PATH" ] && ! mv "$ZODE_APP_PATH" "$old"; then
     rm -rf "$BUILD_TMP"; BUILD_TMP=""
-    fail 6 "could not move the old Zode.app aside"
+    fail 6 "could not move the old $TARGET_LABEL aside"
   fi
-  if ! mv "$BUILD_TMP/Zode.app" "$ZODE_APP_PATH"; then
+  if ! mv "$tmp_app" "$ZODE_APP_PATH"; then
     if [ -e "$old" ] && [ ! -e "$ZODE_APP_PATH" ]; then mv "$old" "$ZODE_APP_PATH" 2>/dev/null || true; fi
     rm -rf "$BUILD_TMP"; BUILD_TMP=""
-    fail 6 "could not move the new Zode.app into place"
+    fail 6 "could not move the new $TARGET_LABEL into place"
   fi
   rm -rf "$old" "$BUILD_TMP"; BUILD_TMP=""
 }
@@ -364,41 +383,49 @@ open_zode() {
 }
 
 finish_step() {  # step 7
-  echo "[7/7] Cleaning up and opening Zode"
+  echo "[7/7] Cleaning up and opening ${TARGET_LABEL%.app}"
   if [ -n "${BAK_PATH:-}" ] && [ -e "$BAK_PATH" ]; then rm -rf "$BAK_PATH"; fi
   if [ -n "${ZIP_PATH:-}" ] && [ -e "$ZIP_PATH" ]; then rm -f "$ZIP_PATH"; fi
   open_zode
   local zv
   zv="$(app_version "$ZODE_APP_PATH")"
   if [ -n "$zv" ]; then
-    echo "Done: ZCode $LATEST and Zode $zv"
+    echo "Done: ZCode $LATEST and ${TARGET_LABEL%.app} $zv"
   else
-    echo "Done: ZCode $LATEST (Zode version unknown)"
+    echo "Done: ZCode $LATEST (${TARGET_LABEL%.app} version unknown)"
   fi
 }
 
-up_to_date_flow() {  # the original is current; still refresh Zode.app when it lags behind
+up_to_date_flow() {  # the original is current; still refresh the copy when it lags behind
   echo "ZCode is up to date ($INSTALLED)"
   if [ "$NO_REBUILD" -eq 1 ]; then return 0; fi
   if [ -n "$ZODE_VER" ] && ! version_gt "$INSTALLED" "$ZODE_VER"; then
-    echo "Zode.app is up to date ($ZODE_VER)"
+    echo "$TARGET_LABEL is up to date ($ZODE_VER)"
     return 0
   fi
-  echo "Rebuilding Zode.app from ZCode $INSTALLED (current copy: ${ZODE_VER:-none})"
-  quit_app "dev.zode.app" "$ZODE_APP_PATH/"
+  echo "Rebuilding $TARGET_LABEL from ZCode $INSTALLED (current copy: ${ZODE_VER:-none})"
+  quit_app "$ZODE_APP_ID" "$ZODE_APP_PATH/"
   if pgrep -f "$ZODE_APP_PATH/" >/dev/null 2>&1; then
-    fail 6 "Zode is still running ($ZODE_APP_PATH); quit it and rerun"
+    fail 6 "$TARGET_LABEL is still running ($ZODE_APP_PATH); quit it and rerun"
   fi
   rebuild_zode
   open_zode
   local zv
   zv="$(app_version "$ZODE_APP_PATH")"
   if [ -n "$zv" ]; then
-    echo "Done: ZCode $INSTALLED and Zode $zv"
+    echo "Done: ZCode $INSTALLED and ${TARGET_LABEL%.app} $zv"
   else
-    echo "Done: ZCode $INSTALLED (Zode version unknown)"
+    echo "Done: ZCode $INSTALLED (${TARGET_LABEL%.app} version unknown)"
   fi
 }
+
+# What is the target copy? Its bundle id decides: dev.zode.engine is an Engine (rebuilt with
+# ZODE_ENGINE=1), anything else is the old integrated Zode.app. The Zode menu bar product app
+# (bundle id dev.zode.mac) is never a target here and is never quit by the update.
+ZODE_APP_ID="$(app_bundle_id "$ZODE_APP_PATH")"
+IS_ENGINE=0
+if [ "$ZODE_APP_ID" = "dev.zode.engine" ]; then IS_ENGINE=1; fi
+if [ "$IS_ENGINE" -eq 1 ]; then TARGET_LABEL="ZCode Engine.app"; else TARGET_LABEL="Zode.app"; fi
 
 main() {
   trap cleanup EXIT
@@ -427,9 +454,9 @@ main() {
   quit_step
   replace_step
   if [ "$NO_REBUILD" -eq 1 ]; then
-    echo "Skipping the Zode rebuild (--no-rebuild)"
+    echo "Skipping the $TARGET_LABEL rebuild (--no-rebuild)"
   else
-    echo "[6/7] Rebuilding Zode.app from the new ZCode"
+    echo "[6/7] Rebuilding $TARGET_LABEL from the new ZCode"
     rebuild_zode
   fi
   finish_step

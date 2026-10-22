@@ -1,11 +1,20 @@
 #!/bin/bash
 # Build "Zode.app": a copy of your ZCode app whose agent can also be reached over a local socket.
 # The original ZCode is not touched. Nothing from ZCode is stored in this repository.
-#   ZCODE_APP   source app   (default /Applications/ZCode.app)
-#   ZODE_TAP_APP destination (default /Applications/Zode.app, or ~/Applications if /Applications is not writable)
+#   ZCODE_APP      source app   (default /Applications/ZCode.app)
+#   ZODE_TAP_APP   destination (default /Applications/Zode.app, or ~/Applications if /Applications is not writable)
+#   ZODE_ENGINE=1  Engine mode: build "ZCode Engine.app" (bundle id dev.zode.engine) with only the
+#                  socket wrapper — no relay, no tray, no asar patch (the standalone Zode menu bar
+#                  app in mac/ runs the relay itself). Keeps the ZCode icon, never deletes a Zode.app.
 set -euo pipefail
+ENGINE=0
+if [ "${ZODE_ENGINE:-}" = "1" ]; then ENGINE=1; fi
 SRC="${ZCODE_APP:-/Applications/ZCode.app}"
-if [ -w /Applications ]; then DEFAULT_DST="/Applications/Zode.app"; else DEFAULT_DST="$HOME/Applications/Zode.app"; fi
+if [ "$ENGINE" -eq 1 ]; then
+  if [ -w /Applications ]; then DEFAULT_DST="/Applications/ZCode Engine.app"; else DEFAULT_DST="$HOME/Applications/ZCode Engine.app"; fi
+else
+  if [ -w /Applications ]; then DEFAULT_DST="/Applications/Zode.app"; else DEFAULT_DST="$HOME/Applications/Zode.app"; fi
+fi
 DST="${ZODE_TAP_APP:-$DEFAULT_DST}"
 GLM="$DST/Contents/Resources/glm"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -23,17 +32,25 @@ rm -rf "$DST"
 ditto "$SRC" "$DST"
 xattr -cr "$DST"
 
-# Name and icon: Finder and the Dock show "Zode", with the Zode logo.
+# Name and icon: Finder and the Dock show the copy's own name.
 # Leave CFBundleName as it is: Electron uses it to find its helper processes, and the app crashes on launch without it.
 PLIST="$DST/Contents/Info.plist"
-/usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName Zode" "$PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string Zode" "$PLIST"
-# Own bundle id, so the Dock does not merge Zode.app with the original ZCode (which would show ZCode's icon).
-/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier dev.zode.app" "$PLIST"
-[ -f "$ROOT/assets/Zode.icns" ] && cp "$ROOT/assets/Zode.icns" "$DST/Contents/Resources/icon.icns"
-# ZCode also sets its Dock icon from icon.png at runtime, so replace that too.
-[ -f "$ROOT/assets/logo.png" ] && sips -z 1024 1024 "$ROOT/assets/logo.png" --out "$DST/Contents/Resources/icon.png" >/dev/null 2>&1 || true
+if [ "$ENGINE" -eq 1 ]; then
+  /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName ZCode Engine" "$PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string ZCode Engine" "$PLIST"
+  # Own bundle id, so the Dock does not merge the Engine with the original ZCode.
+  /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier dev.zode.engine" "$PLIST"
+  # Engine mode keeps the original ZCode icon files (icon.icns / icon.png): it still is ZCode.
+else
+  /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName Zode" "$PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string Zode" "$PLIST"
+  # Own bundle id, so the Dock does not merge Zode.app with the original ZCode (which would show ZCode's icon).
+  /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier dev.zode.app" "$PLIST"
+  [ -f "$ROOT/assets/Zode.icns" ] && cp "$ROOT/assets/Zode.icns" "$DST/Contents/Resources/icon.icns"
+  # ZCode also sets its Dock icon from icon.png at runtime, so replace that too.
+  [ -f "$ROOT/assets/logo.png" ] && sips -z 1024 1024 "$ROOT/assets/logo.png" --out "$DST/Contents/Resources/icon.png" >/dev/null 2>&1 || true
+fi
 
-# Keep the real CLI, put a small shim in its place.
+# Keep the real CLI, put a small shim in its place. (Identical in both modes; the shim finds the
+# wrapper through ~/.zode/home, the Zode repo path.)
 mv "$GLM/zcode.cjs" "$GLM/zcode.real.cjs"
 mkdir -p "$GLM/provider"
 cp "$DST/Contents/Resources/config/provider/zcode-builtin.json" "$GLM/provider/zcode-builtin.json"
@@ -58,17 +75,35 @@ if (wrapper && args[0] === 'app-server' && !args.includes('--prepare-storage') &
 SHIM
 chmod +x "$GLM/zcode.cjs"
 
-# The Zode integration inside the app: the phone relay, menu bar icon and pairing window.
-# Installs macapp/dist into $DST/Contents/Resources/zode and patches the asar's main to boot.cjs.
-npm install --prefix "$ROOT/macapp" --no-fund --no-audit
-npm install --prefix "$ROOT/relay" --no-fund --no-audit
-node "$ROOT/macapp/install.mjs" "$DST"
+if [ "$ENGINE" -eq 1 ]; then
+  # Engine mode: the relay, tray and pairing window live in the standalone Zode app (mac/), not here.
+  echo "Engine mode: no relay integration inside the app (the standalone Zode app runs it)."
+else
+  # The Zode integration inside the app: the phone relay, menu bar icon and pairing window.
+  # Installs macapp/dist into $DST/Contents/Resources/zode and patches the asar's main to boot.cjs.
+  npm install --prefix "$ROOT/macapp" --no-fund --no-audit
+  npm install --prefix "$ROOT/relay" --no-fund --no-audit
+  node "$ROOT/macapp/install.mjs" "$DST"
+fi
 
 echo "Signing (ad hoc) ..."
 codesign --force --deep -s - "$DST" >/dev/null 2>&1
 codesign --verify --deep "$DST" 2>/dev/null && echo "Built $DST"
-for OLD in "$LEGACY" "$LEGACY2"; do
-  if [ "$OLD" != "$DST" ] && [ -d "$OLD" ] && ! pgrep -f "$OLD/Contents/Frameworks" >/dev/null 2>&1; then
-    rm -rf "$OLD" && echo "Removed the old copy at $OLD (replaced by $DST)."
+
+# Remove superseded copies (never the app just built, never one that is running).
+if [ "$ENGINE" -eq 1 ]; then
+  # Engine mode never deletes a Zode.app: that name belongs to the Zode menu bar product app.
+  if [ "$LEGACY" != "$DST" ] && [ -d "$LEGACY" ] && ! pgrep -f "$LEGACY/Contents/Frameworks" >/dev/null 2>&1; then
+    rm -rf "$LEGACY" && echo "Removed the old copy at $LEGACY (replaced by $DST)."
   fi
-done
+  # An old integrated copy still installed as Zode.app is left alone, but worth pointing out.
+  if [ -d "/Applications/Zode.app" ] && [ -f "/Applications/Zode.app/Contents/Resources/zode/boot.cjs" ]; then
+    echo "An old Zode.app (ZCode copy with the relay inside) is still installed. The new Zode app replaces it; remove the old one when you switch."
+  fi
+else
+  for OLD in "$LEGACY" "$LEGACY2"; do
+    if [ "$OLD" != "$DST" ] && [ -d "$OLD" ] && ! pgrep -f "$OLD/Contents/Frameworks" >/dev/null 2>&1; then
+      rm -rf "$OLD" && echo "Removed the old copy at $OLD (replaced by $DST)."
+    fi
+  done
+fi
