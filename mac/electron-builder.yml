@@ -2,6 +2,11 @@
 appId: dev.zode.mac
 productName: Zode
 copyright: Copyright © GOOLOO PTE LTD
+publish:                             # self-update source: electron-builder writes latest-mac.yml and
+  - provider: github                 # app-update.yml from this; no token here, releases are published
+    owner: zrll2                     # with GH_TOKEN at release time only
+    repo: zode
+    releaseType: release
 directories:
   output: release
   buildResources: resources

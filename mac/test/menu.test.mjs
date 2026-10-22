@@ -21,6 +21,8 @@ const actions = {
   quit: () => calls.push('quit'),
   updateZcode: () => calls.push('updateZcode'),
   rebuildEngine: () => calls.push('rebuildEngine'),
+  installSelfUpdate: () => calls.push('installSelfUpdate'),
+  checkSelfUpdate: () => calls.push('checkSelfUpdate'),
 };
 const addresses = [
   { id: 'tailscale', label: 'Tailscale (100.64.0.1)', ip: '100.64.0.1' },
@@ -260,6 +262,40 @@ test('the engine item opens the Engine when found, and is a disabled notice when
     assert.equal(notice.enabled, false);
     assert.equal(byLabel(missing, 'Open ZCode…'), undefined);
   }
+});
+
+test('self-update ready: the first item restarts into the new version', () => {
+  const t = buildMenuTemplate(state({ selfUpdate: { phase: 'ready', version: '1.2.3', percent: 100 } }), actions);
+  assert.equal(t[0].label, 'Restart to update Zode (1.2.3)');
+  assert.equal(t[1].type, 'separator');
+  assert.equal(t[2].label, 'Relay running · no phones paired');       // the usual menu follows unchanged
+  calls.length = 0;
+  t[0].click();
+  assert.deepEqual(calls, ['installSelfUpdate']);
+});
+
+test('self-update downloading: a disabled first item with the percent', () => {
+  const t = buildMenuTemplate(state({ selfUpdate: { phase: 'downloading', version: '1.2.3', percent: 37 } }), actions);
+  assert.equal(t[0].label, 'Downloading the Zode update… 37%');
+  assert.equal(t[0].enabled, false);
+  const bare = buildMenuTemplate(state({ selfUpdate: { phase: 'downloading', percent: null } }), actions);
+  assert.equal(bare[0].label, 'Downloading the Zode update…');
+  assert.equal(bare[0].enabled, false);
+  const idle = buildMenuTemplate(state({ selfUpdate: { phase: 'idle' } }), actions);
+  assert.equal(idle[0].label, 'Relay running · no phones paired');    // nothing to show: no first item
+});
+
+test('the check item sits next to About Zode; without self-update state there is none', () => {
+  const t = buildMenuTemplate(state({ selfUpdate: { phase: 'idle' } }), actions);
+  const check = byLabel(t, 'Check for Zode updates…');
+  assert.ok(check);
+  const labels = t.map(i => i.label);
+  assert.ok(labels.indexOf('Check for Zode updates…') < labels.indexOf('About Zode'));
+  calls.length = 0;
+  check.click();
+  assert.deepEqual(calls, ['checkSelfUpdate']);
+  const none = buildMenuTemplate(state(), actions);                   // no selfUpdate state: no item, no crash
+  assert.equal(byLabel(none, 'Check for Zode updates…'), undefined);
 });
 
 test('about and quit; no old update/rebuild wording, no old ZCode window item', () => {

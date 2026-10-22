@@ -82,7 +82,18 @@ export function buildMenuTemplate(state, actions) {
   const connected = state.tapAlive === true;
   const update = state.update;                                     // { available, originalVersion, engineVersion }
   const release = state.release;                                   // { available, latest, installed } from the release check
+  const self = state.selfUpdate ?? null;                           // { phase, version, percent, ... } from the self-updater
+  const selfHead = [];
+  if (self && self.phase === 'ready') {
+    selfHead.push({ label: `Restart to update Zode (${self.version ?? 'new version'})`, click: () => actions.installSelfUpdate() });
+    selfHead.push({ type: 'separator' });
+  } else if (self && self.phase === 'downloading') {
+    selfHead.push({ label: `Downloading the Zode update…${Number.isFinite(self.percent) ? ` ${self.percent}%` : ''}`, enabled: false });
+    selfHead.push({ type: 'separator' });
+  }
   return [
+    // The app's own update, when there is something to show for it right now.
+    ...selfHead,
     // What ZCode is doing right now: one line per conversation, red first, status in its own column.
     ...workItems(state, actions),
     // A newer release online: one click updates ZCode and rebuilds the Engine, so the plain
@@ -125,6 +136,7 @@ export function buildMenuTemplate(state, actions) {
     ...(engine.path
       ? [{ label: 'Open ZCode…', enabled: true, click: () => actions.openEngine() }]
       : [{ label: 'ZCode Engine not found', enabled: false }]),
+    ...(self ? [{ label: 'Check for Zode updates…', click: () => actions.checkSelfUpdate() }] : []),
     { label: 'About Zode', click: () => actions.about() },
     { label: 'Quit Zode', click: () => actions.quit() },
   ];

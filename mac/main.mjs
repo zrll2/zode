@@ -5,7 +5,9 @@ import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
 import { spawn } from 'node:child_process';
-import { app, Tray, Menu, BrowserWindow, ipcMain, clipboard, dialog, nativeImage, shell, powerSaveBlocker } from 'electron';
+import { app, Tray, Menu, BrowserWindow, ipcMain, clipboard, dialog, nativeImage, shell, powerSaveBlocker, Notification } from 'electron';
+import updaterPkg from 'electron-updater';
+const { autoUpdater } = updaterPkg;
 import QRCode from 'qrcode';
 import { createRelay } from '../relay/service.mjs';
 import { detectAddresses, defaultAddress } from './lib/addresses.mjs';
@@ -15,6 +17,7 @@ import { setupSteps, parseBuildProgress, friendlySetupError, kitDir } from './li
 import { isRunning, quitApp, tapAlive, findOriginal, findEngine, findOldIntegrated, runBuild } from './lib/system.mjs';
 import { readVersion, compareVersions, checkRelease, engineRebuildScript } from './lib/updates.mjs';
 import { listSessions, readTapServers, summarize } from './lib/sessions.mjs';
+import { createSelfUpdater } from './lib/selfupdate.mjs';
 
 const HOME = os.homedir();
 const SETTINGS_FILE = path.join(HOME, '.zode', 'settings.json');
@@ -107,6 +110,22 @@ async function start() {
       ? `port ${settings.port} is in use. Is the old Zode still running?`
       : (err?.message ?? String(err));
     const say = opts => { try { dialog.showMessageBox(opts).catch(() => {}); } catch { /* never */ } };
+
+    // Zode updating itself from GitHub Releases: packaged builds only, a development run skips it.
+    const selfUpdater = createSelfUpdater({
+      updater: autoUpdater,
+      isPackaged: app.isPackaged === true,
+      log: {
+        info: m => appendLog(`selfupdate: ${m}`),
+        warn: m => appendLog(`selfupdate warn: ${m}`),
+        error: m => appendLog(`selfupdate error: ${m}`),
+        debug: m => appendLog(`selfupdate debug: ${m}`),
+      },
+      onReady: version => {
+        try { new Notification({ title: 'Zode', body: `Zode ${version} is ready. Restart from the menu bar.` }).show(); }
+        catch (err) { appendLog(`zode: update notification: ${err?.stack || err}`); }
+      },
+    });
 
     // (Re)create the relay from the current settings. A failed start keeps the app alive and shows in the menu.
     async function applyRelay() {
@@ -263,6 +282,7 @@ async function start() {
         release,
         work,
         icons: dotIcons,
+        selfUpdate: selfUpdater.getState(),
       };
     }
 
@@ -400,6 +420,18 @@ async function start() {
       quit: () => app.quit(),
       updateZcode: () => updateZcode(),
       rebuildEngine: () => rebuildEngine(),
+      installSelfUpdate: () => selfUpdater.install(),
+      checkSelfUpdate: async () => {
+        try {
+          const cap = new Promise(resolve => { const t = setTimeout(() => resolve({ status: 'error', error: 'The check took too long. Try again later.' }), 20_000); t.unref?.(); });
+          const r = await Promise.race([selfUpdater.checkNow(), cap]);
+          if (!r || r.status === 'disabled') return;
+          if (r.status === 'up-to-date') say({ type: 'info', message: 'Zode is up to date', detail: `Version ${app.getVersion()} is the latest release.` });
+          else if (r.status === 'downloading') say({ type: 'info', message: 'Update found, downloading…', detail: r.version ? `Zode ${r.version} is downloading in the background. Zode will let you know when it is ready.` : 'The new version is downloading in the background.' });
+          else if (r.status === 'ready') say({ type: 'info', message: r.version ? `Zode ${r.version} is ready` : 'A Zode update is ready', detail: 'Choose “Restart to update Zode” from the menu bar to install it.' });
+          else say({ type: 'error', message: 'Checking for updates failed.', detail: `${r.error ?? 'Something went wrong.'}\n\nDetails are in ~/.zode/mac-app.log` });
+        } catch (err) { appendLog(`zode: self check: ${err?.stack || err}`); }
+      },
     };
 
     async function pairingView() {
@@ -656,6 +688,7 @@ async function start() {
     setInterval(checkReleaseOnce, RELEASE_CHECK_MS);
     refreshSessions();
     pollSessions();
+    selfUpdater.start();
 
     // First run, or the Engine is gone: walk through setup.
     if (!settings.setupDone || !enginePath) showSetupWindow();
