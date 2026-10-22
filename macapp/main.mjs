@@ -141,13 +141,42 @@ export async function startZode({ electron, resourcesDir } = {}) {
       return parts.length ? `Zode: ${parts.join(', ')}` : 'Zode';
     }
 
+    // Measure text in the real UI font (a hidden page with a canvas), so the menu can pad each line until the
+    // status text ends at one right edge. Any failure returns null and the menu falls back to an estimate.
+    let measureWin = null;
+    async function measureTexts(strings) {
+      try {
+        if (!measureWin || measureWin.isDestroyed()) {
+          measureWin = new BrowserWindow({ show: false, width: 120, height: 60, webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true } });
+          await measureWin.loadURL('data:text/html;charset=utf-8,<canvas id="c"></canvas>');
+        }
+        const widths = await measureWin.webContents.executeJavaScript(
+          `(() => { const x = document.getElementById('c').getContext('2d'); x.font = '13px -apple-system, system-ui'; return ${JSON.stringify(strings)}.map(t => x.measureText(t).width); })()`);
+        return Array.isArray(widths) && widths.every(Number.isFinite) ? widths : null;
+      } catch { return null; }
+    }
+    async function withMeasures(summary) {
+      const lines = summary.lines;
+      if (!lines.length) return summary;
+      const spaces = ['\u2003', '\u2002', '\u2009'];
+      const w = await measureTexts([...spaces, ...lines.map(l => l.project), ...lines.map(l => l.status)]);
+      if (!w) return summary;
+      const [em, en, thin] = w;
+      const n = lines.length;
+      return {
+        ...summary,
+        metrics: { em, en, thin, gap: em * 2 },
+        lines: lines.map((l, i) => ({ ...l, px: { project: w[3 + i], status: w[3 + n + i] } })),
+      };
+    }
+
     // One shared listing across every live ZCode server (1.5 s per socket, never twice at once). The
     // menu and the tooltip read only the cached `work`, so a slow refresh keeps the previous lines.
     function refreshSessions() {
       if (workRefresh) return workRefresh;
       workRefresh = (async () => {
         try {
-          work = summarize(await listSessions({ timeoutMs: WORK_TIMEOUT_MS }), Date.now());
+          work = await withMeasures(summarize(await listSessions({ timeoutMs: WORK_TIMEOUT_MS }), Date.now()));
           const active = work.counts.working + work.counts.waiting + work.counts.failed;
           if (active !== workActive) {
             workActive = active;
@@ -180,6 +209,7 @@ export async function startZode({ electron, resourcesDir } = {}) {
         update,
         release,
         work,
+        foldFinished: settings.foldFinished === true,
         icons: dotIcons,
       };
     }
@@ -265,6 +295,7 @@ export async function startZode({ electron, resourcesDir } = {}) {
       toggleRelay: async () => { settings.relayEnabled = !(relay?.status().running); save(); await applyRelay(); },
       revoke: id => { relay?.revokeDevice(id); },
       selectAddress: async id => { settings.addressId = id; save(); await applyRelay(); },
+      toggleFoldFinished: () => { settings.foldFinished = !settings.foldFinished; save(); },
       toggleLaunchAtLogin: () => { settings.launchAtLogin = !settings.launchAtLogin; save(); app.setLoginItemSettings({ openAtLogin: settings.launchAtLogin }); refresh(); },
       showZCode: () => {
         const win = BrowserWindow.getAllWindows().find(w => w !== pairWindow);

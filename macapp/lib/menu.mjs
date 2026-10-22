@@ -4,10 +4,11 @@ const HINT = 'Not encrypted. Use Tailscale away from home.';
 // The ZCode-now block for the top of the menu: a disabled header, one clickable line per active
 // conversation with its status light, a +N more stub, and a separator. The lights arrive as opaque
 // icon values in state.icons, so this stays testable without Electron.
-// Rough text width in em (San Francisco at menu size): menus cannot right-align a second piece of text, so
-// the status is pushed into its own column with em/en/thin spaces. An estimate is enough for a clean column.
+// Menus cannot right-align a second piece of text, so each line is padded with spaces until the whole line has
+// the same width: the status then ends at one right edge. Widths are measured in the real font by the app
+// (state.work.metrics) and fall back to a rough per-character estimate (em) in tests and before the first measure.
 const EM = '\u2003', EN = '\u2002', THIN = '\u2009';
-export function textWidth(str) {
+export function textWidth(str) {                                      // estimate, in em
   let w = 0;
   for (const ch of String(str)) {
     if (/[\u2e80-\u9fff\uac00-\ud7af\uff00-\uffef]/.test(ch)) w += 1;                    // CJK and full-width
@@ -20,35 +21,48 @@ export function textWidth(str) {
   }
   return w;
 }
-export function padTo(width) {                                       // spaces totalling about `width` em
+const ESTIMATE = { em: 1, en: 0.5, thin: 0.2 };                      // space widths in the same unit
+export function padTo(width, sp = ESTIMATE) {                         // spaces totalling about `width`
   let out = '';
   let left = Math.max(0, width);
-  while (left >= 1) { out += EM; left -= 1; }
-  if (left >= 0.5) { out += EN; left -= 0.5; }
-  while (left >= 0.1) { out += THIN; left -= 0.2; }
+  while (left >= sp.em) { out += EM; left -= sp.em; }
+  if (left >= sp.en) { out += EN; left -= sp.en; }
+  while (left >= sp.thin * 0.5) { out += THIN; left -= sp.thin; }
   return out;
 }
-// "<project>   <status>" with every status starting in the same column.
-export function alignedLabels(lines) {
-  const widest = Math.max(0, ...lines.map(l => textWidth(l.project)));
-  return lines.map(l => `${l.project}${padTo(widest - textWidth(l.project) + 2)}${l.status}`);
+// "<project><spaces><status>" with every status ending at the same right edge.
+// lines[i].px = { project, status } (measured) when available; metrics = { em, en, thin, gap } in the same unit.
+export function alignedLabels(lines, metrics) {
+  const measured = !!metrics && lines.every(l => l.px && Number.isFinite(l.px.project) && Number.isFinite(l.px.status));
+  const w = l => (measured ? { p: l.px.project, s: l.px.status } : { p: textWidth(l.project), s: textWidth(l.status) });
+  const sp = measured ? metrics : ESTIMATE;
+  const gap = measured && Number.isFinite(metrics.gap) ? metrics.gap : 2;
+  const total = Math.max(0, ...lines.map(l => w(l).p + w(l).s)) + gap;
+  return lines.map(l => `${l.project}${padTo(total - w(l).p - w(l).s, sp)}${l.status}`);
 }
 
+// The ZCode-now block for the top of the menu: a disabled header, one clickable line per conversation with its
+// status light (a green tick when finished), an optional "Finished (N)" submenu when the user folded them, a
+// +N more stub and a separator. Icons arrive as opaque values in state.icons, so this stays testable.
 function workItems(state, actions) {
   const work = state.work;
   if (!work || !Array.isArray(work.lines) || work.lines.length === 0) return [];
   const icons = state.icons ?? {};
-  const items = [{ label: 'ZCode right now', enabled: false }];
-  const labels = alignedLabels(work.lines);
-  for (const [i, line] of work.lines.entries()) {
-    items.push({
-      id: line.id != null ? `work-${line.id}` : undefined,
-      label: labels[i],
-      icon: line.done ? (icons.tick ?? icons[line.light]) : icons[line.light],
-      click: () => actions.showZCode(),
-    });
-  }
+  const fold = state.foldFinished === true;
+  const labels = alignedLabels(work.lines, work.metrics);
+  const entry = (line, i) => ({
+    id: line.id != null ? `work-${line.id}` : undefined,
+    label: labels[i],
+    icon: line.done ? (icons.tick ?? icons[line.light]) : icons[line.light],
+    click: () => actions.showZCode(),
+  });
+  const rows = work.lines.map((line, i) => ({ line, item: entry(line, i) }));
+  const active = rows.filter(r => !(fold && r.line.done)).map(r => r.item);
+  const finished = fold ? rows.filter(r => r.line.done).map(r => r.item) : [];
+  const items = [{ label: 'ZCode right now', enabled: false }, ...active];
+  if (finished.length) items.push({ label: `Finished (${finished.length})`, submenu: finished });
   if (work.more > 0) items.push({ label: `+${work.more} more`, enabled: false });
+  if (work.lines.some(l => l.done)) items.push({ label: 'Fold finished', type: 'checkbox', checked: fold, click: () => actions.toggleFoldFinished?.() });
   items.push({ type: 'separator' });
   return items;
 }

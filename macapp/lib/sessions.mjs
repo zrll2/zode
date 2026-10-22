@@ -103,6 +103,8 @@ function withDeadline(promise, timeoutMs) {
 }
 
 // The light and the line for one conversation, or null when it should not be shown at all.
+const MAX_LINES = 16;                                              // everything active plus recent finished work, up to this many
+
 export function describeSession(session, now = Date.now()) {
   const status = session?.status;
   const quiet = now - (Number.isFinite(session?.updatedAt) ? session.updatedAt : now);
@@ -112,10 +114,12 @@ export function describeSession(session, now = Date.now()) {
     if (quiet <= 5 * MIN) return { light: 'green', text: 'Working' };
     return { light: 'amber', text: `Quiet for ${Math.floor(quiet / MIN)} min` };   // might be stuck
   }
-  if (status === 'idle' && quiet <= 20 * MIN) {
+  if (status === 'idle' && quiet <= 3 * 60 * MIN) {                                   // finished within the last 3 hours
     return quiet < MIN
       ? { light: 'green', text: 'Just now', done: true }
-      : { light: 'green', text: `${Math.floor(quiet / MIN)} min ago`, done: true };
+      : quiet < 60 * MIN
+        ? { light: 'green', text: `${Math.floor(quiet / MIN)} min ago`, done: true }
+        : { light: 'green', text: `${Math.floor(quiet / (60 * MIN))} h ago`, done: true };
   }
   return null;
 }
@@ -149,8 +153,9 @@ export function summarize(sessions, now = Date.now()) {
   }
   rows.sort((a, b) => a.group - b.group || b.at - a.at);
   return {
-    lines: rows.slice(0, 6).map(({ id, project, status, done, light }) => ({ id, project, status, done, light })),
-    more: Math.max(0, rows.length - 6),
+    lines: rows.slice(0, MAX_LINES).map(({ id, project, status, done, light }) => ({ id, project, status, done, light })),
+    more: Math.max(0, rows.length - MAX_LINES),
+    finished: rows.filter(r => r.done).length,
     counts,
   };
 }
