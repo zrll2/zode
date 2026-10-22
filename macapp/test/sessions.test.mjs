@@ -22,9 +22,9 @@ test('describeSession: every rule, with a fixed now', () => {
   assert.deepEqual(describeSession(session({ updatedAt: NOW - 5 * min }), NOW), { light: 'green', text: 'Working' });     // 5 min exactly still counts as working
   assert.deepEqual(describeSession(session({ updatedAt: NOW - 5 * min - 1 }), NOW), { light: 'amber', text: 'Quiet for 5 min' });
   assert.deepEqual(describeSession(session({ updatedAt: NOW - 47 * min }), NOW), { light: 'amber', text: 'Quiet for 47 min' });
-  assert.deepEqual(describeSession(session({ status: 'idle', updatedAt: NOW - 30 * 1000 }), NOW), { light: 'green', text: 'Done just now' });
-  assert.deepEqual(describeSession(session({ status: 'idle', updatedAt: NOW - 90 * 1000 }), NOW), { light: 'green', text: 'Done 1 min ago' });
-  assert.deepEqual(describeSession(session({ status: 'idle', updatedAt: NOW - 20 * min }), NOW), { light: 'green', text: 'Done 20 min ago' });
+  assert.deepEqual(describeSession(session({ status: 'idle', updatedAt: NOW - 30 * 1000 }), NOW), { light: 'green', text: 'Just now', done: true });
+  assert.deepEqual(describeSession(session({ status: 'idle', updatedAt: NOW - 90 * 1000 }), NOW), { light: 'green', text: '1 min ago', done: true });
+  assert.deepEqual(describeSession(session({ status: 'idle', updatedAt: NOW - 20 * min }), NOW), { light: 'green', text: '20 min ago', done: true });
   assert.equal(describeSession(session({ status: 'idle', updatedAt: NOW - 20 * min - 1 }), NOW), null);                   // finished too long ago
   assert.equal(describeSession(session({ status: 'paused' }), NOW), null);
   assert.equal(describeSession(session({ status: undefined }), NOW), null);
@@ -50,9 +50,9 @@ test('summarize: failed, waiting, working, done — each group newest first, six
   assert.deepEqual(s.lines.map(l => l.light), ['red', 'red', 'amber', 'amber', 'amber', 'green']);
   assert.equal(s.more, 3);                                                           // r2, d1 and d2 did not fit
   assert.deepEqual(s.counts, { working: 2, waiting: 3, failed: 2 });
-  assert.equal(s.lines[0].label, 'zode — Failed');                                   // always project then status, even for a work-order title
-  assert.equal(s.lines[4].label, 'No workspace — Quiet for 30 min');
-  assert.equal(s.lines[5].label, 'zode — Working');
+  assert.deepEqual([s.lines[0].project, s.lines[0].status], ['zode', 'Failed']);       // always the project, then the status, even for a work-order title
+  assert.deepEqual([s.lines[4].project, s.lines[4].status], ['No workspace', 'Quiet for 30 min']);
+  assert.deepEqual([s.lines[5].project, s.lines[5].status], ['zode', 'Working']);
 });
 
 test('summarize: project from the workspace path, No workspace when empty, junk input shows nothing', () => {
@@ -60,7 +60,7 @@ test('summarize: project from the workspace path, No workspace when empty, junk 
     session({ sessionId: 'p1', workspace: { workspacePath: '/a/b/', workspaceKey: '' } }),
     session({ sessionId: 'p2', status: 'idle', updatedAt: NOW - 30 * 1000, workspace: { workspacePath: '', workspaceKey: '' } }),
   ], NOW);
-  assert.deepEqual(s.lines.map(l => l.label), ['b — Working', 'No workspace — Done just now']);
+  assert.deepEqual(s.lines.map(l => [l.project, l.status, l.done]), [['b', 'Working', false], ['No workspace', 'Just now', true]]);
   assert.deepEqual(summarize([], NOW), { lines: [], more: 0, counts: { working: 0, waiting: 0, failed: 0 } });
   assert.deepEqual(summarize(undefined, NOW), { lines: [], more: 0, counts: { working: 0, waiting: 0, failed: 0 } });
   assert.deepEqual(summarize([null, 42, 'x'], NOW).lines, []);

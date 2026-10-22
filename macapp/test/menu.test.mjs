@@ -1,7 +1,7 @@
 // buildMenuTemplate for every documented state.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildMenuTemplate } from '../lib/menu.mjs';
+import { alignedLabels, textWidth, buildMenuTemplate } from '../lib/menu.mjs';
 
 const HINT = 'Not encrypted. Use Tailscale away from home.';
 const calls = [];
@@ -135,33 +135,36 @@ test('without an available release the menu is unchanged, and the rebuild item s
 });
 
 // The ZCode-now block: what ZCode is doing right now, at the top of the menu.
-const icons = { green: { name: 'green' }, amber: { name: 'amber' }, red: { name: 'red' }, grey: { name: 'grey' } };
+const icons = { green: { name: 'green' }, amber: { name: 'amber' }, red: { name: 'red' }, grey: { name: 'grey' }, tick: { name: 'tick' } };
 const withWork = over => ({ icons, work: { lines: [], more: 0, ...over } });
 
 test('work block: header, one clickable lit line per session, +N more, then the usual menu', () => {
   const t = buildMenuTemplate(state(withWork({
     lines: [
-      { id: 'w1', label: 'web — Working', light: 'green' },
-      { id: 'w2', label: 'cli — Waiting for you', light: 'amber' },
-      { id: 'w3', label: 'Failed', light: 'red' },
+      { id: 'w1', project: 'web', status: 'Working', light: 'green', done: false },
+      { id: 'w2', project: 'cli', status: 'Waiting for you', light: 'amber', done: false },
+      { id: 'w3', project: 'No workspace', status: 'Failed', light: 'red', done: false },
+      { id: 'w4', project: 'docs', status: '3 min ago', light: 'green', done: true },
     ],
     more: 2,
   })), actions);
-  assert.deepEqual(t.slice(0, 6).map(i => i.label), ['ZCode right now', 'web — Working', 'cli — Waiting for you', 'Failed', '+2 more', undefined]);
+  const text = i => i.label.replace(/[\u2002\u2003\u2009]+/g, ' | ');         // the status sits in its own column, after wide spaces
+  assert.deepEqual(t.slice(0, 7).map(i => (i.label === undefined ? undefined : text(i))), ['ZCode right now', 'web | Working', 'cli | Waiting for you', 'No workspace | Failed', 'docs | 3 min ago', '+2 more', undefined]);
   assert.equal(t[0].enabled, false);
   assert.equal(t[1].icon, icons.green);                 // the loaded nativeImages pass through untouched
   assert.equal(t[2].icon, icons.amber);
   assert.equal(t[3].icon, icons.red);
-  assert.equal(t[4].enabled, false);                    // the +N more stub is not clickable
-  assert.equal(t[5].type, 'separator');
-  assert.ok(t.slice(6).some(i => i.label === 'Relay running · no phones paired'));   // the usual menu follows
+  assert.equal(t[4].icon, icons.tick);                  // a finished conversation gets the green tick, not a dot
+  assert.equal(t[5].enabled, false);                    // the +N more stub is not clickable
+  assert.equal(t[6].type, 'separator');
+  assert.ok(t.slice(7).some(i => i.label === 'Relay running · no phones paired'));   // the usual menu follows
   calls.length = 0;
   t[1].click();
   assert.deepEqual(calls, ['showZCode']);               // a line focuses the ZCode window
 });
 
 test('work block: lines without overflow get no +N stub', () => {
-  const t = buildMenuTemplate(state(withWork({ lines: [{ id: 'w1', label: 'zode — Working', light: 'green' }] })), actions);
+  const t = buildMenuTemplate(state(withWork({ lines: [{ id: 'w1', project: 'zode', status: 'Working', light: 'green', done: false }] })), actions);
   assert.equal(t[2].type, 'separator');
   assert.equal(t.some(i => typeof i.label === 'string' && i.label.startsWith('+')), false);
 });
@@ -174,4 +177,13 @@ test('work block: nothing active, nothing added — the template looks exactly a
     assert.equal(t.length, base.length);                              // no items added
     assert.deepEqual(t.map(i => i.label), base.map(i => i.label));    // same labels in the same order
   }
+});
+
+test('alignedLabels: statuses start in one column, wider names get less padding', () => {
+  const rows = alignedLabels([{ project: 'zode', status: 'Working' }, { project: 'onetrend-trade-anyway-wt', status: '8 min ago' }, { project: 'TikTok课程培训', status: 'Just now' }]);
+  assert.ok(rows[0].startsWith('zode') && rows[0].endsWith('Working'));
+  const padLen = r => r.match(/[\u2002\u2003\u2009]+/)[0].length;
+  assert.ok(padLen(rows[0]) > padLen(rows[1]));          // the short name is padded more than the longest one
+  assert.equal(alignedLabels([]).length, 0);
+  assert.ok(textWidth('TikTok课程培训') > textWidth('TikTok'));
 });

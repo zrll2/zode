@@ -4,16 +4,47 @@ const HINT = 'Not encrypted. Use Tailscale away from home.';
 // The ZCode-now block for the top of the menu: a disabled header, one clickable line per active
 // conversation with its status light, a +N more stub, and a separator. The lights arrive as opaque
 // icon values in state.icons, so this stays testable without Electron.
+// Rough text width in em (San Francisco at menu size): menus cannot right-align a second piece of text, so
+// the status is pushed into its own column with em/en/thin spaces. An estimate is enough for a clean column.
+const EM = '\u2003', EN = '\u2002', THIN = '\u2009';
+export function textWidth(str) {
+  let w = 0;
+  for (const ch of String(str)) {
+    if (/[\u2e80-\u9fff\uac00-\ud7af\uff00-\uffef]/.test(ch)) w += 1;                    // CJK and full-width
+    else if (/[ijl.,:;'|!]/.test(ch)) w += 0.28;
+    else if (/[ftr\- ()]/.test(ch)) w += 0.36;
+    else if (/[mwMW]/.test(ch)) w += 0.88;
+    else if (/[A-Z]/.test(ch)) w += 0.66;
+    else if (/[0-9]/.test(ch)) w += 0.58;
+    else w += 0.56;
+  }
+  return w;
+}
+export function padTo(width) {                                       // spaces totalling about `width` em
+  let out = '';
+  let left = Math.max(0, width);
+  while (left >= 1) { out += EM; left -= 1; }
+  if (left >= 0.5) { out += EN; left -= 0.5; }
+  while (left >= 0.1) { out += THIN; left -= 0.2; }
+  return out;
+}
+// "<project>   <status>" with every status starting in the same column.
+export function alignedLabels(lines) {
+  const widest = Math.max(0, ...lines.map(l => textWidth(l.project)));
+  return lines.map(l => `${l.project}${padTo(widest - textWidth(l.project) + 2)}${l.status}`);
+}
+
 function workItems(state, actions) {
   const work = state.work;
   if (!work || !Array.isArray(work.lines) || work.lines.length === 0) return [];
   const icons = state.icons ?? {};
   const items = [{ label: 'ZCode right now', enabled: false }];
-  for (const line of work.lines) {
+  const labels = alignedLabels(work.lines);
+  for (const [i, line] of work.lines.entries()) {
     items.push({
       id: line.id != null ? `work-${line.id}` : undefined,
-      label: line.label,
-      icon: icons[line.light],
+      label: labels[i],
+      icon: line.done ? (icons.tick ?? icons[line.light]) : icons[line.light],
       click: () => actions.showZCode(),
     });
   }
