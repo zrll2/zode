@@ -6,6 +6,8 @@ let signature = '';                                  // rebuild the step body on
 let countdown = null;
 let expiresAt = 0;
 let payload = null;
+let knownDevices = null;                             // device ids when the phone step opened; a new one means someone just paired
+let justPaired = null;                               // the name of the phone that paired while this step was open
 
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 const btn = (label, fn, primary) => { const b = el('button', primary ? 'primary' : null, label); b.addEventListener('click', fn); return b; };
@@ -114,6 +116,15 @@ function renderLogin(body, s) {
 }
 
 async function renderPhone(body, s) {
+  if (knownDevices === null) {
+    try { knownDevices = new Set((await window.zode.listDevices()).map(d => d.id)); } catch { knownDevices = new Set(); }
+  }
+  if (justPaired) {                                  // the scan worked: say so, drop the QR code
+    body.append(el('p', 'status-ok', `✓ ${justPaired} is paired.`));
+    body.append(el('p', null, 'You can now follow your ZCode work from your phone. Zode stays in the menu bar.'));
+    body.append(btn('Done', async () => { try { await window.zode.setupDone(); } catch {} }, true));
+    return;
+  }
   body.append(el('p', null, 'Scan this with Zode on your phone.'));
   const msg = el('p', 'relay-message hidden');
   const card = el('div', 'qr-card hidden');
@@ -204,5 +215,21 @@ window.zode.onSetupEvent(ev => {
   } catch { /* never break the wizard on one bad event */ }
 });
 
+// A phone paired while the QR code is showing: switch the step to a confirmation.
+async function watchPairing() {
+  try {
+    if (knownDevices === null || justPaired) return;
+    const devices = await window.zode.listDevices();
+    const fresh = devices.find(d => !knownDevices.has(d.id));
+    if (fresh) {
+      justPaired = fresh.name || 'Your phone';
+      stopCountdown();
+      signature = '';
+      load();
+    }
+  } catch { /* the next tick tries again */ }
+}
+
 load();
 setInterval(load, 2000);
+setInterval(watchPairing, 1500);

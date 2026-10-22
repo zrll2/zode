@@ -15,6 +15,11 @@ const actions = {
   toggleKeepAwake: () => calls.push('keepAwake'),
   toggleFoldFinished: () => calls.push('toggleFoldFinished'),
   refreshWork: () => calls.push('refreshWork'),
+  approve: (requestId, sock, risky, text) => calls.push(`approve:${requestId}:${sock}:${risky}:${text}`),
+  deny: (requestId, sock) => calls.push(`deny:${requestId}:${sock}`),
+  nudge: (sessionId, sock) => calls.push(`nudge:${sessionId}:${sock}`),
+  stop: (sessionId, sock) => calls.push(`stop:${sessionId}:${sock}`),
+  retry: (sessionId, sock) => calls.push(`retry:${sessionId}:${sock}`),
   setup: () => calls.push('setup'),
   openEngine: () => calls.push('openEngine'),
   about: () => calls.push('about'),
@@ -62,8 +67,8 @@ test('work block: refresh header, one clickable lit line per session, fold switc
     ],
     more: 2,
   })), actions);
-  const text = i => i.label.replace(/[\u2002\u2003\u2009]+/g, ' | ');         // the status sits in its own column, after wide spaces
-  assert.deepEqual(t.slice(0, 7).map(i => (i.label === undefined ? undefined : text(i))), ['ZCode right now | ↻ Refresh', 'web | Working', 'cli | Waiting for you', 'No workspace | Failed', 'docs | 3 min ago', '+2 more', 'Fold finished']);
+  const text = i => i.label.replace(/\u00a0+/g, ' | ');         // the status sits in its own column, after wide spaces
+  assert.deepEqual(t.slice(0, 7).map(i => (i.label === undefined ? undefined : text(i))), ['ZCode right now | Refresh', 'web | Working', 'cli | Waiting for you', 'No workspace | Failed', 'docs | 3 min ago', '+2 more', 'Fold finished']);
   assert.notEqual(t[0].enabled, false);                 // the header is the refresh button
   calls.length = 0; t[0].click();
   assert.deepEqual(calls, ['refreshWork']);
@@ -99,7 +104,7 @@ test('work block: nothing active, nothing added — the template looks exactly a
 test('alignedLabels: statuses start in one column, wider names get less padding', () => {
   const rows = alignedLabels([{ project: 'zode', status: 'Working' }, { project: 'onetrend-trade-anyway-wt', status: '8 min ago' }, { project: 'TikTok课程培训', status: 'Just now' }]);
   assert.ok(rows[0].startsWith('zode') && rows[0].endsWith('Working'));
-  const padLen = r => r.match(/[\u2002\u2003\u2009]+/)[0].length;
+  const padLen = r => r.match(/\u00a0+/)[0].length;
   assert.ok(padLen(rows[0]) > padLen(rows[1]));          // the short name is padded more than the longest one
   assert.equal(alignedLabels([]).length, 0);
   assert.ok(textWidth('TikTok课程培训') > textWidth('TikTok'));
@@ -131,15 +136,142 @@ test('alignedLabels with measured widths: every line has the same total width (r
     { project: 'onetrend-trade-anyway-wt', status: '8 min ago', px: { project: 150, status: 55 } },
     { project: 'bossy', status: 'Just now', px: { project: 36, status: 52 } },
   ];
-  const metrics = { em: 13, en: 6.5, thin: 2.6, gap: 26 };
+  const metrics = { space: 3.6, gap: 14 };
   const rows = alignedLabels(lines, metrics);
   const widthOf = (row, l) => {
-    const pad = row.match(/[\u2002\u2003\u2009]+/)[0];
-    const w = [...pad].reduce((a, c) => a + (c === '\u2003' ? 13 : c === '\u2002' ? 6.5 : 2.6), 0);
-    return l.px.project + w + l.px.status;
+    const pad = row.match(/\u00a0+/)[0];
+    return l.px.project + pad.length * 3.6 + l.px.status;
   };
   const totals = rows.map((r, i) => widthOf(r, lines[i]));
-  assert.ok(Math.max(...totals) - Math.min(...totals) <= 2.6);          // within one thin space
+  assert.ok(Math.max(...totals) - Math.min(...totals) <= 3.6);          // within one space
+});
+
+test('finished over an hour ago folds into its own submenu by default; recent finished stay inline', () => {
+  const lines = [
+    { id: 'a', project: 'web', status: 'Working', light: 'green', done: false, older: false },
+    { id: 'b', project: 'docs', status: '3 min ago', light: 'green', done: true, older: false },
+    { id: 'c', project: 'cli', status: '2 h ago', light: 'green', done: true, older: true },
+    { id: 'd', project: 'api', status: '1 h ago', light: 'green', done: true, older: true },
+  ];
+  const t = buildMenuTemplate(state(withWork({ lines })), actions);
+  assert.ok(t.some(i => /^docs/.test(i.label ?? '')));                                 // the 3 min old one stays inline
+  assert.equal(t.some(i => /^cli/.test(i.label ?? '')), false);                        // the 2 h old one does not
+  const sub = t.find(i => i.label === 'Finished over an hour ago (2)');
+  assert.equal(sub.submenu.length, 2);
+  assert.equal(sub.submenu[0].icon, icons.tick);
+});
+
+// The action submenus: a conversation that needs the user can be unblocked from the menu bar.
+const pendingRequest = over => ({
+  requestId: 'server-1', sessionId: 'w2', kind: 'permission', toolName: 'Bash',
+  summary: 'Run: sudo rm -rf /tmp/x', detail: 'Run: sudo rm -rf /tmp/x', risky: true, sock: '/a', ...over,
+});
+const waitingLine = over => ({ id: 'w2', project: 'web', status: 'Waiting for you', light: 'amber', done: false, sessionId: 'w2', sock: '/a', ...over });
+
+test('work submenu: a waiting line with a permission request offers the summary, Allow once, Deny, Show in ZCode', () => {
+  const t = buildMenuTemplate(state(withWork({
+    lines: [waitingLine()],
+    pending: { w2: [pendingRequest()] },
+  })), actions);
+  const sub = t[1].submenu;
+  assert.ok(sub, 'the waiting line carries a submenu');
+  assert.deepEqual(sub.map(i => i.label ?? null), ['Run: sudo rm -rf /tmp/x', 'Allow once', 'Deny', null, 'Show in ZCode']);
+  assert.equal(sub[0].enabled, false);                  // what is asked, not clickable
+  calls.length = 0;
+  sub[1].click(); sub[2].click(); sub[4].click();
+  assert.deepEqual(calls, ['approve:server-1:/a:true:Run: sudo rm -rf /tmp/x', 'deny:server-1:/a', 'openEngine']);
+});
+
+test('work submenu: several requests list oldest first, one group each, capped at three', () => {
+  const reqs = [1, 2, 3, 4].map(i => pendingRequest({ requestId: 'r' + i, summary: `Run: cmd ${i}` }));
+  const t = buildMenuTemplate(state(withWork({
+    lines: [waitingLine()],
+    pending: { w2: reqs },
+  })), actions);
+  assert.deepEqual(t[1].submenu.map(i => i.label ?? null), [
+    'Run: cmd 1', 'Allow once', 'Deny',
+    'Run: cmd 2', 'Allow once', 'Deny',
+    'Run: cmd 3', 'Allow once', 'Deny',                 // the fourth request is not shown
+    null, 'Show in ZCode',
+  ]);
+});
+
+test('work submenu: a question or nothing pending gets only Answer in ZCode…', () => {
+  const q = buildMenuTemplate(state(withWork({
+    lines: [waitingLine({ id: 'wq', sessionId: 'wq' })],
+    pending: { wq: [pendingRequest({ requestId: 'r9', sessionId: 'wq', kind: 'question', toolName: '', summary: '', detail: '', risky: false })] },
+  })), actions);
+  assert.deepEqual(q[1].submenu.map(i => i.label), ['Answer in ZCode…']);
+  const none = buildMenuTemplate(state(withWork({ lines: [waitingLine({ id: 'wq', sessionId: 'wq' })] })), actions);
+  assert.deepEqual(none[1].submenu.map(i => i.label), ['Answer in ZCode…']);
+  calls.length = 0;
+  q[1].submenu[0].click();
+  assert.deepEqual(calls, ['openEngine']);
+});
+
+test('work submenu: a stalled line can be nudged or stopped; a failed line can be retried', () => {
+  const quiet = buildMenuTemplate(state(withWork({
+    lines: [{ id: 'wq', project: 'web', status: 'Quiet for 9 min', light: 'amber', done: false, sessionId: 'wq', sock: '/q' }],
+  })), actions);
+  assert.deepEqual(quiet[1].submenu.map(i => i.label), ['Nudge (stop and continue)', 'Stop', 'Show in ZCode']);
+  calls.length = 0;
+  quiet[1].submenu[0].click(); quiet[1].submenu[1].click();
+  assert.deepEqual(calls, ['nudge:wq:/q', 'stop:wq:/q']);
+
+  const failed = buildMenuTemplate(state(withWork({
+    lines: [{ id: 'wf', project: 'web', status: 'Failed', light: 'red', done: false, sessionId: 'wf', sock: '/f' }],
+  })), actions);
+  assert.deepEqual(failed[1].submenu.map(i => i.label), ['Try again', 'Show in ZCode']);
+  calls.length = 0;
+  failed[1].submenu[0].click();
+  assert.deepEqual(calls, ['retry:wf:/f']);
+});
+
+test('work submenu: working and finished lines keep their plain click, no submenu', () => {
+  const t = buildMenuTemplate(state(withWork({
+    lines: [
+      { id: 'a', project: 'web', status: 'Working', light: 'green', done: false },
+      { id: 'b', project: 'docs', status: '3 min ago', light: 'green', done: true },
+    ],
+    pending: { a: [pendingRequest({ sessionId: 'a' })], b: [pendingRequest({ sessionId: 'b' })] },
+  })), actions);
+  assert.equal(t[1].submenu, undefined);
+  assert.equal(t[2].submenu, undefined);
+  assert.deepEqual(t[1].label.replace(/\u00a0+/g, ' | '), 'web | Working');   // the aligned label is untouched
+});
+
+test('self-update ready: the first item restarts into the new version', () => {
+  const t = buildMenuTemplate(state({ selfUpdate: { phase: 'ready', version: '1.2.3', percent: 100 } }), actions);
+  assert.equal(t[0].label, 'Restart to update Zode (1.2.3)');
+  assert.equal(t[1].type, 'separator');
+  assert.equal(t[2].label, 'Relay running · no phones paired');       // the usual menu follows unchanged
+  calls.length = 0;
+  t[0].click();
+  assert.deepEqual(calls, ['installSelfUpdate']);
+});
+
+test('self-update downloading: a disabled first item with the percent', () => {
+  const t = buildMenuTemplate(state({ selfUpdate: { phase: 'downloading', version: '1.2.3', percent: 37 } }), actions);
+  assert.equal(t[0].label, 'Downloading the Zode update… 37%');
+  assert.equal(t[0].enabled, false);
+  const bare = buildMenuTemplate(state({ selfUpdate: { phase: 'downloading', percent: null } }), actions);
+  assert.equal(bare[0].label, 'Downloading the Zode update…');
+  assert.equal(bare[0].enabled, false);
+  const idle = buildMenuTemplate(state({ selfUpdate: { phase: 'idle' } }), actions);
+  assert.equal(idle[0].label, 'Relay running · no phones paired');    // nothing to show: no first item
+});
+
+test('the check item sits next to About Zode; without self-update state there is none', () => {
+  const t = buildMenuTemplate(state({ selfUpdate: { phase: 'idle' } }), actions);
+  const check = byLabel(t, 'Check for Zode updates…');
+  assert.ok(check);
+  const labels = t.map(i => i.label);
+  assert.ok(labels.indexOf('Check for Zode updates…') < labels.indexOf('About Zode'));
+  calls.length = 0;
+  check.click();
+  assert.deepEqual(calls, ['checkSelfUpdate']);
+  const none = buildMenuTemplate(state(), actions);                   // no selfUpdate state: no item, no crash
+  assert.equal(byLabel(none, 'Check for Zode updates…'), undefined);
 });
 
 test('release update item leads the menu; the engine rebuild item is hidden because the update includes it', () => {
@@ -262,40 +394,6 @@ test('the engine item opens the Engine when found, and is a disabled notice when
     assert.equal(notice.enabled, false);
     assert.equal(byLabel(missing, 'Open ZCode…'), undefined);
   }
-});
-
-test('self-update ready: the first item restarts into the new version', () => {
-  const t = buildMenuTemplate(state({ selfUpdate: { phase: 'ready', version: '1.2.3', percent: 100 } }), actions);
-  assert.equal(t[0].label, 'Restart to update Zode (1.2.3)');
-  assert.equal(t[1].type, 'separator');
-  assert.equal(t[2].label, 'Relay running · no phones paired');       // the usual menu follows unchanged
-  calls.length = 0;
-  t[0].click();
-  assert.deepEqual(calls, ['installSelfUpdate']);
-});
-
-test('self-update downloading: a disabled first item with the percent', () => {
-  const t = buildMenuTemplate(state({ selfUpdate: { phase: 'downloading', version: '1.2.3', percent: 37 } }), actions);
-  assert.equal(t[0].label, 'Downloading the Zode update… 37%');
-  assert.equal(t[0].enabled, false);
-  const bare = buildMenuTemplate(state({ selfUpdate: { phase: 'downloading', percent: null } }), actions);
-  assert.equal(bare[0].label, 'Downloading the Zode update…');
-  assert.equal(bare[0].enabled, false);
-  const idle = buildMenuTemplate(state({ selfUpdate: { phase: 'idle' } }), actions);
-  assert.equal(idle[0].label, 'Relay running · no phones paired');    // nothing to show: no first item
-});
-
-test('the check item sits next to About Zode; without self-update state there is none', () => {
-  const t = buildMenuTemplate(state({ selfUpdate: { phase: 'idle' } }), actions);
-  const check = byLabel(t, 'Check for Zode updates…');
-  assert.ok(check);
-  const labels = t.map(i => i.label);
-  assert.ok(labels.indexOf('Check for Zode updates…') < labels.indexOf('About Zode'));
-  calls.length = 0;
-  check.click();
-  assert.deepEqual(calls, ['checkSelfUpdate']);
-  const none = buildMenuTemplate(state(), actions);                   // no selfUpdate state: no item, no crash
-  assert.equal(byLabel(none, 'Check for Zode updates…'), undefined);
 });
 
 test('about and quit; no old update/rebuild wording, no old ZCode window item', () => {

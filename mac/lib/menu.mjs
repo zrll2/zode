@@ -4,7 +4,7 @@ const HINT = 'Not encrypted. Use Tailscale away from home.';
 // Menus cannot right-align a second piece of text, so each line is padded with spaces until the whole line has
 // the same width: the status then ends at one right edge. Widths are measured in the real font by the app
 // (state.work.metrics) and fall back to a rough per-character estimate (em) in tests and before the first measure.
-const EM = '\u2003', EN = '\u2002', THIN = '\u2009';
+const NBSP = '\u00a0';                                               // a plain no-break space: the same glyph (and width) in the menu font and in the measuring canvas
 export function textWidth(str) {                                      // estimate, in em
   let w = 0;
   for (const ch of String(str)) {
@@ -18,28 +18,62 @@ export function textWidth(str) {                                      // estimat
   }
   return w;
 }
-const ESTIMATE = { em: 1, en: 0.5, thin: 0.2 };                      // space widths in the same unit
-export function padTo(width, sp = ESTIMATE) {                         // spaces totalling about `width`
-  let out = '';
-  let left = Math.max(0, width);
-  while (left >= sp.em) { out += EM; left -= sp.em; }
-  if (left >= sp.en) { out += EN; left -= sp.en; }
-  while (left >= sp.thin * 0.5) { out += THIN; left -= sp.thin; }
-  return out;
+const ESTIMATE = { space: 0.26 };                                     // width of one space in the same unit
+export function padTo(width, sp = ESTIMATE) {                         // as many spaces as come closest to `width`
+  return NBSP.repeat(Math.max(0, Math.round(width / sp.space)));
 }
 // "<project><spaces><status>" with every status ending at the same right edge.
-// lines[i].px = { project, status } (measured) when available; metrics = { em, en, thin, gap } in the same unit.
+// lines[i].px = { project, status } (measured) when available; metrics = { space, gap } in the same unit.
 export function alignedLabels(lines, metrics) {
   if (!Array.isArray(lines) || lines.length === 0) return [];
   const measured = !!metrics && lines.every(l => l.px && Number.isFinite(l.px.project) && Number.isFinite(l.px.status));
   const w = l => (measured ? { p: l.px.project, s: l.px.status } : { p: textWidth(l.project), s: textWidth(l.status) });
   const sp = measured ? metrics : ESTIMATE;
-  const gap = measured && Number.isFinite(metrics.gap) ? metrics.gap : 0.7;
+  const gap = measured && Number.isFinite(metrics.gap) ? metrics.gap : 0.5;
   const total = Math.max(0, ...lines.map(l => w(l).p + w(l).s)) + gap;
   return lines.map(l => `${l.project}${padTo(total - w(l).p - w(l).s, sp)}${l.status}`);
 }
 
-// The ZCode-now block for the top of the menu: a header that carries a right-aligned "↻ Refresh" and is
+// The submenu for a conversation that needs the user: allow/deny per pending permission request
+// (state.work.pending, keyed by sessionId, oldest first), answer-in-ZCode for a question or when
+// nothing matches, nudge and stop for a stalled turn, try again for a failed one. Finished and
+// normally-running lines keep their plain click and get no submenu (null).
+function lineSubmenu(line, work, actions) {
+  if (line.done) return null;
+  const pending = (work.pending ?? {})[line.id] ?? [];
+  if (line.light === 'amber' && line.status === 'Waiting for you') {
+    const requests = pending.filter(p => p.kind === 'permission').slice(0, 3);     // oldest first, three at most
+    const question = pending.some(p => p.kind === 'question');
+    if (requests.length === 0) return [{ label: 'Answer in ZCode…', click: () => actions.openEngine() }];   // a question (or nothing we can answer): the Engine only
+    const items = [];
+    for (const r of requests) {
+      items.push(
+        { label: r.summary || r.toolName || 'Permission request', enabled: false },
+        { label: 'Allow once', click: () => actions.approve(r.requestId, r.sock, r.risky === true, r.summary) },
+        { label: 'Deny', click: () => actions.deny(r.requestId, r.sock) },
+      );
+    }
+    if (question) items.push({ label: 'Answer in ZCode…', click: () => actions.openEngine() });
+    items.push({ type: 'separator' }, { label: 'Show in ZCode', click: () => actions.openEngine() });
+    return items;
+  }
+  if (line.light === 'amber') {                                    // Quiet for N min: the turn may be stuck
+    return [
+      { label: 'Nudge (stop and continue)', click: () => actions.nudge(line.id, line.sock) },
+      { label: 'Stop', click: () => actions.stop(line.id, line.sock) },
+      { label: 'Show in ZCode', click: () => actions.openEngine() },
+    ];
+  }
+  if (line.light === 'red') {                                      // Failed: send the try-again message
+    return [
+      { label: 'Try again', click: () => actions.retry(line.id, line.sock) },
+      { label: 'Show in ZCode', click: () => actions.openEngine() },
+    ];
+  }
+  return null;
+}
+
+// The ZCode-now block for the top of the menu: a header that carries a right-aligned "Refresh" and is
 // itself the button, one clickable line per conversation with its status light (a green tick when
 // finished), an optional "Finished (N)" submenu when the user folded them, a +N more stub and a
 // separator. Icons arrive as opaque values in state.icons, so this stays testable. A line opens the
@@ -49,21 +83,27 @@ function workItems(state, actions) {
   if (!work || !Array.isArray(work.lines) || work.lines.length === 0) return [];
   const icons = state.icons ?? {};
   const fold = state.foldFinished === true;
-  const HEADER = { project: 'ZCode right now', status: '↻ Refresh', px: work.headerPx };
+  const HEADER = { project: 'ZCode right now', status: 'Refresh', px: work.headerPx };
   const aligned = alignedLabels([HEADER, ...work.lines], work.metrics);
   const headerLabel = aligned[0];
   const labels = aligned.slice(1);
-  const entry = (line, i) => ({
-    id: line.id != null ? `work-${line.id}` : undefined,
-    label: labels[i],
-    icon: line.done ? (icons.tick ?? icons[line.light]) : icons[line.light],
-    click: () => actions.openEngine(),
-  });
+  const entry = (line, i) => {
+    const submenu = lineSubmenu(line, work, actions);
+    return {
+      id: line.id != null ? `work-${line.id}` : undefined,
+      label: labels[i],
+      icon: line.done ? (icons.tick ?? icons[line.light]) : icons[line.light],
+      ...(submenu ? { submenu } : {}),                 // the arrow appears on its own; the label stays as measured
+      click: () => actions.openEngine(),
+    };
+  };
   const rows = work.lines.map((line, i) => ({ line, item: entry(line, i) }));
-  const active = rows.filter(r => !(fold && r.line.done)).map(r => r.item);
-  const finished = fold ? rows.filter(r => r.line.done).map(r => r.item) : [];
+  // Finished more than an hour ago folds into its own submenu by default; "Fold finished" folds every finished line.
+  const folded = r => r.line.done && (fold || r.line.older);
+  const active = rows.filter(r => !folded(r)).map(r => r.item);
+  const tucked = rows.filter(folded).map(r => r.item);
   const items = [{ label: headerLabel, click: () => actions.refreshWork?.() }, ...active];
-  if (finished.length) items.push({ label: `Finished (${finished.length})`, submenu: finished });
+  if (tucked.length) items.push({ label: fold ? `Finished (${tucked.length})` : `Finished over an hour ago (${tucked.length})`, submenu: tucked });
   if (work.more > 0) items.push({ label: `+${work.more} more`, enabled: false });
   if (work.lines.some(l => l.done)) items.push({ label: 'Fold finished', type: 'checkbox', checked: fold, click: () => actions.toggleFoldFinished?.() });
   items.push({ type: 'separator' });
