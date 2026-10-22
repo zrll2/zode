@@ -11,7 +11,7 @@ import { detectAddresses, defaultAddress } from './lib/addresses.mjs';
 import { loadSettings, saveSettings } from './lib/settings.mjs';
 import { buildMenuTemplate } from './lib/menu.mjs';
 import { updateState, rebuildScript, checkRelease } from './lib/updates.mjs';
-import { listSessions, readTapServers, summarize } from './lib/sessions.mjs';
+import { listSessions, listPending, readTapServers, summarize, respondPermission, stopSession, sendToSession, nudgeSession, RETRY_MESSAGE } from './lib/sessions.mjs';
 
 const HOME = os.homedir();
 const SETTINGS_FILE = path.join(HOME, '.zode', 'settings.json');
@@ -24,6 +24,7 @@ const RELEASE_CHECK_DELAY_MS = 30 * 1000;             // after start; startup ne
 const RELEASE_CHECK_MS = 6 * 60 * 60 * 1000;
 const WORK_TIMEOUT_MS = 1500;                         // per tap socket, and the cap on the tray-click wait
 const WORK_POLL_MS = 30 * 1000;                       // background refresh while a ZCode server is live
+const WORK_SETTLE_MS = 1000;                          // after a menu action, before the refresh + reopen
 
 const appendLog = (msg) => { try { fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true }); fs.appendFileSync(LOG_FILE, `${new Date().toISOString()} ${msg}\n`); } catch {} };
 const readRepoHome = () => { try { return fs.readFileSync(HOME_FILE, 'utf8').trim() || null; } catch { return null; } };
@@ -158,16 +159,17 @@ export async function startZode({ electron, resourcesDir } = {}) {
     async function withMeasures(summary) {
       const lines = summary.lines;
       if (!lines.length) return summary;
-      const spaces = ['\u2003', '\u2002', '\u2009'];
-      const w = await measureTexts([...spaces, ...lines.map(l => l.project), ...lines.map(l => l.status), 'ZCode right now', '↻ Refresh']);
+      const spaces = ['\u00a0'];
+      const w = await measureTexts([...spaces, ...lines.map(l => l.project), ...lines.map(l => l.status), 'ZCode right now', 'Refresh']);
+      const SPACES = spaces.length;
       if (!w) return summary;
-      const [em, en, thin] = w;
+      const [space] = w;
       const n = lines.length;
       return {
         ...summary,
-        metrics: { em, en, thin, gap: em * 0.7 },
-        headerPx: { project: w[3 + 2 * n], status: w[4 + 2 * n] },
-        lines: lines.map((l, i) => ({ ...l, px: { project: w[3 + i], status: w[3 + n + i] } })),
+        metrics: { space, gap: space * 4 },
+        headerPx: { project: w[SPACES + 2 * n], status: w[SPACES + 2 * n + 1] },
+        lines: lines.map((l, i) => ({ ...l, px: { project: w[SPACES + i], status: w[SPACES + n + i] } })),
       };
     }
 
@@ -177,7 +179,15 @@ export async function startZode({ electron, resourcesDir } = {}) {
       if (workRefresh) return workRefresh;
       workRefresh = (async () => {
         try {
-          work = await withMeasures(summarize(await listSessions({ timeoutMs: WORK_TIMEOUT_MS }), Date.now()));
+          const summary = summarize(await listSessions({ timeoutMs: WORK_TIMEOUT_MS }), Date.now());
+          const pending = {};
+          if (summary.counts.waiting > 0) {            // only waiting conversations can have something pending
+            for (const request of await listPending({ timeoutMs: WORK_TIMEOUT_MS })) {
+              if (request.sessionId == null) continue;
+              (pending[request.sessionId] ??= []).push(request);
+            }
+          }
+          work = await withMeasures({ ...summary, pending });
           const active = work.counts.working + work.counts.waiting + work.counts.failed;
           if (active !== workActive) {
             workActive = active;
@@ -291,6 +301,31 @@ export async function startZode({ electron, resourcesDir } = {}) {
       } catch (err) { appendLog(`zode: update: ${err?.stack || err}`); }
     }
 
+    // Which project a session belongs to, for the action log line.
+    function projectOf(sessionId) {
+      return work.lines.find(l => l.id === sessionId)?.project ?? 'ZCode';
+    }
+
+    // One menu action on a conversation: confirm (risky approvals), run it, give ZCode a moment to
+    // settle, then refresh and reopen the menu. Exactly one log line per action; a real refusal gets
+    // one plain dialog. Cancelled confirmations do nothing at all.
+    async function runWorkAction({ what, project, confirm, run }) {
+      try {
+        if (confirm && !(await confirm())) return;
+        const failure = await run();
+        appendLog(`zode: ${what} (${project})${failure ? `; did not work: ${failure}` : ''}`);
+        if (failure) await dialog.showMessageBox({ type: 'warning', message: 'That did not work', detail: String(failure) });
+      } catch (err) {
+        appendLog(`zode: ${what} (${project}); did not work: ${err?.message ?? err}`);
+        try { await dialog.showMessageBox({ type: 'warning', message: 'That did not work', detail: String(err?.message ?? err) }); } catch {}
+      }
+      await new Promise(resolve => { const t = setTimeout(resolve, WORK_SETTLE_MS); t.unref?.(); });
+      refreshSessions().finally(() => reopenMenu?.());
+    }
+
+    // The pending request a menu item belonged to, for the log line and the risky-command dialog.
+    const findPending = requestId => Object.values(work.pending ?? {}).flat().find(r => r.requestId === requestId) ?? null;
+
     let reopenMenu = null;                              // set once the tray exists: pops the menu up again
     const actions = {
       pair: () => showPairWindow(),
@@ -298,6 +333,29 @@ export async function startZode({ electron, resourcesDir } = {}) {
       revoke: id => { relay?.revokeDevice(id); },
       selectAddress: async id => { settings.addressId = id; save(); await applyRelay(); },
       refreshWork: () => { refreshSessions().finally(() => reopenMenu?.()); },   // the header button: fresh data, then the menu again
+      // Unblock a conversation from the menu bar. A permission answer is fire-and-forget (the desktop
+      // window may have answered first; any outcome is fine), stop/send surface a real refusal.
+      approve: (requestId, sock, risky, text) => {
+        const p = findPending(requestId);
+        runWorkAction({
+          what: 'approved', project: p ? projectOf(p.sessionId) : 'ZCode',
+          confirm: risky ? () => dialog.showMessageBox({
+            type: 'warning', buttons: ['Allow', 'Cancel'], defaultId: 0, cancelId: 1,
+            message: 'Allow this command?', detail: String(p?.detail || text || ''),
+          }).then(({ response }) => response === 0) : null,
+          run: async () => { await respondPermission({ sock, requestId, decision: 'allow', reason: 'Approved from the menu bar' }); return null; },
+        });
+      },
+      deny: (requestId, sock) => {
+        const p = findPending(requestId);
+        runWorkAction({
+          what: 'denied', project: p ? projectOf(p.sessionId) : 'ZCode',
+          run: async () => { await respondPermission({ sock, requestId, decision: 'deny', reason: 'Denied from the menu bar' }); return null; },
+        });
+      },
+      nudge: (sessionId, sock) => runWorkAction({ what: 'nudged', project: projectOf(sessionId), run: () => nudgeSession({ sock, sessionId }) }),
+      stop: (sessionId, sock) => runWorkAction({ what: 'stopped', project: projectOf(sessionId), run: () => stopSession({ sock, sessionId }) }),
+      retry: (sessionId, sock) => runWorkAction({ what: 'asked to try again', project: projectOf(sessionId), run: () => sendToSession({ sock, sessionId, content: RETRY_MESSAGE }) }),
       toggleFoldFinished: () => { settings.foldFinished = !settings.foldFinished; save(); },
       toggleLaunchAtLogin: () => { settings.launchAtLogin = !settings.launchAtLogin; save(); app.setLoginItemSettings({ openAtLogin: settings.launchAtLogin }); refresh(); },
       showZCode: () => {
