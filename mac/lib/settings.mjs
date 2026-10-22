@@ -1,7 +1,7 @@
 // Relay settings for the app, stored in ~/.zode/settings.json (mode 0600).
 import fs from 'node:fs';
 
-const DEFAULTS = { relayEnabled: true, addressId: null, port: 8787, launchAtLogin: false, setupDone: false, keepAwake: true };
+const DEFAULTS = { relayEnabled: true, addressId: null, port: 8787, launchAtLogin: false, setupDone: false, keepAwake: true, foldFinished: false };
 
 function sanitize(raw) {
   const s = { ...DEFAULTS };
@@ -12,6 +12,7 @@ function sanitize(raw) {
   if (typeof raw.launchAtLogin === 'boolean') s.launchAtLogin = raw.launchAtLogin;
   if (typeof raw.setupDone === 'boolean') s.setupDone = raw.setupDone;
   if (typeof raw.keepAwake === 'boolean') s.keepAwake = raw.keepAwake;
+  if (typeof raw.foldFinished === 'boolean') s.foldFinished = raw.foldFinished;
   return s;
 }
 

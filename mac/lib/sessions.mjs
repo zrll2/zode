@@ -103,6 +103,8 @@ function withDeadline(promise, timeoutMs) {
 }
 
 // The light and the line for one conversation, or null when it should not be shown at all.
+const MAX_LINES = 16;                                              // everything active plus recent finished work, up to this many
+
 export function describeSession(session, now = Date.now()) {
   const status = session?.status;
   const quiet = now - (Number.isFinite(session?.updatedAt) ? session.updatedAt : now);
@@ -112,23 +114,24 @@ export function describeSession(session, now = Date.now()) {
     if (quiet <= 5 * MIN) return { light: 'green', text: 'Working' };
     return { light: 'amber', text: `Quiet for ${Math.floor(quiet / MIN)} min` };   // might be stuck
   }
-  if (status === 'idle' && quiet <= 20 * MIN) {
+  if (status === 'idle' && quiet <= 3 * 60 * MIN) {                                   // finished within the last 3 hours
     return quiet < MIN
-      ? { light: 'green', text: 'Done just now' }
-      : { light: 'green', text: `Done ${Math.floor(quiet / MIN)} min ago` };
+      ? { light: 'green', text: 'Just now', done: true }
+      : quiet < 60 * MIN
+        ? { light: 'green', text: `${Math.floor(quiet / MIN)} min ago`, done: true }
+        : { light: 'green', text: `${Math.floor(quiet / (60 * MIN))} h ago`, done: true };
   }
   return null;
 }
 
-// "<project> — <status>", for every session: the project (folder) is what tells two work orders apart.
-function sessionLabel(session, text) {
+// The project (folder) is what tells two work orders apart; the menu puts the status in its own column.
+function projectName(session) {
   const workspacePath = typeof session?.workspace?.workspacePath === 'string' ? session.workspace.workspacePath : '';
-  const project = workspacePath.split('/').filter(Boolean).pop() || 'No workspace';
-  return `${project} — ${text}`;
+  return workspacePath.split('/').filter(Boolean).pop() || 'No workspace';
 }
 
-// Everything the tray needs: up to six menu lines (failed, waiting, working, then done, each newest
-// first), how many did not fit, and the counts behind the tooltip.
+// Everything the tray needs: the lines (failed, waiting, working, then done, each newest first), how
+// many did not fit, how many are finished, and the counts behind the tooltip.
 export function summarize(sessions, now = Date.now()) {
   const counts = { working: 0, waiting: 0, failed: 0 };
   const rows = [];
@@ -142,14 +145,17 @@ export function summarize(sessions, now = Date.now()) {
       id: session.sessionId,
       group: described.light === 'red' ? 0 : described.light === 'amber' ? 1 : session.status === 'running' ? 2 : 3,
       at: Number(session.updatedAt) || 0,
-      label: sessionLabel(session, described.text),
+      project: projectName(session),
+      status: described.text,
+      done: described.done === true,
       light: described.light,
     });
   }
   rows.sort((a, b) => a.group - b.group || b.at - a.at);
   return {
-    lines: rows.slice(0, 6).map(({ id, label, light }) => ({ id, label, light })),
-    more: Math.max(0, rows.length - 6),
+    lines: rows.slice(0, MAX_LINES).map(({ id, project, status, done, light }) => ({ id, project, status, done, light })),
+    more: Math.max(0, rows.length - MAX_LINES),
+    finished: rows.filter(r => r.done).length,
     counts,
   };
 }

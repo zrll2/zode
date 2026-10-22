@@ -1,7 +1,7 @@
 // buildMenuTemplate for every documented state.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildMenuTemplate } from '../lib/menu.mjs';
+import { alignedLabels, textWidth, buildMenuTemplate } from '../lib/menu.mjs';
 
 const HINT = 'Not encrypted. Use Tailscale away from home.';
 const ENGINE = '/Applications/ZCode Engine.app';
@@ -13,6 +13,8 @@ const actions = {
   selectAddress: (id) => calls.push('select:' + id),
   toggleLaunchAtLogin: () => calls.push('login'),
   toggleKeepAwake: () => calls.push('keepAwake'),
+  toggleFoldFinished: () => calls.push('toggleFoldFinished'),
+  refreshWork: () => calls.push('refreshWork'),
   setup: () => calls.push('setup'),
   openEngine: () => calls.push('openEngine'),
   about: () => calls.push('about'),
@@ -43,34 +45,41 @@ test('a long error line is cut at 80 characters', () => {
   assert.ok(label.startsWith('Relay error: '));
 });
 
-// The ZCode-now block: what ZCode is doing right now, at the top of the menu.
-const icons = { green: { name: 'green' }, amber: { name: 'amber' }, red: { name: 'red' }, grey: { name: 'grey' } };
+// The ZCode-now block: what ZCode is doing right now, at the top of the menu. Icons arrive as opaque
+// values; a finished line gets the green tick.
+const icons = { green: { name: 'green' }, amber: { name: 'amber' }, red: { name: 'red' }, grey: { name: 'grey' }, tick: { name: 'tick' } };
 const withWork = over => ({ icons, work: { lines: [], more: 0, ...over } });
 
-test('work block: header, one clickable lit line per session, +N more, then the usual menu', () => {
+test('work block: refresh header, one clickable lit line per session, fold switch, +N more, then the usual menu', () => {
   const t = buildMenuTemplate(state(withWork({
     lines: [
-      { id: 'w1', label: 'web — Working', light: 'green' },
-      { id: 'w2', label: 'cli — Waiting for you', light: 'amber' },
-      { id: 'w3', label: 'Failed', light: 'red' },
+      { id: 'w1', project: 'web', status: 'Working', light: 'green', done: false },
+      { id: 'w2', project: 'cli', status: 'Waiting for you', light: 'amber', done: false },
+      { id: 'w3', project: 'No workspace', status: 'Failed', light: 'red', done: false },
+      { id: 'w4', project: 'docs', status: '3 min ago', light: 'green', done: true },
     ],
     more: 2,
   })), actions);
-  assert.deepEqual(t.slice(0, 6).map(i => i.label), ['ZCode right now', 'web — Working', 'cli — Waiting for you', 'Failed', '+2 more', undefined]);
-  assert.equal(t[0].enabled, false);
+  const text = i => i.label.replace(/[\u2002\u2003\u2009]+/g, ' | ');         // the status sits in its own column, after wide spaces
+  assert.deepEqual(t.slice(0, 7).map(i => (i.label === undefined ? undefined : text(i))), ['ZCode right now | ↻ Refresh', 'web | Working', 'cli | Waiting for you', 'No workspace | Failed', 'docs | 3 min ago', '+2 more', 'Fold finished']);
+  assert.notEqual(t[0].enabled, false);                 // the header is the refresh button
+  calls.length = 0; t[0].click();
+  assert.deepEqual(calls, ['refreshWork']);
   assert.equal(t[1].icon, icons.green);                 // the loaded nativeImages pass through untouched
   assert.equal(t[2].icon, icons.amber);
   assert.equal(t[3].icon, icons.red);
-  assert.equal(t[4].enabled, false);                    // the +N more stub is not clickable
-  assert.equal(t[5].type, 'separator');
-  assert.ok(t.slice(6).some(i => i.label === 'Relay running · no phones paired'));   // the usual menu follows
+  assert.equal(t[4].icon, icons.tick);                  // a finished conversation gets the green tick, not a dot
+  assert.equal(t[5].enabled, false);                    // the +N more stub is not clickable
+  assert.equal(t[6].label, 'Fold finished');             // a finished line exists, so the fold switch is offered
+  assert.equal(t[7].type, 'separator');
+  assert.ok(t.slice(8).some(i => i.label === 'Relay running · no phones paired'));   // the usual menu follows
   calls.length = 0;
   t[1].click();
   assert.deepEqual(calls, ['openEngine']);              // a line opens the Engine app
 });
 
 test('work block: lines without overflow get no +N stub', () => {
-  const t = buildMenuTemplate(state(withWork({ lines: [{ id: 'w1', label: 'zode — Working', light: 'green' }] })), actions);
+  const t = buildMenuTemplate(state(withWork({ lines: [{ id: 'w1', project: 'zode', status: 'Working', light: 'green', done: false }] })), actions);
   assert.equal(t[2].type, 'separator');
   assert.equal(t.some(i => typeof i.label === 'string' && i.label.startsWith('+')), false);
 });
@@ -83,6 +92,52 @@ test('work block: nothing active, nothing added — the template looks exactly a
     assert.equal(t.length, base.length);                              // no items added
     assert.deepEqual(t.map(i => i.label), base.map(i => i.label));    // same labels in the same order
   }
+});
+
+test('alignedLabels: statuses start in one column, wider names get less padding', () => {
+  const rows = alignedLabels([{ project: 'zode', status: 'Working' }, { project: 'onetrend-trade-anyway-wt', status: '8 min ago' }, { project: 'TikTok课程培训', status: 'Just now' }]);
+  assert.ok(rows[0].startsWith('zode') && rows[0].endsWith('Working'));
+  const padLen = r => r.match(/[\u2002\u2003\u2009]+/)[0].length;
+  assert.ok(padLen(rows[0]) > padLen(rows[1]));          // the short name is padded more than the longest one
+  assert.equal(alignedLabels([]).length, 0);
+  assert.ok(textWidth('TikTok课程培训') > textWidth('TikTok'));
+});
+
+test('fold finished: finished lines move into a Finished (N) submenu; unfolded shows them all', () => {
+  const lines = [
+    { id: 'a', project: 'web', status: 'Working', light: 'green', done: false },
+    { id: 'b', project: 'docs', status: '3 min ago', light: 'green', done: true },
+    { id: 'c', project: 'cli', status: '1 h ago', light: 'green', done: true },
+  ];
+  const open = buildMenuTemplate(state({ ...withWork({ lines }), foldFinished: false }), actions);
+  assert.equal(open.some(i => i.label?.startsWith('Finished (')), false);
+  assert.equal(open.find(i => i.label === 'Fold finished').checked, false);
+  const folded = buildMenuTemplate(state({ ...withWork({ lines }), foldFinished: true }), actions);
+  assert.equal(folded.some(i => /^docs/.test(i.label ?? '')), false);               // not inline any more
+  const sub = folded.find(i => i.label === 'Finished (2)');
+  assert.equal(sub.submenu.length, 2);
+  assert.equal(sub.submenu[0].icon, icons.tick);
+  const fold = folded.find(i => i.label === 'Fold finished');
+  assert.equal(fold.checked, true);
+  calls.length = 0; fold.click();
+  assert.deepEqual(calls, ['toggleFoldFinished']);
+});
+
+test('alignedLabels with measured widths: every line has the same total width (right edge)', () => {
+  const lines = [
+    { project: 'zode', status: 'Working', px: { project: 30, status: 50 } },
+    { project: 'onetrend-trade-anyway-wt', status: '8 min ago', px: { project: 150, status: 55 } },
+    { project: 'bossy', status: 'Just now', px: { project: 36, status: 52 } },
+  ];
+  const metrics = { em: 13, en: 6.5, thin: 2.6, gap: 26 };
+  const rows = alignedLabels(lines, metrics);
+  const widthOf = (row, l) => {
+    const pad = row.match(/[\u2002\u2003\u2009]+/)[0];
+    const w = [...pad].reduce((a, c) => a + (c === '\u2003' ? 13 : c === '\u2002' ? 6.5 : 2.6), 0);
+    return l.px.project + w + l.px.status;
+  };
+  const totals = rows.map((r, i) => widthOf(r, lines[i]));
+  assert.ok(Math.max(...totals) - Math.min(...totals) <= 2.6);          // within one thin space
 });
 
 test('release update item leads the menu; the engine rebuild item is hidden because the update includes it', () => {
@@ -137,7 +192,7 @@ test('the ZCode connection line follows tapAlive', () => {
 });
 
 test('pair item, paired phones submenu, relay checkbox', () => {
-  calls.length = 0;                                                 // earlier tests clicked their items too
+  calls.length = 0;
   const devices = [{ id: 'dev1', name: 'iphone' }, { id: 'dev2', name: 'pixel' }];
   const t = buildMenuTemplate(state({ phones: 2, devices }), actions);
   byLabel(t, 'Pair a phone…').click();
