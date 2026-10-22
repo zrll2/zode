@@ -1,0 +1,26 @@
+#!/bin/bash
+# Build, sign, notarize and staple Zode for Mac.   bash scripts/release.sh [--no-notarize]
+# Needs: the Developer ID Application certificate in the login keychain (GOOLOO PTE LTD) and, for notarization,
+# a notarytool keychain profile named "zode-notary":
+#   xcrun notarytool store-credentials zode-notary --key AuthKey_XXXX.p8 --key-id XXXX --issuer <issuer-uuid>
+set -euo pipefail
+cd "$(dirname "$0")/.."
+NOTARIZE=1; [ "${1:-}" = "--no-notarize" ] && NOTARIZE=0
+PROFILE="${ZODE_NOTARY_PROFILE:-zode-notary}"
+
+npm install --no-audit --no-fund
+npm install --prefix ../relay --no-audit --no-fund --omit=dev
+node build.mjs
+rm -rf release
+npx electron-builder --mac --arm64 --publish never
+
+APP="release/mac-arm64/Zode.app"
+DMG="$(ls release/*.dmg | head -n 1)"
+codesign --verify --deep --strict --verbose=2 "$APP"
+echo "Signed: $(codesign -dv --verbose=2 "$APP" 2>&1 | grep -E 'Authority=Developer ID Application' | head -n 1)"
+
+if [ "$NOTARIZE" -eq 0 ]; then echo "Skipping notarization (--no-notarize). The app will be blocked by Gatekeeper on other Macs."; exit 0; fi
+xcrun notarytool submit "$DMG" --keychain-profile "$PROFILE" --wait
+xcrun stapler staple "$DMG"
+spctl -a -t open --context context:primary-signature -vv "$DMG"
+echo "Release ready: $DMG"

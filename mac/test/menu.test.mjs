@@ -12,6 +12,8 @@ const actions = {
   revoke: (id) => calls.push('revoke:' + id),
   selectAddress: (id) => calls.push('select:' + id),
   toggleLaunchAtLogin: () => calls.push('login'),
+  toggleKeepAwake: () => calls.push('keepAwake'),
+  setup: () => calls.push('setup'),
   openEngine: () => calls.push('openEngine'),
   about: () => calls.push('about'),
   quit: () => calls.push('quit'),
@@ -21,7 +23,7 @@ const addresses = [
   { id: 'lan', label: 'Wi-Fi / local network (192.168.1.5)', ip: '192.168.1.5' },
   { id: 'local', label: 'This Mac only', ip: '127.0.0.1' },
 ];
-const state = (over = {}) => ({ running: true, error: null, phones: 0, devices: [], addresses, addressId: 'tailscale', launchAtLogin: false, engine: { path: ENGINE }, ...over });
+const state = (over = {}) => ({ running: true, error: null, phones: 0, devices: [], addresses, addressId: 'tailscale', launchAtLogin: false, tapAlive: true, keepAwake: true, engine: { path: ENGINE }, ...over });
 const byLabel = (t, label) => t.find(i => i.label === label);
 
 test('status line variants', () => {
@@ -29,14 +31,23 @@ test('status line variants', () => {
   assert.equal(buildMenuTemplate(state({ phones: 1, devices: [{ id: 'a', name: 'x' }] }), actions)[0].label, 'Relay running · 1 phone');
   assert.equal(buildMenuTemplate(state(), actions)[0].label, 'Relay running · no phones paired');
   assert.equal(buildMenuTemplate(state({ running: false }), actions)[0].label, 'Relay stopped');
-  assert.equal(buildMenuTemplate(state({ running: false, error: 'port 8787 is in use. Is `./zode relay` still running?' }), actions)[0].label,
-    'Relay error: port 8787 is in use. Is `./zode relay` still running?');
+  assert.equal(buildMenuTemplate(state({ running: false, error: 'port 8787 is in use. Is the old Zode still running?' }), actions)[0].label,
+    'Relay error: port 8787 is in use. Is the old Zode still running?');
 });
 
 test('a long error line is cut at 80 characters', () => {
   const label = buildMenuTemplate(state({ running: false, error: 'x'.repeat(200) }), actions)[0].label;
   assert.equal(label.length, 80);
   assert.ok(label.startsWith('Relay error: '));
+});
+
+test('the ZCode connection line follows tapAlive', () => {
+  const t = buildMenuTemplate(state(), actions);
+  assert.equal(t[1].label, 'ZCode connected');
+  assert.equal(t[1].enabled, false);
+  const waiting = buildMenuTemplate(state({ tapAlive: false }), actions);
+  assert.equal(waiting[1].label, 'Waiting for ZCode');
+  assert.equal(buildMenuTemplate(state({ tapAlive: undefined }), actions)[1].label, 'Waiting for ZCode');
 });
 
 test('pair item, paired phones submenu, relay checkbox', () => {
@@ -73,6 +84,24 @@ test('reachable-from radios; the hint appears only for lan', () => {
   assert.equal(hint.enabled, false);
 });
 
+test('login and keep-awake checkboxes follow their settings', () => {
+  const t = buildMenuTemplate(state({ launchAtLogin: true, keepAwake: false }), actions);
+  const login = byLabel(t, 'Start Zode when you log in');
+  assert.equal(login.type, 'checkbox');
+  assert.equal(login.checked, true);
+  const keep = byLabel(t, 'Keep my Mac awake while Zode is on');
+  assert.equal(keep.type, 'checkbox');
+  assert.equal(keep.checked, false);
+  keep.click();
+  assert.ok(calls.includes('keepAwake'));
+});
+
+test('the setup item is always there and reopens the wizard', () => {
+  const t = buildMenuTemplate(state(), actions);
+  byLabel(t, 'Set up ZCode…').click();
+  assert.ok(calls.includes('setup'));
+});
+
 test('the engine item opens the Engine when found, and is a disabled notice when not', () => {
   const t = buildMenuTemplate(state(), actions);
   const open = byLabel(t, 'Open ZCode…');
@@ -80,7 +109,7 @@ test('the engine item opens the Engine when found, and is a disabled notice when
   open.click();
   assert.ok(calls.includes('openEngine'));
   const labels = t.map(i => i.label);
-  assert.ok(labels.indexOf('Open ZCode…') > labels.indexOf('Start Zode when you log in'));
+  assert.ok(labels.indexOf('Open ZCode…') > labels.indexOf('Set up ZCode…'));
   assert.ok(labels.indexOf('About Zode') > labels.indexOf('Open ZCode…'));
 
   for (const s of [state({ engine: { path: null } }), state({ engine: undefined })]) {
@@ -91,10 +120,8 @@ test('the engine item opens the Engine when found, and is a disabled notice when
   }
 });
 
-test('login checkbox, about and quit; no update items and no old ZCode window item', () => {
-  const t = buildMenuTemplate(state({ launchAtLogin: true }), actions);
-  assert.equal(byLabel(t, 'Start Zode when you log in').checked, true);
-  assert.equal(byLabel(t, 'Start Zode when you log in').type, 'checkbox');
+test('about and quit; no update items and no old ZCode window item', () => {
+  const t = buildMenuTemplate(state(), actions);
   byLabel(t, 'About Zode').click();
   byLabel(t, 'Quit Zode').click();
   assert.ok(calls.includes('about'));

@@ -28,6 +28,7 @@ const copyAll = (from, to) => {
   for (const f of fs.readdirSync(from)) fs.copyFileSync(path.join(from, f), path.join(to, f));
 };
 copyAll(path.join(root, 'pair'), path.join(dist, 'pair'));
+copyAll(path.join(root, 'setup'), path.join(dist, 'setup'));
 // The tray icons are binary PNGs kept in assets/; until mac/assets exists, borrow macapp's copies.
 copyAll(fs.existsSync(path.join(root, 'assets')) ? path.join(root, 'assets') : path.join(root, '..', 'macapp', 'assets'), path.join(dist, 'assets'));
 fs.copyFileSync(path.join(root, 'preload.cjs'), path.join(dist, 'preload.cjs'));

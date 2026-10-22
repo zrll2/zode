@@ -10,8 +10,10 @@ export function buildMenuTemplate(state, actions) {
   else line = 'Relay stopped';
   const addresses = state.addresses ?? [];
   const engine = state.engine ?? { path: null };
+  const connected = state.tapAlive === true;
   return [
     { label: line, enabled: false },
+    { label: connected ? 'ZCode connected' : 'Waiting for ZCode', enabled: false },
     { label: 'Pair a phone…', click: () => actions.pair() },
     {
       label: 'Paired phones',
@@ -28,8 +30,10 @@ export function buildMenuTemplate(state, actions) {
       ],
     },
     { label: 'Start Zode when you log in', type: 'checkbox', checked: !!state.launchAtLogin, click: () => actions.toggleLaunchAtLogin() },
+    { label: 'Keep my Mac awake while Zode is on', type: 'checkbox', checked: !!state.keepAwake, click: () => actions.toggleKeepAwake() },
     { type: 'separator' },
-    // Open the Engine app (the user's own ZCode); disabled while neither the Engine nor the legacy copy exists.
+    { label: 'Set up ZCode…', click: () => actions.setup() },
+    // Open the Engine app (the user's own ZCode); disabled while it does not exist.
     ...(engine.path
       ? [{ label: 'Open ZCode…', enabled: true, click: () => actions.openEngine() }]
       : [{ label: 'ZCode Engine not found', enabled: false }]),

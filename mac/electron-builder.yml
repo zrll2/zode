@@ -1,0 +1,36 @@
+# Packaging for Zode for Mac: Developer ID signed, hardened runtime. Notarization is a separate step (scripts/release.sh).
+appId: dev.zode.mac
+productName: Zode
+copyright: Copyright © GOOLOO PTE LTD
+directories:
+  output: release
+  buildResources: resources
+files:
+  - package.json
+  - dist/**
+asar: true
+extraResources:                      # the "engine kit": what the setup wizard needs to build ZCode Engine.app
+  - from: ../scripts/build-tap.sh
+    to: engine-kit/scripts/build-tap.sh
+  - from: ../bridge/agent-wrapper.mjs
+    to: engine-kit/bridge/agent-wrapper.mjs
+mac:
+  category: public.app-category.developer-tools
+  icon: ../assets/Zode.icns
+  target:
+    - target: dmg
+      arch: [arm64]
+    - target: zip
+      arch: [arm64]
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: resources/entitlements.mac.plist
+  entitlementsInherit: resources/entitlements.mac.plist
+  identity: "GOOLOO PTE LTD (JLB545UV6D)"
+  notarize: false
+  extendInfo:
+    LSUIElement: true                # menu bar only: no Dock icon
+    NSLocalNetworkUsageDescription: Zode lets your phone reach this Mac over your local or private network.
+dmg:
+  title: Zode
+  sign: false                        # the app inside is signed; the dmg is notarized and stapled by release.sh

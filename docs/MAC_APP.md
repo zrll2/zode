@@ -17,7 +17,7 @@ The phone talks to the relay exactly as before (protocol unchanged). The relay t
 
 ## Phases
 1. **Split.** `mac/`: standalone Electron app (tray, pairing window, relay, settings). `scripts/build-tap.sh`: Engine mode (no relay or tray inside, new name and bundle id). The update scripts learn the Engine path.
-2. **First-run setup.** Find ZCode, build the Engine, ask to log in once and open a project. Migration from the old `Zode.app` (settings, paired phones in `~/.zode`).
+2. **First-run setup** — built: the `mac/` wizard finds ZCode, builds the Engine, waits for sign-in + an open project, pairs the phone, and offers to Trash the old `Zode.app` (settings and paired phones in `~/.zode` carry over by themselves).
 3. **Updates.** ZCode updates (`scripts/update-zcode.sh`, already built; rebuilds the Engine) plus updates of Zode itself via `electron-updater` from GitHub Releases.
 4. **Sign and notarize.** electron-builder, hardened runtime, entitlements, `notarytool`, `stapler`, DMG. Certificate: Developer ID Application, GOOLOO PTE LTD (JLB545UV6D). arm64 first.
 5. **Distribute.** GitHub Releases, README download button, Homebrew cask.
