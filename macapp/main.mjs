@@ -45,6 +45,7 @@ export async function startZode({ electron, resourcesDir } = {}) {
       amber: nativeImage.createFromPath(path.join(res, 'dotAmber.png')),
       red: nativeImage.createFromPath(path.join(res, 'dotRed.png')),
       grey: nativeImage.createFromPath(path.join(res, 'dotGrey.png')),
+      tick: nativeImage.createFromPath(path.join(res, 'tickGreen.png')),         // a finished conversation
     };
 
     let settings = loadSettings(SETTINGS_FILE);

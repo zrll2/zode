@@ -114,17 +114,16 @@ export function describeSession(session, now = Date.now()) {
   }
   if (status === 'idle' && quiet <= 20 * MIN) {
     return quiet < MIN
-      ? { light: 'green', text: 'Done just now' }
-      : { light: 'green', text: `Done ${Math.floor(quiet / MIN)} min ago` };
+      ? { light: 'green', text: 'Just now', done: true }
+      : { light: 'green', text: `${Math.floor(quiet / MIN)} min ago`, done: true };
   }
   return null;
 }
 
-// "<project> — <status>", for every session: the project (folder) is what tells two work orders apart.
-function sessionLabel(session, text) {
+// The project (folder) is what tells two work orders apart; the menu puts the status in its own column.
+function projectName(session) {
   const workspacePath = typeof session?.workspace?.workspacePath === 'string' ? session.workspace.workspacePath : '';
-  const project = workspacePath.split('/').filter(Boolean).pop() || 'No workspace';
-  return `${project} — ${text}`;
+  return workspacePath.split('/').filter(Boolean).pop() || 'No workspace';
 }
 
 // Everything the tray needs: up to six menu lines (failed, waiting, working, then done, each newest
@@ -142,13 +141,15 @@ export function summarize(sessions, now = Date.now()) {
       id: session.sessionId,
       group: described.light === 'red' ? 0 : described.light === 'amber' ? 1 : session.status === 'running' ? 2 : 3,
       at: Number(session.updatedAt) || 0,
-      label: sessionLabel(session, described.text),
+      project: projectName(session),
+      status: described.text,
+      done: described.done === true,
       light: described.light,
     });
   }
   rows.sort((a, b) => a.group - b.group || b.at - a.at);
   return {
-    lines: rows.slice(0, 6).map(({ id, label, light }) => ({ id, label, light })),
+    lines: rows.slice(0, 6).map(({ id, project, status, done, light }) => ({ id, project, status, done, light })),
     more: Math.max(0, rows.length - 6),
     counts,
   };
