@@ -45,6 +45,15 @@ node __ZODE_HOME__/bridge/zcode-task.mjs --worktree <wt> --order <order.md> --ev
 - Output: JSON with `ended` (`turn-end`, `turn-failed`, `timeout`, `approval-needed`, `stalled`, `zcode-gone`, `disconnected`), the reply text, and `git status`.
 - To stop a running turn: `node __ZODE_HOME__/bridge/zcode-stop.mjs <sessionId>` (the id is in the `.zcode-session-*` file). Killing the node process alone does NOT stop ZCode.
 
+## 3b. Parallel orders (several ZCode tasks at once)
+Use this when a job splits into pieces that do not touch the same files (for example: relay tests, a phone screen, a docs page). Do NOT parallelize steps that depend on each other or edit the same file: they would conflict at merge time.
+1. One worktree and one `zcode/*` branch per piece (`git worktree add ../<proj>-<piece>-wt -b zcode/<piece>`). Two orders in one worktree is refused.
+2. Write one small order per piece (same rules as above: at most 3 to 5 files, about 5 minutes each). Tell each order which files it may touch.
+3. Write `plan.json`: `[{"name": "relay-tests", "worktree": "/abs/path-wt", "order": "/abs/order.md", "reasoning": "low"}, ...]`.
+4. Run: `node __ZODE_HOME__/bridge/zcode-batch.mjs --plan plan.json --max-parallel 3 --out batch.json > batch.log 2>&1` in the background. Three at once is the practical limit; more only slows every task.
+5. Progress arrives on its own: a block every 5 minutes (`--heartbeat 300`) and whenever a task ends, one line per task: state (queued, running, done, problem), minutes, files changed, idle seconds, prompts answered. Read `batch.log` (or follow it with Monitor) when you check in; `batch.json` always holds the latest state. A task in `problem` (stalled, zcode-gone, approval-needed, turn-failed) does not stop the others: handle it with the stall steps above, resend the fix as a normal order.
+6. When the batch ends, verify and commit each worktree separately (tsc, tests), then merge the branches one at a time and rerun the checks after each merge. Finish each worktree with `zcode-finish.mjs` (step 6b).
+
 ## 4. Verify yourself, with real commands
 Run the project's install, type check, tests, build, and the real app when the change is user-visible (simulator, browser, curl). Most real bugs only show in the running app, not in unit tests.
 - Failures go back to ZCode **verbatim** (command + exact error lines) as a short order. Do not paraphrase errors.
