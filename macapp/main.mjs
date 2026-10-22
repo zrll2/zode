@@ -45,6 +45,7 @@ export async function startZode({ electron, resourcesDir } = {}) {
       amber: nativeImage.createFromPath(path.join(res, 'dotAmber.png')),
       red: nativeImage.createFromPath(path.join(res, 'dotRed.png')),
       grey: nativeImage.createFromPath(path.join(res, 'dotGrey.png')),
+      tick: nativeImage.createFromPath(path.join(res, 'tickGreen.png')),         // a finished conversation
     };
 
     let settings = loadSettings(SETTINGS_FILE);
@@ -140,13 +141,43 @@ export async function startZode({ electron, resourcesDir } = {}) {
       return parts.length ? `Zode: ${parts.join(', ')}` : 'Zode';
     }
 
+    // Measure text in the real UI font (a hidden page with a canvas), so the menu can pad each line until the
+    // status text ends at one right edge. Any failure returns null and the menu falls back to an estimate.
+    let measureWin = null;
+    async function measureTexts(strings) {
+      try {
+        if (!measureWin || measureWin.isDestroyed()) {
+          measureWin = new BrowserWindow({ show: false, width: 120, height: 60, webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true } });
+          await measureWin.loadURL('data:text/html;charset=utf-8,<canvas id="c"></canvas>');
+        }
+        const widths = await measureWin.webContents.executeJavaScript(
+          `(() => { const x = document.getElementById('c').getContext('2d'); x.font = '13px -apple-system, system-ui'; return ${JSON.stringify(strings)}.map(t => x.measureText(t).width); })()`);
+        return Array.isArray(widths) && widths.every(Number.isFinite) ? widths : null;
+      } catch { return null; }
+    }
+    async function withMeasures(summary) {
+      const lines = summary.lines;
+      if (!lines.length) return summary;
+      const spaces = ['\u2003', '\u2002', '\u2009'];
+      const w = await measureTexts([...spaces, ...lines.map(l => l.project), ...lines.map(l => l.status), 'ZCode right now', '↻ Refresh']);
+      if (!w) return summary;
+      const [em, en, thin] = w;
+      const n = lines.length;
+      return {
+        ...summary,
+        metrics: { em, en, thin, gap: em * 0.7 },
+        headerPx: { project: w[3 + 2 * n], status: w[4 + 2 * n] },
+        lines: lines.map((l, i) => ({ ...l, px: { project: w[3 + i], status: w[3 + n + i] } })),
+      };
+    }
+
     // One shared listing across every live ZCode server (1.5 s per socket, never twice at once). The
     // menu and the tooltip read only the cached `work`, so a slow refresh keeps the previous lines.
     function refreshSessions() {
       if (workRefresh) return workRefresh;
       workRefresh = (async () => {
         try {
-          work = summarize(await listSessions({ timeoutMs: WORK_TIMEOUT_MS }), Date.now());
+          work = await withMeasures(summarize(await listSessions({ timeoutMs: WORK_TIMEOUT_MS }), Date.now()));
           const active = work.counts.working + work.counts.waiting + work.counts.failed;
           if (active !== workActive) {
             workActive = active;
@@ -179,6 +210,7 @@ export async function startZode({ electron, resourcesDir } = {}) {
         update,
         release,
         work,
+        foldFinished: settings.foldFinished === true,
         icons: dotIcons,
       };
     }
@@ -259,11 +291,14 @@ export async function startZode({ electron, resourcesDir } = {}) {
       } catch (err) { appendLog(`zode: update: ${err?.stack || err}`); }
     }
 
+    let reopenMenu = null;                              // set once the tray exists: pops the menu up again
     const actions = {
       pair: () => showPairWindow(),
       toggleRelay: async () => { settings.relayEnabled = !(relay?.status().running); save(); await applyRelay(); },
       revoke: id => { relay?.revokeDevice(id); },
       selectAddress: async id => { settings.addressId = id; save(); await applyRelay(); },
+      refreshWork: () => { refreshSessions().finally(() => reopenMenu?.()); },   // the header button: fresh data, then the menu again
+      toggleFoldFinished: () => { settings.foldFinished = !settings.foldFinished; save(); },
       toggleLaunchAtLogin: () => { settings.launchAtLogin = !settings.launchAtLogin; save(); app.setLoginItemSettings({ openAtLogin: settings.launchAtLogin }); refresh(); },
       showZCode: () => {
         const win = BrowserWindow.getAllWindows().find(w => w !== pairWindow);
@@ -314,6 +349,7 @@ export async function startZode({ electron, resourcesDir } = {}) {
       // to re-check before it opens. Both checks together are capped at ~1.5 s; whatever has not landed
       // by then is simply not in this menu yet and shows up on the next click.
       const popMenu = () => { try { tray.popUpContextMenu(Menu.buildFromTemplate(buildMenuTemplate(menuState(), actions))); } catch (err) { appendLog(`zode: ${err?.stack || err}`); } };
+      reopenMenu = popMenu;
       const popMenuWhenReady = () => {
         const cap = new Promise(resolve => { const t = setTimeout(resolve, WORK_TIMEOUT_MS); t.unref?.(); });
         Promise.race([Promise.allSettled([checkUpdate(), refreshSessions()]), cap]).then(popMenu, popMenu);
