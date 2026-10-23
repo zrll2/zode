@@ -65,3 +65,11 @@ routing: small mechanical → deepseek, low reasoning · design-heavy → glm, h
 - Keep Zode ZCode-first with a plugin layer (no rebrand yet).
 - OpenCode is the first additional backend.
 - Audit is risk-based, one per feature by default.
+
+## OpenCode spike (verified)
+Checked against OpenCode 1.3.3 on this Mac, `opencode serve` (HTTP, localhost):
+- **API fits the adapter interface.** `POST /session` (with `?directory=` to pick the worktree), `POST /session/{id}/prompt_async` (model, parts), `GET /event` (server-sent events: `message.part.delta`, `message.part.updated`, `session.status` idle or busy, `session.diff`), `GET /permission` and `POST /permission/{id}/reply` (`once`, `always`, `reject`, plus a message), `POST /session/{id}/abort`, `GET /session/{id}/message` (per-message token counts), `GET /session/{id}/diff`, `GET /session/status`.
+- **Worked end to end:** the same small order used for the ZCode reasoning comparison, run through the API with GLM-5.3-flash: 26 s, about 1.5k output tokens, 16 passing tests. ZCode at low reasoning took 19 s and about 600 tokens for fewer test cases.
+- **No permission asks** came up for pure file edits, so the existing approval policy (deny commands, allow read-only) maps to the reply endpoint directly.
+- **DeepSeek:** the free DeepSeek model that ships with OpenCode answers 403 ("free tier can only be used from within OpenCode") when driven through the server API. A DeepSeek comparison needs the user's own DeepSeek API key configured as an OpenCode provider.
+- **Credentials:** OpenCode keeps provider keys in its own store (`~/.local/share/opencode/auth.json`); Zode never needs to read them.
