@@ -23,6 +23,8 @@ The phone talks to the relay exactly as before (protocol unchanged). The relay t
 5. **Distribute.** GitHub Releases, README download button, Homebrew cask.
 6. **Clean up.** Remove `macapp/` and the asar patching once nothing uses them.
 
+Built along the way: the menu bar icon opens a small panel (left click) — the native menu remains as the right-click fallback.
+
 ## Decisions made
 - Electron (reuse the tested JavaScript; ~100 MB download is fine). A native rewrite stays possible later because the phone protocol does not change.
 - Publisher shown to users: GOOLOO PTE LTD.

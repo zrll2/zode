@@ -5,7 +5,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
 import { spawn } from 'node:child_process';
-import { app, Tray, Menu, BrowserWindow, ipcMain, clipboard, dialog, nativeImage, shell, powerSaveBlocker, Notification } from 'electron';
+import { app, Tray, Menu, BrowserWindow, ipcMain, clipboard, dialog, nativeImage, nativeTheme, screen, shell, powerSaveBlocker, Notification } from 'electron';
 import updaterPkg from 'electron-updater';
 const { autoUpdater } = updaterPkg;
 import QRCode from 'qrcode';
@@ -13,6 +13,8 @@ import { createRelay } from '../relay/service.mjs';
 import { detectAddresses, defaultAddress } from './lib/addresses.mjs';
 import { loadSettings, saveSettings } from './lib/settings.mjs';
 import { buildMenuTemplate } from './lib/menu.mjs';
+import { buildPanelModel } from './lib/panel.mjs';
+import { panelBounds, trayImageName, isTemplate } from './lib/panelWindow.mjs';
 import { setupSteps, parseBuildProgress, friendlySetupError, kitDir } from './lib/setup.mjs';
 import { isRunning, quitApp, tapAlive, findOriginal, findEngine, findOldIntegrated, runBuild } from './lib/system.mjs';
 import { readVersion, compareVersions, checkRelease, engineRebuildScript } from './lib/updates.mjs';
@@ -31,6 +33,8 @@ const RELEASE_CHECK_MS = 6 * 60 * 60 * 1000;
 const WORK_TIMEOUT_MS = 1500;                         // per tap socket, and the cap on the tray-click wait
 const WORK_POLL_MS = 30 * 1000;                       // background refresh while a ZCode server is live
 const WORK_SETTLE_MS = 1000;                          // after a menu action, before the refresh + reopen
+const PANEL_WIDTH = 340;                              // the panel that opens under the menu bar icon
+const PANEL_REOPEN_MS = 250;                          // a tray click this soon after a blur-hide is the click that closed it
 
 const appendLog = (msg) => { try { fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true }); fs.appendFileSync(LOG_FILE, `${new Date().toISOString()} ${msg}\n`); } catch {} };
 
@@ -94,10 +98,14 @@ async function start() {
     let releaseCheck = null;
     let updating = false;                              // one engine job (update or rebuild) at a time
     // What ZCode is doing right now, read from the tap sockets; the menu only ever sees the cached value.
-    let work = { lines: [], more: 0, counts: { working: 0, waiting: 0, failed: 0 } };
+    let work = { lines: [], more: 0, counts: { working: 0, waiting: 0, failed: 0 }, pending: {} };
     let workActive = 0;                                // the active count last logged, so a change logs once
     let workRefresh = null;
     let workPoll = null;
+    let panelWindow = null;                            // the popover under the tray icon; created lazily, kept
+    let panelHeight = 300;                             // the last height the renderer asked for
+    let panelHidingAt = 0;                             // when the panel last hid on blur, to skip the closing click
+    let panelHoldBlur = false;                         // a dialog is anchored to the panel: keep it up
 
     const chosen = () => addresses.find(a => a.id === settings.addressId) ?? defaultAddress(addresses);
     const publicUrlFor = a => `ws://${a.ip}:${settings.port}`;
@@ -245,7 +253,11 @@ async function start() {
       if (workRefresh) return workRefresh;
       workRefresh = (async () => {
         try {
-          const summary = summarize(await listSessions({ timeoutMs: WORK_TIMEOUT_MS }), Date.now());
+          const listed = await listSessions({ timeoutMs: WORK_TIMEOUT_MS });
+          const summary = summarize(listed, Date.now());
+          // The panel shows ages since the last activity; summarize drops the timestamps, so keep them.
+          const at = new Map(listed.map(s => [s?.sessionId, Number(s?.updatedAt) || 0]));
+          summary.lines = summary.lines.map(l => (at.has(l.id) ? { ...l, at: at.get(l.id) } : l));
           const pending = {};
           if (summary.counts.waiting > 0) {            // only waiting conversations can have something pending
             for (const request of await listPending({ timeoutMs: WORK_TIMEOUT_MS })) {
@@ -260,6 +272,8 @@ async function start() {
             appendLog(`zode: ${active} active ZCode ${active === 1 ? 'conversation' : 'conversations'}`);
           }
           try { tray?.setToolTip(workTooltip(work.counts)); } catch { /* no tray yet */ }
+          applyTrayImage();                              // the icon dot follows the glyph, also on the 30 s poll
+          pushPanel();                                   // an open panel re-renders from the fresh state
         } catch (err) { appendLog(`zode: sessions: ${err?.stack || err}`); }
       })().finally(() => { workRefresh = null; });
       return workRefresh;
@@ -307,6 +321,7 @@ async function start() {
       if (devices.length > pairedCount) currentPairing = null;      // a phone just used the shown code
       pairedCount = devices.length;
       try { pingPairWindow(); } catch (err) { appendLog(`zode: ${err?.stack || err}`); }
+      pushPanel();                                       // a setting or the relay changed: the panel follows
     }
 
     // One click for the whole update: the detached scripts/update-zcode.sh updates the original ZCode,
@@ -423,7 +438,7 @@ async function start() {
         try { await dialog.showMessageBox({ type: 'warning', message: 'That did not work', detail: String(err?.message ?? err) }); } catch { /* never */ }
       }
       await new Promise(resolve => { const t = setTimeout(resolve, WORK_SETTLE_MS); t.unref?.(); });
-      refreshSessions().finally(() => reopenMenu?.());
+      refreshSessions().finally(() => { if (!panelVisible()) reopenMenu?.(); });   // an open panel refreshes in place
     }
 
     // The pending request a menu item belonged to, for the log line and the risky-command dialog.
@@ -435,7 +450,7 @@ async function start() {
       toggleRelay: async () => { settings.relayEnabled = !(relay?.status().running); save(); await applyRelay(); },
       revoke: id => { try { relay?.revokeDevice(id); } catch (err) { appendLog(`zode: revoke: ${err?.stack || err}`); } },
       selectAddress: async id => { settings.addressId = id; save(); await applyRelay(); },
-      refreshWork: () => { refreshSessions().finally(() => reopenMenu?.()); },   // the header button: fresh data, then the menu again
+      refreshWork: () => { refreshSessions().finally(() => { if (!panelVisible()) reopenMenu?.(); }); },   // fresh data, then the menu or the panel
       // Unblock a conversation from the menu bar. A permission answer is fire-and-forget (the desktop
       // window may have answered first; any outcome is fine), stop/send surface a real refusal.
       approve: (requestId, sock, risky, text) => {
@@ -459,7 +474,7 @@ async function start() {
       nudge: (sessionId, sock) => runWorkAction({ what: 'nudged', project: projectOf(sessionId), run: () => nudgeSession({ sock, sessionId }) }),
       stop: (sessionId, sock) => runWorkAction({ what: 'stopped', project: projectOf(sessionId), run: () => stopSession({ sock, sessionId }) }),
       retry: (sessionId, sock) => runWorkAction({ what: 'asked to try again', project: projectOf(sessionId), run: () => sendToSession({ sock, sessionId, content: RETRY_MESSAGE }) }),
-      toggleFoldFinished: () => { settings.foldFinished = !settings.foldFinished; save(); },
+      toggleFoldFinished: () => { settings.foldFinished = !settings.foldFinished; save(); pushPanel(); },
       toggleLaunchAtLogin: () => { settings.launchAtLogin = !settings.launchAtLogin; save(); app.setLoginItemSettings({ openAtLogin: settings.launchAtLogin }); refresh(); },
       toggleKeepAwake: () => { settings.keepAwake = !(settings.keepAwake === true); save(); updatePowerBlocker(); refresh(); },
       setup: () => showSetupWindow(),
@@ -529,6 +544,207 @@ async function start() {
     ipcMain.handle('zode:copy', (_e, text) => { try { clipboard.writeText(String(text ?? '')); return true; } catch (err) { appendLog(`zode: copy: ${err?.stack || err}`); return false; } });
     ipcMain.handle('zode:listDevices', () => { try { return relay ? relay.listDevices() : []; } catch (err) { appendLog(`zode: listDevices: ${err?.stack || err}`); return []; } });
     ipcMain.handle('zode:revoke', (_e, id) => { try { const ok = relay ? relay.revokeDevice(String(id)) : false; refresh(); return ok; } catch (err) { appendLog(`zode: revoke: ${err?.stack || err}`); return false; } });
+
+    // ---- the menu bar panel --------------------------------------------------------------------
+    // A small popover under the tray icon; the native menu stays as the right-click fallback. The
+    // renderer only draws: one model in (zode:panelState, pushed again on zode:panelPush), actions
+    // out (zode:panelAction). Everything the renderer sends is validated here, and nothing here
+    // throws: failures go to the log and, where the user acted, to a plain dialog.
+
+    function panelVisible() {
+      try { return !!(panelWindow && !panelWindow.isDestroyed() && panelWindow.isVisible()); } catch { return false; }
+    }
+
+    // The same state the native menu reads, shaped for buildPanelModel; work.lines carry `at`
+    // (refreshSessions keeps them) so the panel can show ages.
+    function panelModel() {
+      try {
+        const devices = relay ? relay.listDevices() : [];
+        return buildPanelModel({
+          running: !!(relay?.status().running),
+          phones: devices.length,
+          addresses,
+          addressId: chosen().id,
+          launchAtLogin: settings.launchAtLogin,
+          keepAwake: settings.keepAwake,
+          setupDone: settings.setupDone,
+          foldFinished: settings.foldFinished === true,
+          tapAlive: tapUp === true,
+          engine: { path: enginePath },
+          update,
+          release,
+          work,
+          selfUpdate: selfUpdater.getState(),
+          version: app.getVersion(),
+        });
+      } catch (err) {
+        appendLog(`zode: panel model: ${err?.stack || err}`);
+        return buildPanelModel(null);
+      }
+    }
+
+    function pushPanel() {
+      try {
+        if (panelVisible()) panelWindow.webContents.send('zode:panelPush', panelModel());
+      } catch (err) { appendLog(`zode: panel push: ${err?.stack || err}`); }
+    }
+
+    // The tray icon mirrors the panel's headline state: amber while something needs you, green while
+    // work runs, the quiet template image otherwise. Only the template is tinted by macOS.
+    function applyTrayImage() {
+      if (!tray) return;
+      try {
+        const glyph = panelModel().glyph;
+        const name = trayImageName({ glyph, dark: nativeTheme.shouldUseDarkColors === true });
+        const image = nativeImage.createFromPath(path.join(res, 'assets', name));
+        if (image.isEmpty()) { appendLog(`zode: assets/${name} is missing; keeping the tray icon.`); return; }
+        if (!isTemplate(glyph)) image.setTemplateImage(false);
+        tray.setImage(image);
+      } catch (err) { appendLog(`zode: tray image: ${err?.stack || err}`); }
+    }
+
+    function hidePanel() {
+      try {
+        if (panelHoldBlur) return;                     // a dialog is anchored to the panel: keep it up
+        if (panelVisible()) { panelHidingAt = Date.now(); panelWindow.hide(); }
+      } catch (err) { appendLog(`zode: panel hide: ${err?.stack || err}`); }
+    }
+
+    function showPanel() {
+      try {
+        if (!panelWindow || panelWindow.isDestroyed()) {
+          panelWindow = new BrowserWindow({
+            width: PANEL_WIDTH, height: 300, show: false, frame: false, transparent: true, resizable: false,
+            movable: false, minimizable: false, maximizable: false, fullscreenable: false, skipTaskbar: true,
+            hasShadow: true, vibrancy: 'popover', visualEffectState: 'active', alwaysOnTop: true,
+            webPreferences: { preload: path.join(res, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },
+          });
+          panelWindow.setAlwaysOnTop(true, 'pop-up-menu');
+          panelWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+          panelWindow.on('blur', hidePanel);
+          panelWindow.on('closed', () => { panelWindow = null; });
+          panelWindow.loadFile(path.join(res, 'panel', 'index.html'));
+        }
+        const trayBounds = tray ? tray.getBounds() : null;
+        const display = screen.getDisplayMatching(trayBounds ?? { x: 0, y: 0, width: 0, height: 0 });
+        panelWindow.setBounds(panelBounds({ trayBounds, workArea: display.workArea, width: PANEL_WIDTH, height: panelHeight }));
+        panelWindow.show();
+        panelWindow.focus();
+        pushPanel();                                   // the open-time refresh pushes again once it lands
+      } catch (err) { appendLog(`zode: panel show: ${err?.stack || err}`); }
+    }
+
+    // Left click on the icon: hide an open panel, or refresh (the ~1.5 s capped wait, together with
+    // the version check) and open under the icon. The click that closed it on blur arrives here too.
+    function togglePanel() {
+      if (panelVisible()) { hidePanel(); return; }
+      if (Date.now() - panelHidingAt < PANEL_REOPEN_MS) return;
+      (async () => {
+        try {
+          try { tapUp = await tapAlive(); } catch { /* keep the cached value */ }
+          const cap = new Promise(resolve => { const t = setTimeout(resolve, WORK_TIMEOUT_MS); t.unref?.(); });
+          await Promise.race([Promise.allSettled([checkUpdate(), refreshSessions()]), cap]);
+          showPanel();
+        } catch (err) { appendLog(`zode: panel open: ${err?.stack || err}`); }
+      })();
+    }
+
+    // The risky-approval dialog anchors to the panel, which stays up while it shows.
+    async function confirmOverPanel({ message, detail }) {
+      let win = null;
+      try {
+        if (panelWindow && !panelWindow.isDestroyed()) { win = panelWindow; panelHoldBlur = true; win.setAlwaysOnTop(false); }
+      } catch { win = null; }
+      const opts = { type: 'warning', buttons: ['Allow', 'Cancel'], defaultId: 0, cancelId: 1, message, detail };
+      try {
+        const { response } = win ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts);
+        return response === 0;
+      } catch { return false; }
+      finally {
+        panelHoldBlur = false;
+        try { if (win && !win.isDestroyed()) win.setAlwaysOnTop(true, 'pop-up-menu'); } catch { /* gone */ }
+      }
+    }
+
+    // The work actions, as the native menu runs them, with the risky confirm anchored to the panel.
+    function panelApprove({ requestId, sock, risky, summary }) {
+      const p = findPending(requestId);
+      runWorkAction({
+        what: 'approved', project: p ? projectOf(p.sessionId) : 'ZCode',
+        confirm: risky ? () => confirmOverPanel({ message: 'Allow this command?', detail: String(p?.detail || summary || '') }) : null,
+        run: async () => { await respondPermission({ sock, requestId, decision: 'allow', reason: 'Approved from the menu bar' }); return null; },
+      });
+    }
+
+    // Every payload is checked against the last listing before it reaches an action; anything unknown
+    // or stale is ignored.
+    const liveSocks = () => new Set((Array.isArray(work?.lines) ? work.lines : []).map(l => l?.sock).filter(s => typeof s === 'string' && s.length > 0));
+    const idOk = v => (typeof v === 'string' && v.length > 0) || (typeof v === 'number' && Number.isFinite(v));
+
+    function handlePanelAction(name, payload) {
+      const p = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {};
+      if (name === 'approve') {
+        if (!idOk(p.requestId) || !liveSocks().has(p.sock)) return;
+        panelApprove({ requestId: p.requestId, sock: p.sock, risky: p.risky === true, summary: typeof p.summary === 'string' ? p.summary : '' });
+      } else if (name === 'deny') {
+        if (!idOk(p.requestId) || !liveSocks().has(p.sock)) return;
+        actions.deny(p.requestId, p.sock);
+      } else if (name === 'nudge' || name === 'stop' || name === 'retry') {
+        if (!idOk(p.sessionId) || !liveSocks().has(p.sock)) return;
+        actions[name](p.sessionId, p.sock);
+      } else if (name === 'show' || name === 'openZcode') {
+        actions.openEngine();
+      } else if (name === 'refresh') {
+        actions.refreshWork();
+      } else if (name === 'toggle') {
+        if (p.key === 'keepAwake') actions.toggleKeepAwake();
+        else if (p.key === 'relayEnabled') actions.toggleRelay();
+        else if (p.key === 'launchAtLogin') actions.toggleLaunchAtLogin();
+      } else if (name === 'foldFinished') {
+        actions.toggleFoldFinished();
+      } else if (name === 'setAddress') {
+        if (typeof p.id !== 'string' || !addresses.some(a => a && a.id === p.id)) return;
+        actions.selectAddress(p.id);
+      } else if (name === 'pair' || name === 'phones') {
+        hidePanel();
+        actions.pair();
+      } else if (name === 'setup') {
+        showSetupWindow();
+      } else if (name === 'checkUpdates') {
+        actions.checkSelfUpdate();
+      } else if (name === 'banner') {
+        if (p.kind === 'setup') showSetupWindow();
+        else if (p.kind === 'update') actions.installSelfUpdate();
+        else if (p.kind === 'engine') actions.rebuildEngine();
+        else if (p.kind === 'zcode') {                 // which zcode banner is showing decides the action
+          if (release?.available === true) actions.updateZcode();
+          else if (update?.available === true) actions.rebuildEngine();
+        }
+      } else if (name === 'quit') {
+        app.quit();
+      } else if (name === 'close') {
+        hidePanel();
+      }
+    }
+
+    ipcMain.handle('zode:panelState', () => panelModel());
+    ipcMain.handle('zode:panelAction', (_e, name, payload) => {
+      try {
+        handlePanelAction(name, payload);
+        return true;
+      } catch (err) { appendLog(`zode: panel action: ${err?.stack || err}`); return false; }
+    });
+    ipcMain.on('zode:panelResize', (_e, h) => {
+      try {
+        if (!Number.isFinite(h)) return;
+        panelHeight = h;                               // remembered for the next open
+        if (!panelVisible()) return;
+        const trayBounds = tray ? tray.getBounds() : null;
+        const display = screen.getDisplayMatching(trayBounds ?? { x: 0, y: 0, width: 0, height: 0 });
+        panelWindow.setBounds(panelBounds({ trayBounds, workArea: display.workArea, width: PANEL_WIDTH, height: h }));   // the top edge stays under the icon
+      } catch (err) { appendLog(`zode: panel resize: ${err?.stack || err}`); }
+    });
+    try { nativeTheme.on('updated', () => applyTrayImage()); } catch (err) { appendLog(`zode: nativeTheme: ${err?.stack || err}`); }
 
     // ---- first-run setup wizard ---------------------------------------------------------------
     function sendSetupEvent(data) {
@@ -691,6 +907,7 @@ async function start() {
     if (icon.isEmpty()) appendLog('zode: assets/trayTemplate.png missing from dist; no menu bar icon.');
     else {
       tray = new Tray(icon); tray.setToolTip('Zode');
+      // The native menu is the right-click fallback now; a left click opens the panel (togglePanel).
       // The menu is built on click, after a version check and a session refresh, rather than set ahead
       // of time: on macOS a preset context menu swallows the click event, so there would be no moment
       // to re-check before it opens. The checks together are capped at ~1.5 s; whatever has not landed
@@ -710,7 +927,7 @@ async function start() {
           popMenu();
         })();
       };
-      tray.on('click', popMenuWhenReady);
+      tray.on('click', togglePanel);                    // the panel; the native menu stays on right-click
       tray.on('right-click', popMenuWhenReady);
     }
 
