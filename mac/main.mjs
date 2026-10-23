@@ -70,11 +70,11 @@ async function start() {
 
     // Status lights for the ZCode-now lines at the top of the menu (plain PNGs, so they keep their color).
     const dotIcons = {
-      green: nativeImage.createFromPath(path.join(res, 'dotGreen.png')),
-      amber: nativeImage.createFromPath(path.join(res, 'dotAmber.png')),
-      red: nativeImage.createFromPath(path.join(res, 'dotRed.png')),
-      grey: nativeImage.createFromPath(path.join(res, 'dotGrey.png')),
-      tick: nativeImage.createFromPath(path.join(res, 'tickGreen.png')),         // a finished conversation
+      green: nativeImage.createFromPath(path.join(res, 'assets', 'dotGreen.png')),
+      amber: nativeImage.createFromPath(path.join(res, 'assets', 'dotAmber.png')),
+      red: nativeImage.createFromPath(path.join(res, 'assets', 'dotRed.png')),
+      grey: nativeImage.createFromPath(path.join(res, 'assets', 'dotGrey.png')),
+      tick: nativeImage.createFromPath(path.join(res, 'assets', 'tickGreen.png')),         // a finished conversation
     };
 
     let settings = loadSettings(SETTINGS_FILE);

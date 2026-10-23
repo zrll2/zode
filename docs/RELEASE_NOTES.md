@@ -1,5 +1,9 @@
 # Zode for Mac
 
+## 1.0.1
+- **Fixed:** conversations that ZCode had merely loaded no longer show as "Just now" in the menu (the status list and the phone's session list now use the real last-activity time).
+- **Fixed:** the status lights and green ticks were missing from the menu.
+
 Control ZCode from your phone. Zode for Mac is a menu bar app: it makes its own copy of ZCode (your original is never changed), lets your phone talk to it, and keeps both up to date.
 
 - **Set up in a minute, no terminal:** a short window finds ZCode, builds the copy, waits for you to sign in and shows the QR code for your phone.
