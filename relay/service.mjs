@@ -2,6 +2,7 @@
 // Upstream : unix sockets from Zode.app (~/.zcode-tap/*.json), one per workspace server.
 // Downstream: paired phones over WebSocket. Pair and revoke through createPairing() / revokeDevice().
 // Transport security is the network's job: bind to a Tailscale/WireGuard address. Default is 127.0.0.1.
+import { withRealActivity } from './activity.mjs';
 import net from 'node:net';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -159,6 +160,8 @@ export function createRelay(opts = {}) {
         return r.resolve(m.result);
       }
       delete m.tapReply; m.id = r.clientId;
+      // The agent reports updatedAt = now for every conversation it has loaded; ZCode's database has the real time.
+      if (r.method === 'session/list' && Array.isArray(m.result?.sessions)) m.result.sessions = withRealActivity(m.result.sessions);
       return send(r.client, { type: 'rpc-result', server: pid, ...fitForMobile(r.method, m) });
     }
     if (m.method === 'startup/storageState' || m.method === 'process/mcpTelemetry' || m.method?.startsWith('v4/telemetry')) return;

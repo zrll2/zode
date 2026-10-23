@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import os from 'node:os';
+import { withRealActivity } from '../../relay/activity.mjs';
 
 const MIN = 60 * 1000;
 const tapDir = () => path.join(os.homedir(), '.zcode-tap');
@@ -239,8 +240,8 @@ function projectName(session) {
   return workspacePath.split('/').filter(Boolean).pop() || 'No workspace';
 }
 
-// Everything the tray needs: the lines (failed, waiting, working, then done, each newest first), how
-// many did not fit, how many are finished, and the counts behind the tooltip.
+// Everything the tray needs: up to six menu lines (failed, waiting, working, then done, each newest
+// first), how many did not fit, and the counts behind the tooltip.
 export function summarize(sessions, now = Date.now()) {
   const counts = { working: 0, waiting: 0, failed: 0 };
   const rows = [];

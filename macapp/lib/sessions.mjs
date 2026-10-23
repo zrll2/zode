@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import os from 'node:os';
+import { withRealActivity } from '../../relay/activity.mjs';
 
 const MIN = 60 * 1000;
 const tapDir = () => path.join(os.homedir(), '.zcode-tap');
@@ -90,7 +91,8 @@ export async function listSessions({ dir = tapDir(), timeoutMs = 1500, connect =
         }
       }
     }
-    return [...byId.values()].map(kept => kept.session);
+    // The agent says "just now" for everything it has loaded; ZCode's database has the real last-activity time.
+    return withRealActivity([...byId.values()].map(kept => kept.session));
   } catch { return []; }
 }
 
