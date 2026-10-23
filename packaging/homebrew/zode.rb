@@ -2,7 +2,7 @@
 # from the release: `shasum -a 256 Zode-<version>-arm64.dmg`.
 cask "zode" do
   version "1.0.0"
-  sha256 "REPLACE_WITH_SHA256_OF_THE_DMG"
+  sha256 "c6b9c06cfee8d51ecd89999f2b001723ef8d957e2f96e44132ebcef16b6756eb"
 
   url "https://github.com/zrll2/zode/releases/download/v#{version}/Zode-#{version}-arm64.dmg"
   name "Zode"
