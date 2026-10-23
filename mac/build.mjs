@@ -1,5 +1,6 @@
 // Build the Zode app into dist/: one bundled main (relay, qrcode and ws inlined), the pairing
-// window, the preload bridge and the tray icons, plus a minimal package.json so `electron dist` runs.
+// window, the setup wizard, the menu bar panel, the preload bridge and the tray icons, plus a
+// minimal package.json so `electron dist` runs.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -29,6 +30,7 @@ const copyAll = (from, to) => {
 };
 copyAll(path.join(root, 'pair'), path.join(dist, 'pair'));
 copyAll(path.join(root, 'setup'), path.join(dist, 'setup'));
+copyAll(path.join(root, 'panel'), path.join(dist, 'panel'));
 // The tray icons are binary PNGs kept in assets/; until mac/assets exists, borrow macapp's copies.
 copyAll(fs.existsSync(path.join(root, 'assets')) ? path.join(root, 'assets') : path.join(root, '..', 'macapp', 'assets'), path.join(dist, 'assets'));
 fs.copyFileSync(path.join(root, 'preload.cjs'), path.join(dist, 'preload.cjs'));
