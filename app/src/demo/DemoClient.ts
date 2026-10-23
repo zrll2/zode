@@ -19,6 +19,8 @@ export interface RelayClientLike {
   servers: RelayServer[];
   authFailed: boolean;
   retryAt: number | null;
+  // Protocol the relay announced (undefined = older relay, protocol 1).
+  readonly relayProtocol: number | undefined;
   retryNow(): void;
   connect(): Promise<void>;
   rpc<T = unknown>(
@@ -49,6 +51,8 @@ export class DemoClient implements RelayClientLike {
   servers: RelayServer[] = DEMO_SERVERS;
   authFailed = false;
   retryAt: number | null = null; // the demo never reconnects
+  // Demo behaves as a current (protocol 2) relay.
+  readonly relayProtocol: number | undefined = 2;
 
   retryNow() {}
 

@@ -3,7 +3,7 @@ import { StyleSheet, View } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useTheme } from "../theme";
-import type { ModelOption } from "../chatSettings";
+import { thinkingLabel, type ModelOption } from "../chatSettings";
 import { PressScale } from "./PressScale";
 import { Sheet } from "./Sheet";
 import { Text } from "./Text";
@@ -108,7 +108,7 @@ export function ModelSheet({
               disabled={running}
               onPress={() => pickLevel(level)}
               accessibilityRole="button"
-              accessibilityLabel={`Thinking level ${level}${current ? ", current" : ""}`}
+              accessibilityLabel={`Thinking level ${thinkingLabel(level)}${current ? ", current" : ""}`}
               style={[
                 styles.level,
                 { backgroundColor: current ? t.colors.accent : t.colors.muted },
@@ -121,7 +121,7 @@ export function ModelSheet({
                   fontSize: 14,
                 }}
               >
-                {level}
+                {thinkingLabel(level)}
               </Text>
             </PressScale>
           );

@@ -197,3 +197,31 @@ it("replays buffered events to late subscribers", async () => {
   expect(seen).toEqual([9]);
   client.close();
 });
+
+it("exposes relayProtocol only once the relay announces it", async () => {
+  const { client, sockets } = makeClient();
+  const connected = client.connect();
+  sockets[0].open();
+  // Old relay: no protocol field in the ready frame.
+  sockets[0].receive(READY);
+  await connected;
+  expect(client.relayProtocol).toBeUndefined();
+  client.close();
+});
+
+it("remembers the announced protocol and resets it on disconnect", async () => {
+  const { client, sockets } = makeClient();
+  const connected = client.connect();
+  sockets[0].open();
+  sockets[0].receive({ ...READY, protocol: 2 });
+  await connected;
+  expect(client.relayProtocol).toBe(2);
+
+  // a junk value is not a number, so it counts as "no protocol announced"
+  sockets[0].receive({ ...READY, protocol: "2" });
+  expect(client.relayProtocol).toBeUndefined();
+
+  sockets[0].drop(1006);
+  expect(client.relayProtocol).toBeUndefined();
+  client.close();
+});

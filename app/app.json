@@ -2,7 +2,7 @@
   "expo": {
     "name": "Zode",
     "slug": "zode",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "scheme": "zode",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",

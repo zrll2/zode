@@ -19,6 +19,7 @@ import * as ImagePicker from "expo-image-picker";
 import * as DocumentPicker from "expo-document-picker";
 import { File } from "expo-file-system";
 import { useRelay, useSessionEvents } from "../../src/useRelay";
+import { relaySupports, outdatedMessage } from "../../src/compat";
 import { useTheme } from "../../src/theme";
 import type { ChatItem } from "../../src/relay/reducer";
 import {
@@ -37,6 +38,7 @@ import {
   emptyChatSettings,
   parseChatSettings,
   permissionLabel,
+  thinkingLabel,
   type ChatSettings,
   type ModelOption,
 } from "../../src/chatSettings";
@@ -75,6 +77,11 @@ if (Platform.OS === "android") {
 function shortError(e: unknown): string {
   const message = e instanceof Error ? e.message : typeof e === "string" ? e : "request failed";
   return message.length > 160 ? `${message.slice(0, 160)}…` : message;
+}
+
+// A feature this phone supports but the Mac's Zode does not.
+function showOutdatedAlert(feature: string) {
+  Alert.alert("Update Zode on your Mac", outdatedMessage([feature]), [{ text: "OK" }]);
 }
 
 function formatElapsed(totalSeconds: number): string {
@@ -130,7 +137,7 @@ export default function SessionScreen() {
 
   const t = useTheme();
   const router = useRouter();
-  const { status, client, rpc, retryAt, reconnectAttempts, retryNow } = useRelay();
+  const { status, client, relayProtocol, rpc, retryAt, reconnectAttempts, retryNow } = useRelay();
   const session = useSessionEvents(sessionId);
 
   const [draft, setDraft] = useState("");
@@ -368,6 +375,10 @@ export default function SessionScreen() {
   }
 
   function showAddSheet() {
+    if (!relaySupports(relayProtocol, "attachments")) {
+      showOutdatedAlert("attach photos and files");
+      return;
+    }
     const options = [
       { key: "library", label: "Photo library" },
       { key: "camera", label: "Take photo" },
@@ -552,6 +563,14 @@ export default function SessionScreen() {
     }
   }, [session.items, optimisticItems]);
 
+  const openPermissionSheet = useCallback(() => {
+    if (!relaySupports(relayProtocol, "askFirst")) {
+      showOutdatedAlert("use Ask first");
+      return;
+    }
+    setPermissionVisible(true);
+  }, [relayProtocol]);
+
   const currentTitle = renamedTitle ?? session.title ?? routeTitle ?? "";
 
   const showSessionMenu = useCallback(() => {
@@ -559,9 +578,27 @@ export default function SessionScreen() {
       "Session",
       undefined,
       [
-        { text: "Rename", onPress: () => setRenameVisible(true) },
+        {
+          text: "Rename",
+          onPress: () => {
+            if (!relaySupports(relayProtocol, "rename")) {
+              showOutdatedAlert("rename chats");
+              return;
+            }
+            setRenameVisible(true);
+          },
+        },
         { text: "Model and thinking", onPress: () => setModelSheetVisible(true) },
-        { text: "Usage", onPress: () => setUsageSheetVisible(true) },
+        {
+          text: "Usage",
+          onPress: () => {
+            if (!relaySupports(relayProtocol, "usage")) {
+              showOutdatedAlert("see usage");
+              return;
+            }
+            setUsageSheetVisible(true);
+          },
+        },
         ...(session.running
           ? [
               {
@@ -578,7 +615,7 @@ export default function SessionScreen() {
         { text: "Cancel", style: "cancel" as const },
       ],
     );
-  }, [session.running, archived, toggleArchive, stop]);
+  }, [session.running, archived, toggleArchive, stop, relayProtocol]);
 
   const headerRight = useCallback(
     () => (
@@ -630,7 +667,7 @@ export default function SessionScreen() {
       {chatSettings.model ? (
         <Text variant="caption" color="subtext" numberOfLines={1} style={styles.subtitleLine}>
           {chatSettings.model.modelId}
-          {chatSettings.thoughtLevel ? ` · ${chatSettings.thoughtLevel}` : ""}
+          {chatSettings.thoughtLevel ? ` · ${thinkingLabel(chatSettings.thoughtLevel)}` : ""}
         </Text>
       ) : undefined}
       {session.permissionRequest ? (
@@ -761,7 +798,7 @@ export default function SessionScreen() {
           autoFocus={autoFocusComposer}
           onAddPress={showAddSheet}
           modeLabel={chatSettings.mode ? permissionLabel(chatSettings.mode) : null}
-          onPermissionPress={() => setPermissionVisible(true)}
+          onPermissionPress={openPermissionSheet}
         />
       </View>
 

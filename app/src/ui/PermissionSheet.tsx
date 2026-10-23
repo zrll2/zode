@@ -9,11 +9,11 @@ import { Text } from "./Text";
 export type PhoneMode = "plan" | "edit" | "guarded";
 
 const OPTIONS: { mode: PhoneMode; title: string; note: string }[] = [
-  { mode: "plan", title: "Plan", note: "Reads and proposes, changes nothing" },
-  { mode: "edit", title: "Edit", note: "Can change files" },
+  { mode: "plan", title: "Read only", note: "Looks and suggests, changes nothing" },
+  { mode: "edit", title: "Edit files", note: "Can change files" },
   {
     mode: "guarded",
-    title: "Guarded",
+    title: "Ask first",
     note: "Asks before each change. Answer on your Mac for now.",
   },
 ];

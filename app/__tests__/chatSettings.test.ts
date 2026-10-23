@@ -144,9 +144,9 @@ describe("parseChatSettings", () => {
 
 describe("permission level helpers", () => {
   it("labels known modes and treats desktop-only ones as full access", () => {
-    expect(permissionLabel("plan")).toBe("Plan");
-    expect(permissionLabel("edit")).toBe("Edit");
-    expect(permissionLabel("guarded")).toBe("Guarded");
+    expect(permissionLabel("plan")).toBe("Read only");
+    expect(permissionLabel("edit")).toBe("Edit files");
+    expect(permissionLabel("guarded")).toBe("Ask first");
     expect(permissionLabel("build")).toBe("Full access");
     expect(permissionLabel("yolo")).toBe("Full access");
     expect(permissionLabel("auto")).toBe("Full access");
@@ -203,5 +203,16 @@ describe("builders", () => {
     });
     const long = buildRenameParams("s", `  ${"x".repeat(200)}  `);
     expect(long.title).toHaveLength(120);
+  });
+});
+
+describe("thinkingLabel", () => {
+  it("uses plain names for the known levels and capitalizes the rest", () => {
+    const { thinkingLabel } = require("../src/chatSettings");
+    expect(thinkingLabel("low")).toBe("Quick");
+    expect(thinkingLabel("high")).toBe("Balanced");
+    expect(thinkingLabel("max")).toBe("Deep");
+    expect(thinkingLabel("medium")).toBe("Medium");
+    expect(thinkingLabel("")).toBe("");
   });
 });

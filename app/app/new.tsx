@@ -21,13 +21,13 @@ import { SectionHeader } from "../src/ui/SectionHeader";
 import { Text } from "../src/ui/Text";
 
 const MODE_DESCRIPTIONS: Record<SessionMode, string> = {
-  plan: "Reads and proposes, changes nothing",
+  plan: "Looks and suggests, changes nothing",
   edit: "Can change files",
 };
 
 const MODE_LABELS: Record<SessionMode, string> = {
-  plan: "Plan",
-  edit: "Edit",
+  plan: "Read only",
+  edit: "Edit files",
 };
 
 export default function NewSessionScreen() {

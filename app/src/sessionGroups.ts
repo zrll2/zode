@@ -120,7 +120,7 @@ export function buildHomeSections(
   push("needs-you", "Needs you", needsYou);
   push("running", "Running", running);
   sections.push(...groupSessions(rest, now));
-  push("work-orders", "Work orders", workOrders);
+  push("work-orders", "Automated tasks", workOrders);
   push("archived", "Archived", archived);
 
   return { sections, hiddenWorkOrders, hiddenArchived };

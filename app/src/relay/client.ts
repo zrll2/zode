@@ -47,6 +47,9 @@ export class RelayClient {
   status: RelayStatus = "closed";
   authFailed = false;
   servers: RelayServer[] = [];
+  // Protocol version the relay announced in its ready frame; undefined when
+  // the relay is older and does not announce one (treated as protocol 1).
+  private relayProtocolValue: number | undefined = undefined;
   // Epoch time of the next automatic reconnect while status is
   // "reconnecting", else null. retryNow() skips the wait.
   retryAt: number | null = null;
@@ -139,6 +142,10 @@ export class RelayClient {
     };
   }
 
+  get relayProtocol(): number | undefined {
+    return this.relayProtocolValue;
+  }
+
   refreshServers(): void {
     this.send({ type: "servers" });
   }
@@ -156,6 +163,7 @@ export class RelayClient {
 
   close(): void {
     this.stopped = true;
+    this.relayProtocolValue = undefined;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -203,6 +211,7 @@ export class RelayClient {
 
   private handleClose(code?: number) {
     this.socket = null;
+    this.relayProtocolValue = undefined;
     if (this.authTimer) {
       clearTimeout(this.authTimer);
       this.authTimer = null;
@@ -250,6 +259,8 @@ export class RelayClient {
         this.authTimer = null;
       }
       this.attempts = 0;
+      const protocol = (frame as { protocol?: unknown }).protocol;
+      this.relayProtocolValue = typeof protocol === "number" ? protocol : undefined;
       if (this.lastSeq === null && typeof frame.seq === "number") this.lastSeq = frame.seq;
       this.servers = Array.isArray(frame.servers) ? frame.servers : [];
       if (this.connectGuard) {

@@ -17,6 +17,7 @@ import * as Haptics from "expo-haptics";
 import * as Linking from "expo-linking";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRelay } from "../src/useRelay";
+import { isOutdated, outdatedMessage } from "../src/compat";
 import { useTheme } from "../src/theme";
 import { retryInSeconds } from "../src/relay/backoff";
 import { buildUsageStatsParams } from "../src/relay/params";
@@ -85,6 +86,7 @@ export default function SessionsScreen() {
   const {
     status,
     authFailed,
+    relayProtocol,
     rpc,
     unpair,
     demo,
@@ -98,6 +100,9 @@ export default function SessionsScreen() {
   const [error, setError] = useState<string | null>(null);
   const [showStatusLine, setShowStatusLine] = useState(false);
   const [usageVisible, setUsageVisible] = useState(false);
+  const [outdatedDismissed, setOutdatedDismissed] = useState(false);
+  const showOutdated =
+    status === "ready" && !outdatedDismissed && isOutdated(relayProtocol);
   const [prefs, setPrefs] = useState<Prefs>({
     showWorkOrders: false,
     archivedIds: [],
@@ -181,7 +186,7 @@ export default function SessionsScreen() {
     const items: { key: string; label: string; destructive?: boolean }[] = [
       {
         key: "work-orders",
-        label: prefs.showWorkOrders ? "Hide work orders" : "Show work orders",
+        label: prefs.showWorkOrders ? "Hide automated tasks" : "Show automated tasks",
       },
       {
         key: "archived",
@@ -391,6 +396,28 @@ export default function SessionsScreen() {
           <Feather name="more-horizontal" size={18} color={t.colors.text} />
         </PressScale>
       </View>
+      {showOutdated ? (
+        <View style={styles.reconnectRow}>
+          <Text variant="caption" color="warn" style={styles.flex}>
+            {outdatedMessage([
+              "rename chats",
+              "see usage",
+              "attach photos and files",
+              "use Ask first",
+            ])}
+          </Text>
+          <Pressable
+            onPress={() => setOutdatedDismissed(true)}
+            accessibilityRole="button"
+            accessibilityLabel="Dismiss update notice"
+            hitSlop={8}
+          >
+            <Text variant="caption" color="warn" style={{ fontWeight: "600" }}>
+              Dismiss
+            </Text>
+          </Pressable>
+        </View>
+      ) : undefined}
       {status === "reconnecting" ? (
         <ReconnectingLine
           retryAt={retryAt}
@@ -464,12 +491,12 @@ export default function SessionsScreen() {
               <Pressable
                 onPress={toggleWorkOrders}
                 accessibilityRole="button"
-                accessibilityLabel={`Show ${hiddenWorkOrders} hidden work orders`}
+                accessibilityLabel={`Show ${hiddenWorkOrders} hidden automated tasks`}
                 hitSlop={8}
                 style={styles.hiddenFooter}
               >
                 <Text color="subtext" style={styles.hiddenText}>
-                  {hiddenWorkOrders} work orders hidden · Show
+                  {hiddenWorkOrders} automated {hiddenWorkOrders === 1 ? "task" : "tasks"} hidden · Show
                 </Text>
               </Pressable>
             ) : undefined}

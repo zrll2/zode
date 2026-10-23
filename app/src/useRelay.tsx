@@ -31,6 +31,9 @@ interface RelayContextValue {
   demo: boolean;
   retryAt: number | null;
   reconnectAttempts: number;
+  // Protocol the relay announced in its ready frame; undefined means an
+  // older Zode on the Mac (treated as protocol 1). See src/compat.ts.
+  relayProtocol: number | undefined;
   connect(credentials: Credentials): void;
   startDemo(): void;
   exitDemo(): Promise<void>;
@@ -52,6 +55,7 @@ export function RelayProvider({ children }: { children: React.ReactNode }) {
   const [demo, setDemo] = useState(false);
   const [retryAt, setRetryAt] = useState<number | null>(null);
   const [reconnectAttempts, setReconnectAttempts] = useState(0);
+  const [relayProtocol, setRelayProtocol] = useState<number | undefined>(undefined);
   const clientRef = useRef<RelayClientLike | null>(null);
 
   // While reconnecting, mirror the client's next-try time and count how many
@@ -90,6 +94,7 @@ export function RelayProvider({ children }: { children: React.ReactNode }) {
     next.onStatus((s) => {
       setStatus(s);
       setServers([...next.servers]);
+      setRelayProtocol(next.relayProtocol);
     });
     setAuthFailed(false);
     setLastError(null);
@@ -107,6 +112,7 @@ export function RelayProvider({ children }: { children: React.ReactNode }) {
     next.onStatus((s) => {
       setStatus(s);
       setServers([...next.servers]);
+      setRelayProtocol(next.relayProtocol);
     });
     setAuthFailed(false);
     setLastError(null);
@@ -164,6 +170,7 @@ export function RelayProvider({ children }: { children: React.ReactNode }) {
     setDemo(false);
     setStatus("closed");
     setServers([]);
+    setRelayProtocol(undefined);
   }, []);
 
   const unpair = useCallback(async () => {
@@ -177,6 +184,7 @@ export function RelayProvider({ children }: { children: React.ReactNode }) {
     setServers([]);
     setAuthFailed(false);
     setLastError(null);
+    setRelayProtocol(undefined);
   }, []);
 
   const rpc = useCallback(
@@ -200,6 +208,7 @@ export function RelayProvider({ children }: { children: React.ReactNode }) {
       demo,
       retryAt,
       reconnectAttempts,
+      relayProtocol,
       connect,
       startDemo,
       exitDemo,
@@ -218,6 +227,7 @@ export function RelayProvider({ children }: { children: React.ReactNode }) {
       demo,
       retryAt,
       reconnectAttempts,
+      relayProtocol,
       connect,
       startDemo,
       exitDemo,

@@ -130,15 +130,29 @@ export function buildSetModeParams(sessionId: string, mode: string) {
   return { sessionId, mode };
 }
 
+// Plain names for the thinking levels (the raw ids are low, high and max).
+export function thinkingLabel(level: string): string {
+  switch (level) {
+    case "low":
+      return "Quick";
+    case "high":
+      return "Balanced";
+    case "max":
+      return "Deep";
+    default:
+      return level ? level.charAt(0).toUpperCase() + level.slice(1) : level;
+  }
+}
+
 // Pill label for the current mode; null when unknown.
 export function permissionLabel(mode: string): string | null {
   switch (mode) {
     case "plan":
-      return "Plan";
+      return "Read only";
     case "edit":
-      return "Edit";
+      return "Edit files";
     case "guarded":
-      return "Guarded";
+      return "Ask first";
     case "build":
     case "yolo":
     case "auto":
