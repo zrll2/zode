@@ -40,4 +40,4 @@ mac:
     NSLocalNetworkUsageDescription: Zode lets your phone reach this Mac over your local or private network.
 dmg:
   title: Zode
-  sign: false                        # the app inside is signed; the dmg is notarized and stapled by release.sh
+  sign: true                         # sign the dmg too, then release.sh notarizes and staples it
