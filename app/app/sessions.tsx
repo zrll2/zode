@@ -598,21 +598,17 @@ export default function SessionsScreen() {
         }
         contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: insets.bottom + 108 }}
       />
-      <View style={[styles.barWrap, { bottom: insets.bottom + 12 }]}>
-        <PressScale
-          onPress={() => router.push("/new")}
-          accessibilityRole="button"
-          accessibilityLabel="Ask ZCode"
-          style={[styles.bar, { backgroundColor: t.colors.surface, shadowColor: t.colors.text }]}
-        >
-          <Text color="subtext" style={styles.barText}>
-            Ask ZCode…
-          </Text>
-          <View style={[styles.sendCircle, { backgroundColor: t.colors.accent }]}>
-            <Feather name="arrow-up" size={18} color={t.colors.onAccent} />
-          </View>
-        </PressScale>
-      </View>
+      <PressScale
+        onPress={() => router.push("/new")}
+        accessibilityRole="button"
+        accessibilityLabel="New conversation"
+        style={[
+          styles.fab,
+          { bottom: insets.bottom + 16, backgroundColor: t.colors.accent, shadowColor: t.colors.text },
+        ]}
+      >
+        <Feather name="plus" size={26} color={t.colors.onAccent} />
+      </PressScale>
       <UsageSheet
         visible={usageVisible}
         onClose={() => setUsageVisible(false)}
@@ -689,27 +685,17 @@ const styles = StyleSheet.create({
   emptyLine: { textAlign: "center", marginTop: 8 },
   hiddenFooter: { alignItems: "center", paddingTop: 16 },
   hiddenText: { fontSize: 13 },
-  barWrap: { position: "absolute", left: 20, right: 20 },
-  bar: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    borderRadius: 26,
-    paddingLeft: 20,
-    paddingRight: 10,
-    paddingVertical: 10,
-    minHeight: 56,
-    shadowOpacity: 0.12,
-    shadowRadius: 16,
-    shadowOffset: { width: 0, height: 8 },
-    elevation: 6,
-  },
-  barText: { flex: 1, fontSize: 15, lineHeight: 20 },
-  sendCircle: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+  fab: {
+    position: "absolute",
+    right: 20,
+    width: 58,
+    height: 58,
+    borderRadius: 29,
     alignItems: "center",
     justifyContent: "center",
+    shadowOpacity: 0.22,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 8,
   },
 });
