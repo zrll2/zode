@@ -47,26 +47,29 @@ No copy and paste. No API key. Zode drives the ZCode app you already have, with 
 
 ## Quick start
 
-You need: a Mac, [ZCode](https://z.ai) (logged in), [Claude Code](https://claude.com/claude-code), Node.js 20 or newer, Git.
+You need: a Mac (Apple silicon), the [ZCode](https://zcode.z.ai) app (logged in at least once), and the Zode app on your iPhone or Android phone.
+
+1. **Download Zode for Mac** from the [latest release](https://github.com/zrll2/zode/releases/latest), open the DMG and drag **Zode** to Applications.
+2. Open Zode. A **Z** appears in the menu bar and a short setup window walks you through it: Zode makes its own copy of ZCode (your original is never changed), you sign in once, and then you scan a QR code with Zode on your phone. No terminal needed.
+3. Keep the Mac awake and on the same Wi-Fi as your phone (or use [Tailscale](https://tailscale.com) away from home). Zode can keep the Mac awake for you.
+
+Zode updates itself, and tells you when a new ZCode is available and updates that too.
+
+### Delegate work from Claude Code (optional, for developers)
+
+Zode also lets **Claude Code** hand coding work to ZCode. This part needs Node.js 20 or newer, Git and a terminal:
 
 ```bash
 git clone https://github.com/zrll2/zode.git && cd zode
-./zode install        # builds a "Zode.app" copy of your ZCode, installs the skill
-open /Applications/Zode.app   # log in once, open any project
+./zode skill          # installs the delegate-to-zcode skill for Claude Code
 ./zode doctor         # everything green?
 ```
 
-Now open any project in Claude Code and say:
+Then, in any project, say to Claude Code:
 
 > **Delegate this to ZCode:** add a dark mode toggle to the settings page.
 
-That is all. Claude Code creates a worktree, writes the order, sends it to ZCode, checks the result and shows you the diff.
-
-### Add the phone app (optional)
-
-After `./zode install` the relay already runs inside Zode.app. Click the **Zode icon in the menu bar**, choose **Pair a phone…**, and scan the QR code with Zode on your phone (the phone must reach the Mac: same Wi-Fi, or [Tailscale](https://tailscale.com)). Done. See [docs/PHONE.md](docs/PHONE.md) to reach your Mac when you are away from home.
-
-Running the Mac headless (SSH only)? `./zode relay` and `./zode pair` are the same relay in a terminal — see the headless note in [docs/PHONE.md](docs/PHONE.md).
+Claude Code creates a worktree, writes the order, sends it to ZCode, checks the result and shows you the diff.
 
 ## How it works
 
