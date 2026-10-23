@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import WebSocket from 'ws';
-import { createRelay, checkPolicy } from '../service.mjs';
+import { createRelay, checkPolicy, PROTOCOL } from '../service.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const silent = { log() {}, warn() {}, error() {} };
@@ -151,6 +151,8 @@ test('listDevices after pairing; revokeDevice removes it and closes the live soc
 
     const { ws, ready } = await authed(`ws://127.0.0.1:${port}`, token);
     assert.equal(ready.device, id);
+    assert.equal(ready.protocol, PROTOCOL);                                  // the phone uses this to know which features this Mac supports
+    assert.equal(PROTOCOL, 2);
     assert.equal(relay.status().clients, 1);
     const closed = new Promise((r) => ws.on('close', (code) => r(code)));
 

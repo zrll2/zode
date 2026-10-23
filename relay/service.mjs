@@ -82,6 +82,9 @@ export function checkPolicy(method, params) {
   return null;
 }
 
+// Bumped when the phone can rely on new relay methods. 2 = rename, usage/stats, attachments, send with attachments.
+export const PROTOCOL = 2;
+
 export function createRelay(opts = {}) {
   const host = opts.host || '127.0.0.1';
   const port = Number(opts.port || 8787);
@@ -305,7 +308,7 @@ export function createRelay(opts = {}) {
           const d = findDevice(m.token);
           if (!d) { fail(ip); return ws.close(4003, 'bad token'); }
           c.authed = true; c.device = d; clients.add(c); clearTimeout(authTimer); emitStatus();
-          send(c, { type: 'ready', device: d.id, servers: [...upstream.values()].map(u => ({ pid: u.meta.pid, cwd: u.meta.cwd })), seq, pending: [...pendingReq.values()] });
+          send(c, { type: 'ready', protocol: PROTOCOL, device: d.id, servers: [...upstream.values()].map(u => ({ pid: u.meta.pid, cwd: u.meta.cwd })), seq, pending: [...pendingReq.values()] });
           if (typeof m.since === 'number') for (const e of replay) if (e.seq > m.since) send(c, { type: 'event', ...e });
           return;
         }
