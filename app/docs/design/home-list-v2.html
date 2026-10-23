@@ -1,0 +1,249 @@
+<title>Zode Home List</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout concept: a phone frame beside five reasons; the list inside is one grouped surface per section, attention first, history dense. */
+:root{
+  --bg:#EEF0F2; --screen:#F7F7F5; --surface:#FFFFFF; --ink:#16181B; --muted:#6B7078; --line:#E6E8EB; --chip:#ECEEF0;
+  --accent:#16181B; --on-accent:#FFFFFF; --good:#2F9D62; --warn:#D9921B; --bad:#CF4A3C;
+  --warn-bg:#FFF4DE; --bad-bg:#FDEBE8; --frame:#1B1D20; --shadow:0 22px 60px rgba(20,28,40,.25);
+  --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#0F1113; --screen:#161718; --surface:#212326; --ink:#F2F3F5; --muted:#9BA1A9; --line:#2F3236; --chip:#2A2D31;
+  --accent:#F2F3F5; --on-accent:#16181B; --good:#4CC184; --warn:#E8A93A; --bad:#EF6B5D;
+  --warn-bg:#3A2E18; --bad-bg:#3C1F1B; --frame:#2A2C30; --shadow:0 22px 60px rgba(0,0,0,.6); color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0F1113; --screen:#161718; --surface:#212326; --ink:#F2F3F5; --muted:#9BA1A9; --line:#2F3236; --chip:#2A2D31;
+  --accent:#F2F3F5; --on-accent:#16181B; --good:#4CC184; --warn:#E8A93A; --bad:#EF6B5D;
+  --warn-bg:#3A2E18; --bad-bg:#3C1F1B; --frame:#2A2C30; --shadow:0 22px 60px rgba(0,0,0,.6); color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--font);padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:28px 56px}
+.wrap{max-width:1040px;margin:0 auto;display:flex;flex-direction:column;gap:24px}
+header{display:flex;flex-wrap:wrap;gap:12px 24px;align-items:flex-end;justify-content:space-between}
+h1{font-size:26px;line-height:1.15;margin:0;letter-spacing:-.02em;text-wrap:balance}
+header p{margin:6px 0 0;color:var(--muted);font-size:14px;max-width:58ch}
+.controls{display:flex;gap:10px;flex-wrap:wrap}
+.seg{display:inline-flex;background:var(--chip);border:1px solid var(--line);border-radius:9px;padding:2px}
+.seg button{font:inherit;font-size:13px;border:0;background:transparent;color:var(--muted);padding:6px 12px;border-radius:7px;cursor:pointer}
+.seg button[aria-pressed="true"]{background:var(--surface);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.14)}
+button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.main{display:grid;grid-template-columns:minmax(0,400px) minmax(0,1fr);gap:36px;align-items:start}
+@media (max-width:840px){.main{grid-template-columns:minmax(0,1fr)}}
+.phone{width:100%;max-width:392px;margin:0 auto;background:var(--frame);border-radius:46px;padding:10px;box-shadow:var(--shadow)}
+.screen{position:relative;height:790px;background:var(--screen);border-radius:36px;overflow:hidden;display:flex;flex-direction:column}
+.scroll{flex:1;overflow-y:auto;padding:0 16px 96px;scrollbar-width:none}
+.scroll::-webkit-scrollbar{display:none}
+.island{height:14px;flex:none}
+.top{display:flex;align-items:center;gap:8px;padding:10px 16px 6px;flex:none}
+.brand{font-weight:800;font-size:22px;letter-spacing:-.03em}
+.mac{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);background:var(--chip);border-radius:999px;padding:4px 10px 4px 8px;border:0;cursor:pointer;font-family:inherit}
+.mac i{width:7px;height:7px;border-radius:50%;background:var(--good)}
+.mac.off i{background:var(--bad)}
+.sp{flex:1}
+.ib{width:36px;height:36px;border-radius:50%;border:0;background:transparent;color:var(--ink);display:grid;place-items:center;cursor:pointer}
+.ib:hover{background:var(--chip)}
+.ib svg{width:20px;height:20px}
+.search{display:none;padding:0 16px 8px;flex:none}
+.search.on{display:block}
+.search input{width:100%;font:inherit;font-size:15px;background:var(--chip);color:var(--ink);border:0;border-radius:12px;padding:10px 14px}
+.chips{display:flex;gap:6px;overflow-x:auto;padding:2px 16px 10px;flex:none;scrollbar-width:none}
+.chips::-webkit-scrollbar{display:none}
+.chip{font:inherit;font-size:13px;white-space:nowrap;border:0;border-radius:999px;padding:6px 12px;background:var(--chip);color:var(--ink);cursor:pointer}
+.chip[aria-pressed="true"]{background:var(--accent);color:var(--on-accent)}
+.banner{margin:0 16px 10px;border-radius:12px;padding:10px 12px;background:var(--bad-bg);border:1px solid color-mix(in srgb,var(--bad) 35%,transparent);font-size:13px;display:flex;gap:10px;align-items:center}
+.banner div{flex:1;min-width:0}
+.banner b{display:block}
+.banner span{color:var(--muted);font-size:12px}
+.btn{font:inherit;font-size:13px;font-weight:600;border-radius:9px;border:1px solid var(--line);background:var(--surface);color:var(--ink);padding:8px 14px;min-height:36px;cursor:pointer}
+.btn.pri{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
+.sec{margin:14px 0 0}
+.sec h2{margin:0 4px 6px;font-size:12px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);display:flex;justify-content:space-between;align-items:center}
+.sec h2 button{font:inherit;font-size:12px;letter-spacing:0;text-transform:none;border:0;background:transparent;color:var(--muted);cursor:pointer;padding:2px 4px}
+.group{background:var(--surface);border-radius:16px;overflow:hidden}
+.need{padding:12px 14px;border-bottom:1px solid var(--line);background:var(--warn-bg)}
+.need.bad{background:var(--bad-bg)}
+.need:last-child{border-bottom:0}
+.need .l1{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+.need .l1 b{font-size:15px}
+.need .l1 span{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.need .ttl{font-size:13px;color:var(--muted);margin-top:1px}
+.need code{display:block;margin:8px 0 10px;font-family:var(--mono);font-size:12px;background:color-mix(in srgb,var(--ink) 7%,transparent);padding:7px 9px;border-radius:8px;overflow-wrap:anywhere}
+.need p{margin:6px 0 10px;font-size:13px;color:var(--muted)}
+.acts{display:flex;gap:8px}
+.swipe{position:relative;overflow:hidden;border-bottom:1px solid var(--line)}
+.swipe:last-child{border-bottom:0}
+.swipe .under{position:absolute;inset:0 0 0 auto;width:88px;background:var(--bad);color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600;border:0;font-family:inherit;cursor:pointer}
+.row{position:relative;background:var(--surface);display:grid;grid-template-columns:20px minmax(0,1fr) auto;align-items:center;gap:10px;padding:10px 14px;min-height:56px;touch-action:pan-y;transition:transform .18s ease;cursor:pointer}
+.row.drag{transition:none}
+.row .t{min-width:0}
+.row .t b{display:block;font-size:15px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .t small{display:block;font-size:12.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .w{font-size:12.5px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--good);justify-self:center}
+.dot.run{background:var(--accent);animation:pulse 1.4s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.3}}
+.tick{width:15px;height:15px;color:var(--good);justify-self:center}
+.empty{padding:22px 16px;color:var(--muted);font-size:14px}
+.fab{position:absolute;right:18px;bottom:20px;width:58px;height:58px;border-radius:50%;border:0;background:var(--accent);color:var(--on-accent);display:grid;place-items:center;box-shadow:0 8px 20px rgba(0,0,0,.28);cursor:pointer}
+.fab svg{width:26px;height:26px}
+.toast{position:absolute;left:16px;right:90px;bottom:26px;background:var(--accent);color:var(--on-accent);border-radius:12px;padding:10px 14px;font-size:13px;display:flex;gap:10px;align-items:center;opacity:0;transform:translateY(8px);transition:.2s;pointer-events:none}
+.toast.on{opacity:1;transform:none;pointer-events:auto}
+.toast button{font:inherit;font-size:13px;font-weight:700;color:inherit;background:transparent;border:0;margin-left:auto;cursor:pointer;text-decoration:underline}
+/* explanation */
+.why{display:flex;flex-direction:column;gap:18px}
+.why h2{margin:0;font-size:18px;letter-spacing:-.01em}
+.why ol{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:14px}
+.why li{display:grid;grid-template-columns:28px minmax(0,1fr);gap:10px}
+.why li i{font-style:normal;width:24px;height:24px;border-radius:50%;background:var(--chip);display:grid;place-items:center;font-size:12px;font-weight:600;color:var(--muted)}
+.why li b{display:block;font-size:14px;margin-bottom:2px}
+.why li span{color:var(--muted);font-size:13.5px;line-height:1.45}
+.cmp{display:flex;gap:10px;flex-wrap:wrap}
+.cmp div{flex:1;min-width:140px;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:10px 12px}
+.cmp b{font-size:22px;font-variant-numeric:tabular-nums;letter-spacing:-.02em;display:block}
+.cmp span{font-size:12px;color:var(--muted)}
+@media (prefers-reduced-motion:reduce){.dot.run{animation:none}.row{transition:none}.toast{transition:none}}
+</style>
+
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Zode home list, redesigned</h1>
+      <p>Today every conversation is the same card, and three of them are called "shop-api". This puts what needs you first with the buttons on it, names conversations by what they are about, and packs history into rows you can scan and swipe.</p>
+    </div>
+    <div class="controls">
+      <div class="seg" id="scen" role="group" aria-label="Scenario">
+        <button data-s="busy" aria-pressed="true">Busy</button>
+        <button data-s="quiet" aria-pressed="false">Quiet</button>
+        <button data-s="offline" aria-pressed="false">Mac offline</button>
+      </div>
+      <div class="seg" id="theme" role="group" aria-label="Theme">
+        <button data-t="light" aria-pressed="false">Light</button>
+        <button data-t="dark" aria-pressed="false">Dark</button>
+      </div>
+    </div>
+  </header>
+
+  <div class="main">
+    <div class="phone">
+      <div class="screen" id="screen">
+        <div class="island"></div>
+        <div class="top">
+          <span class="brand">Zode</span>
+          <button class="mac" id="mac"><i></i><span id="macTxt">Mac</span></button>
+          <span class="sp"></span>
+          <button class="ib" id="srch" aria-label="Search"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="9" cy="9" r="5.5"/><path d="m13.5 13.5 3.5 3.5"/></svg></button>
+          <button class="ib" id="more" aria-label="More"><svg viewBox="0 0 20 20" fill="currentColor"><circle cx="4.5" cy="10" r="1.5"/><circle cx="10" cy="10" r="1.5"/><circle cx="15.5" cy="10" r="1.5"/></svg></button>
+        </div>
+        <div class="search" id="searchBox"><input id="q" type="search" placeholder="Search conversations" aria-label="Search conversations"></div>
+        <div class="chips" id="chips" role="group" aria-label="Filter by project"></div>
+        <div id="banner"></div>
+        <div class="scroll" id="list"></div>
+        <button class="fab" id="fab" aria-label="New conversation"><svg viewBox="0 0 26 26" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M13 5v16M5 13h16"/></svg></button>
+        <div class="toast" id="toast" role="status"><span id="toastTxt"></span><button id="undo">Undo</button></div>
+      </div>
+    </div>
+
+    <div class="why">
+      <h2>What changed, and why</h2>
+      <ol>
+        <li><i>1</i><div><b>A small header and no headline.</b><span>Wordmark, Mac connection chip, search and menu, then the list starts. Needs you sits first, so the answer to "does anything need me" is the first thing on screen.</span></div></li>
+        <li><i>2</i><div><b>Conversations are named by their task.</b><span>The row leads with what it is about ("Fix flaky checkout test") and the project sits underneath, so three conversations in one project stop looking identical.</span></div></li>
+        <li><i>3</i><div><b>Needs you carries the answer.</b><span>The command or question is on the card, with Allow, Deny or Try again. No trip into the chat to find out what it wants.</span></div></li>
+        <li><i>4</i><div><b>History is a grouped list, not a stack of cards.</b><span>One surface per section with hairlines, 56 pt rows and times in one column. About twice as many conversations fit on screen.</span></div></li>
+        <li><i>5</i><div><b>Filter and act where you are.</b><span>Project chips and search narrow the list. Swipe a row left to archive, with Undo. Anything older than yesterday folds into one line.</span></div></li>
+      </ol>
+      <div class="cmp">
+        <div><b>6 → 13</b><span>conversations visible on one screen</span></div>
+        <div><b>1 tap</b><span>to answer an approval, from the list</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  var $=function(id){return document.getElementById(id)};
+  var TICK='<svg class="tick" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 7.5 5.6 10.5 11.5 3.8"/></svg>';
+  var data, scenario='busy', filter='All', olderOpen=false, query='', undoItem=null, toastTimer=null;
+  function esc(s){return String(s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
+  function seed(s){
+    var d={online:true,needs:[],running:[],today:[],yesterday:[],earlier:[],stale:''};
+    if(s!=='quiet'){d.needs=[
+      {id:'n1',kind:'ask',project:'shop-api',title:'Add rate limiting to /orders',ask:'Run: npm install express-rate-limit',t:'2 min'},
+      {id:'n2',kind:'failed',project:'web-app',title:'Migrate styles to design tokens',ask:'The last attempt failed. Two tests do not compile.',t:'1 h'}];
+      d.running=[{id:'r1',project:'docs-site',title:'Draft the 1.1 release notes',doing:'Editing 2 files',t:'4 min'},{id:'r2',project:'mobile-app',title:'Fix keyboard overlap on the new-session screen',doing:'Running tests',t:'11 min'}];}
+    d.today=[{id:'d1',project:'shop-api',title:'Fix flaky checkout test',t:'9 min'},{id:'d2',project:'web-app',title:'Add dark mode toggle',t:'31 min'},{id:'d3',project:'mobile-app',title:'Show the connection state in the header',t:'1 h'},{id:'d4',project:'docs-site',title:'Fix broken links in the setup guide',t:'2 h'}];
+    d.yesterday=[{id:'y1',project:'shop-api',title:'Split the orders module',t:'Yesterday'},{id:'y2',project:'web-app',title:'Upgrade to React 19',t:'Yesterday'},{id:'y3',project:'mobile-app',title:'Plain labels for permission modes',t:'Yesterday'}];
+    d.earlier=[{id:'e1',project:'docs-site',title:'Translate the README',t:'Oct 19'},{id:'e2',project:'shop-api',title:'Add pagination to /products',t:'Oct 18'}];
+    if(s==='offline'){d.online=false;d.stale='Last updated 3 min ago'}
+    return d;
+  }
+  function projects(){var set={};['needs','running','today','yesterday','earlier'].forEach(function(k){data[k].forEach(function(x){set[x.project]=1})});return ['All'].concat(Object.keys(set).sort())}
+  function match(x){return (filter==='All'||x.project===filter)&&(!query||(x.title+' '+x.project).toLowerCase().indexOf(query)>=0)}
+  function render(){
+    var needs=data.needs.filter(match), running=data.running.filter(match);
+    var n=data.needs.length, r=data.running.length;
+    $('mac').className='mac'+(data.online?'':' off'); $('macTxt').textContent=data.online?'Mac':'Offline';
+    $('banner').innerHTML = data.online? '' : '<div class="banner"><div><b>Can’t reach your Mac</b><span>Is it awake, with Zode open, on the same Wi-Fi?</span></div><button class="btn" data-act="retry">Retry</button></div>';
+    var chips=projects();
+    $('chips').innerHTML=chips.map(function(c){return '<button class="chip" data-act="chip" data-v="'+esc(c)+'" aria-pressed="'+(c===filter)+'">'+esc(c)+'</button>'}).join('');
+    var h='';
+    if(needs.length&&data.online){h+='<div class="sec"><h2>Needs you</h2><div class="group">'+needs.map(function(x){
+      if(x.kind==='ask')return '<div class="need"><div class="l1"><b>'+esc(x.project)+'</b><span>waiting '+esc(x.t)+'</span></div><div class="ttl">'+esc(x.title)+'</div><code>'+esc(x.ask)+'</code><div class="acts"><button class="btn pri" data-act="allow" data-id="'+x.id+'">Allow once</button><button class="btn" data-act="deny" data-id="'+x.id+'">Deny</button></div></div>';
+      return '<div class="need bad"><div class="l1"><b>'+esc(x.project)+'</b><span>failed '+esc(x.t)+' ago</span></div><div class="ttl">'+esc(x.title)+'</div><p>'+esc(x.ask)+'</p><div class="acts"><button class="btn pri" data-act="retryrun" data-id="'+x.id+'">Try again</button><button class="btn" data-act="open">Open</button></div></div>';
+    }).join('')+'</div></div>'}
+    if(running.length){h+='<div class="sec"><h2>Running</h2><div class="group">'+running.map(function(x){return '<div class="swipe"><div class="row" data-act="open"><span class="dot run"></span><div class="t"><b>'+esc(x.title)+'</b><small>'+esc(x.project)+' · '+esc(x.doing)+'</small></div><span class="w">'+esc(x.t)+'</span></div></div>'}).join('')+'</div></div>'}
+    function hist(label,arr,key){var a=arr.filter(match);if(!a.length)return'';return '<div class="sec"><h2>'+label+'</h2><div class="group">'+a.map(function(x){return '<div class="swipe" data-id="'+x.id+'"><button class="under" data-act="archive" data-id="'+x.id+'" data-k="'+key+'">Archive</button><div class="row" data-act="open" data-id="'+x.id+'">'+TICK+'<div class="t"><b>'+esc(x.title)+'</b><small>'+esc(x.project)+'</small></div><span class="w">'+esc(x.t)+'</span></div></div>'}).join('')+'</div></div>'}
+    h+=hist('Today',data.today,'today')+hist('Yesterday',data.yesterday,'yesterday');
+    var ea=data.earlier.filter(match);
+    if(ea.length){ if(olderOpen) h+=hist('Earlier',data.earlier,'earlier')+'<div class="sec"><button class="btn" style="width:100%" data-act="older">Hide earlier</button></div>';
+      else h+='<div class="sec"><button class="btn" style="width:100%;text-align:left;color:var(--muted)" data-act="older">'+ea.length+' earlier conversation'+(ea.length>1?'s':'')+'</button></div>'}
+    if(!h) h='<div class="empty">No conversations match.</div>';
+    $('list').innerHTML=h;
+    wireSwipe();
+  }
+  function wireSwipe(){
+    Array.prototype.forEach.call(document.querySelectorAll('.swipe[data-id] .row'),function(row){
+      var sx=0,dx=0,drag=false,open=false;
+      function down(e){drag=true;sx=(e.touches?e.touches[0].clientX:e.clientX);row.classList.add('drag')}
+      function move(e){if(!drag)return;var x=(e.touches?e.touches[0].clientX:e.clientX);dx=Math.min(0,Math.max(-96,(open?-88:0)+(x-sx)));row.style.transform='translateX('+dx+'px)'}
+      function up(){if(!drag)return;drag=false;row.classList.remove('drag');open=dx<-44;row.style.transform=open?'translateX(-88px)':'';}
+      row.addEventListener('mousedown',down);row.addEventListener('touchstart',down,{passive:true});
+      window.addEventListener('mousemove',move);window.addEventListener('touchmove',move,{passive:true});
+      window.addEventListener('mouseup',up);window.addEventListener('touchend',up);
+    });
+  }
+  function toast(msg,withUndo){$('toastTxt').textContent=msg;$('undo').style.display=withUndo?'':'none';$('toast').classList.add('on');clearTimeout(toastTimer);toastTimer=setTimeout(function(){$('toast').classList.remove('on')},3200)}
+  function rm(list,id){var i=list.findIndex(function(x){return x.id===id});return i<0?null:list.splice(i,1)[0]}
+  document.addEventListener('click',function(e){
+    var b=e.target.closest('[data-act]');if(!b)return;
+    var a=b.getAttribute('data-act'),id=b.getAttribute('data-id');
+    if(a==='allow'){var x=rm(data.needs,id);if(x){data.running.unshift({id:x.id,project:x.project,title:x.title,doing:'Running the approved command',t:'now'});toast('Allowed. '+x.project+' continues.')}}
+    else if(a==='deny'){var y=rm(data.needs,id);if(y)toast('Denied. It carries on without that command.')}
+    else if(a==='retryrun'){var z=rm(data.needs,id);if(z){data.running.unshift({id:z.id,project:z.project,title:z.title,doing:'Trying again',t:'now'});toast('Asked '+z.project+' to try again.')}}
+    else if(a==='archive'){var k=b.getAttribute('data-k');var it=rm(data[k],id);if(it){undoItem={k:k,it:it};toast('Archived “'+it.title+'”',true)}}
+    else if(a==='chip'){filter=b.getAttribute('data-v')}
+    else if(a==='older'){olderOpen=!olderOpen}
+    else if(a==='retry'){toast('Trying to reach your Mac…')}
+    else if(a==='open'){var sw=e.target.closest('.row');if(sw&&sw.style.transform){sw.style.transform='';return}toast('Opens the conversation.');return}
+    render();
+  });
+  $('undo').addEventListener('click',function(){if(undoItem){data[undoItem.k].unshift(undoItem.it);undoItem=null;$('toast').classList.remove('on');render()}});
+  $('srch').addEventListener('click',function(){var s=$('searchBox');s.classList.toggle('on');if(s.classList.contains('on'))$('q').focus();else{query='';$('q').value='';render()}});
+  $('q').addEventListener('input',function(){query=this.value.trim().toLowerCase();render()});
+  $('fab').addEventListener('click',function(){toast('Opens a new conversation.')});
+  $('more').addEventListener('click',function(){toast('Menu: usage, show archived, unpair.')});
+  $('mac').addEventListener('click',function(){toast(data.online?'Connected to your Mac.':'Not connected. Check your Mac.')});
+  $('scen').addEventListener('click',function(e){var b=e.target.closest('button');if(!b)return;scenario=b.getAttribute('data-s');Array.prototype.forEach.call($('scen').children,function(c){c.setAttribute('aria-pressed',c===b?'true':'false')});data=seed(scenario);filter='All';olderOpen=false;query='';$('q').value='';render()});
+  function setTheme(t){
+    if(t){document.documentElement.setAttribute('data-theme',t);try{localStorage.setItem('zode-home-theme',t)}catch(e){}}
+    var cur=document.documentElement.getAttribute('data-theme')||(window.matchMedia&&matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');
+    Array.prototype.forEach.call($('theme').children,function(c){c.setAttribute('aria-pressed',c.getAttribute('data-t')===cur?'true':'false')});
+  }
+  $('theme').addEventListener('click',function(e){var b=e.target.closest('button');if(b)setTheme(b.getAttribute('data-t'))});
+  try{var sv=localStorage.getItem('zode-home-theme');if(sv)document.documentElement.setAttribute('data-theme',sv)}catch(e){}
+  setTheme();
+  data=seed('busy');render();
+})();
+</script>
