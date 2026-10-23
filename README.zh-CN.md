@@ -40,26 +40,29 @@ Zode 把两者连起来，让它们各做自己最擅长的事：
 
 ## 快速开始
 
-需要：一台 Mac、已登录的 [ZCode](https://z.ai)、[Claude Code](https://claude.com/claude-code)、Node.js 20+、Git。
+你需要：一台 Mac（Apple 芯片）、[ZCode](https://zcode.z.ai) 应用（至少登录过一次），以及手机上的 Zode 应用。
+
+1. 从[最新发布页](https://github.com/zrll2/zode/releases/latest)**下载 Zode for Mac**，打开 DMG，把 **Zode** 拖进"应用程序"。
+2. 打开 Zode。菜单栏会出现一个 **Z**，并弹出简短的设置窗口，带你一步步完成：Zode 会做一份自己的 ZCode 副本（你原来的 ZCode 不会被改动），你登录一次，然后用手机上的 Zode 扫描二维码。不需要终端。
+3. 让 Mac 保持唤醒，并和手机在同一个 Wi-Fi（出门在外用 [Tailscale](https://tailscale.com)）。Zode 可以替你让 Mac 保持唤醒。
+
+Zode 会自动更新自己，也会在 ZCode 有新版本时提醒你并帮你更新。
+
+### 在 Claude Code 里派活（可选，面向开发者）
+
+Zode 还能让 **Claude Code** 把编码工作交给 ZCode。这一部分需要 Node.js 20 或更新版本、Git 和终端：
 
 ```bash
 git clone https://github.com/zrll2/zode.git && cd zode
-./zode install        # 基于你的 ZCode 构建 "Zode.app" 副本，并安装技能
-open /Applications/Zode.app   # 登录一次，打开任意项目
+./zode skill          # 给 Claude Code 安装 delegate-to-zcode 技能
 ./zode doctor         # 全部通过了吗？
 ```
 
-然后在任何项目里对 Claude Code 说：
+然后在任意项目里对 Claude Code 说：
 
 > **把这个交给 ZCode：** 给设置页加一个深色模式开关。
 
-就这样。Claude Code 会建 worktree、写工单、发给 ZCode、检查结果，并把 diff 给你看。
-
-### 加上手机应用（可选）
-
-`./zode install` 之后，中继已经内置在 Zode.app 里运行。点**菜单栏上的 Zode 图标**，选择 **Pair a phone…**，用手机上的 Zode 扫描二维码即可（手机要能连到 Mac：同一 Wi-Fi，或使用 [Tailscale](https://tailscale.com)）。出门在外怎么连回家里的 Mac，见 [docs/PHONE.md](docs/PHONE.md)。
-
-只在终端里跑（比如 SSH）？`./zode relay` 和 `./zode pair` 是同一个中继的命令行版本，见 [docs/PHONE.md](docs/PHONE.md) 的无界面说明。
+Claude Code 会建 worktree、写工单、发给 ZCode、检查结果，并把 diff 给你看。
 
 ## 工作原理
 
