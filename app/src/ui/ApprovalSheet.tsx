@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Modal, StyleSheet, View } from "react-native";
-import * as Haptics from "expo-haptics";
+import { Alert, Modal, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { radius, useTheme } from "../theme";
 import { Pill } from "./Pill";
@@ -36,13 +35,17 @@ interface ApprovalSheetProps {
   toolName: string;
   target: string;
   reason: string;
+  // Full command for risky requests: Allow asks a confirmation first.
+  confirmDetail?: string;
   onAllow: () => void;
   onDeny: () => void;
   answeredElsewhere: boolean;
+  onDismiss?: () => void;
 }
 
 // Bottom sheet for permission requests (DESIGN.md §3.5). Presentational
-// only: the caller turns `visible` off. Light haptic on both buttons.
+// only: the caller turns `visible` off (Done, or onDismiss). The caller
+// owns the haptic and the actual answering.
 export function ApprovalSheet({
   visible,
   title,
@@ -50,9 +53,11 @@ export function ApprovalSheet({
   toolName,
   target,
   reason,
+  confirmDetail,
   onAllow,
   onDeny,
   answeredElsewhere,
+  onDismiss,
 }: ApprovalSheetProps) {
   const t = useTheme();
   const insets = useSafeAreaInsets();
@@ -62,17 +67,35 @@ export function ApprovalSheet({
     if (visible) setDecided(null);
   }, [visible]);
 
-  const actions = approvalActionsState(answeredElsewhere, decided);
+  // A local decision wins over the resolved event arriving later.
+  const actions = approvalActionsState(answeredElsewhere && !decided, decided);
 
   function decide(decision: ApprovalDecision) {
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    if (decision === "allow" && confirmDetail) {
+      Alert.alert("Allow this command?", confirmDetail, [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Allow",
+          onPress: () => {
+            setDecided("allow");
+            onAllow();
+          },
+        },
+      ]);
+      return;
+    }
     setDecided(decision);
     if (decision === "allow") onAllow();
     else onDeny();
   }
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={() => {}}>
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      onRequestClose={onDismiss ?? (() => {})}
+    >
       <View style={[styles.backdrop, { backgroundColor: t.colors.scrim }]}>
         <View
           style={[
@@ -101,9 +124,19 @@ export function ApprovalSheet({
             ) : undefined}
           </View>
           {actions.feedback ? (
-            <Text variant="bodySmall" color="subtext" style={styles.feedback}>
-              {actions.feedback}
-            </Text>
+            <View style={styles.feedbackRow}>
+              <Text variant="bodySmall" color="subtext" style={styles.feedback}>
+                {actions.feedback}
+              </Text>
+              {onDismiss ? (
+                <Pill
+                  label="Done"
+                  variant="quiet"
+                  onPress={onDismiss}
+                  accessibilityLabel="Close"
+                />
+              ) : undefined}
+            </View>
           ) : actions.showButtons ? (
             <View style={styles.buttons}>
               <Pill
@@ -140,5 +173,6 @@ const styles = StyleSheet.create({
   detail: { borderRadius: radius.code, padding: 12, gap: 4, marginTop: 4 },
   buttons: { flexDirection: "row", gap: 12, marginTop: 8 },
   button: { flex: 1, alignSelf: "stretch" },
-  feedback: { marginTop: 8 },
+  feedbackRow: { flexDirection: "row", alignItems: "center", gap: 12, marginTop: 8 },
+  feedback: { flex: 1 },
 });

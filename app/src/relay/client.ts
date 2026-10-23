@@ -7,8 +7,14 @@ import type {
   RpcRequestFrame,
 } from "./protocol";
 import { nextDelay } from "./backoff";
+import { reduceApprovals, type ApprovalRequest } from "../approvals";
 
 export type RelayStatus = "connecting" | "ready" | "reconnecting" | "closed";
+
+export interface RespondResult {
+  ok: boolean;
+  message?: string;
+}
 
 export interface RelaySocket {
   send(data: string): void;
@@ -41,6 +47,7 @@ interface BufferedEvent {
 
 const AUTH_TIMEOUT_MS = 10_000;
 const CONNECT_TIMEOUT_MS = 30_000;
+const RESPOND_TIMEOUT_MS = 10_000;
 const EVENT_BUFFER_LIMIT = 500;
 
 export class RelayClient {
@@ -69,6 +76,11 @@ export class RelayClient {
   private buffer: BufferedEvent[] = [];
   private eventCbs = new Set<(msg: RelayMessage, seq: number) => void>();
   private statusCbs = new Set<(status: RelayStatus) => void>();
+  private approvalCbs = new Set<(list: ApprovalRequest[]) => void>();
+  // Approval requests waiting on this phone (Ask first mode). Only emitted
+  // when the set of keys actually changes.
+  private approvalsValue: ApprovalRequest[] = [];
+  private approvalsKeys = "";
 
   private rpcCounter = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -146,6 +158,60 @@ export class RelayClient {
     return this.relayProtocolValue;
   }
 
+  get pendingApprovals(): ApprovalRequest[] {
+    return this.approvalsValue;
+  }
+
+  onApprovals(cb: (list: ApprovalRequest[]) => void): () => void {
+    this.approvalCbs.add(cb);
+    cb(this.approvalsValue);
+    return () => {
+      this.approvalCbs.delete(cb);
+    };
+  }
+
+  // Answers a pending permission request. Never rejects: the result says ok
+  // or carries the relay's calm failure message.
+  respond(
+    server: string,
+    id: string,
+    decision: "allow" | "deny",
+    reason?: string,
+  ): Promise<RespondResult> {
+    if (!this.socket || this.status !== "ready") {
+      return Promise.resolve({ ok: false, message: "Not connected." });
+    }
+    const rid = `r${++this.rpcCounter}`;
+    const frame = {
+      type: "respond",
+      rid,
+      server,
+      id,
+      decision,
+      ...(reason !== undefined ? { reason } : {}),
+    };
+    return new Promise<RespondResult>((resolve) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(rid);
+        resolve({ ok: false, message: "Couldn't reach your Mac. Try again." });
+      }, RESPOND_TIMEOUT_MS);
+      this.pending.set(rid, {
+        resolve: () => resolve({ ok: true }),
+        reject: (err: Error) => resolve({ ok: false, message: err.message }),
+        timer,
+      });
+      this.send(frame as unknown as PhoneFrame);
+    });
+  }
+
+  private setApprovals(next: ApprovalRequest[]) {
+    this.approvalsValue = next;
+    const keys = next.map((request) => request.key).join("|");
+    if (keys === this.approvalsKeys) return;
+    this.approvalsKeys = keys;
+    for (const cb of this.approvalCbs) cb(next);
+  }
+
   refreshServers(): void {
     this.send({ type: "servers" });
   }
@@ -164,6 +230,7 @@ export class RelayClient {
   close(): void {
     this.stopped = true;
     this.relayProtocolValue = undefined;
+    this.setApprovals([]);
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -212,6 +279,7 @@ export class RelayClient {
   private handleClose(code?: number) {
     this.socket = null;
     this.relayProtocolValue = undefined;
+    this.setApprovals([]);
     if (this.authTimer) {
       clearTimeout(this.authTimer);
       this.authTimer = null;
@@ -261,6 +329,7 @@ export class RelayClient {
       this.attempts = 0;
       const protocol = (frame as { protocol?: unknown }).protocol;
       this.relayProtocolValue = typeof protocol === "number" ? protocol : undefined;
+      this.setApprovals(reduceApprovals(this.approvalsValue, frame, Date.now()));
       if (this.lastSeq === null && typeof frame.seq === "number") this.lastSeq = frame.seq;
       this.servers = Array.isArray(frame.servers) ? frame.servers : [];
       if (this.connectGuard) {
@@ -287,6 +356,7 @@ export class RelayClient {
       this.buffer.push(entry);
       if (this.buffer.length > EVENT_BUFFER_LIMIT) this.buffer.shift();
       for (const cb of this.eventCbs) cb(entry.msg, entry.seq);
+      this.setApprovals(reduceApprovals(this.approvalsValue, frame, Date.now()));
     }
   }
 

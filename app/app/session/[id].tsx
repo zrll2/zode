@@ -19,7 +19,8 @@ import * as ImagePicker from "expo-image-picker";
 import * as DocumentPicker from "expo-document-picker";
 import { File } from "expo-file-system";
 import { useRelay, useSessionEvents } from "../../src/useRelay";
-import { relaySupports, outdatedMessage } from "../../src/compat";
+import { outdatedMessage, relaySupports } from "../../src/compat";
+import { respondFailureText, type ApprovalRequest } from "../../src/approvals";
 import { useTheme } from "../../src/theme";
 import type { ChatItem } from "../../src/relay/reducer";
 import {
@@ -56,6 +57,7 @@ import {
 } from "../../src/history";
 import { useScrollPin } from "../../src/scrollPin";
 import { AttachmentTray, type TrayAttachment } from "../../src/ui/AttachmentTray";
+import { ApprovalSheet, type ApprovalDecision } from "../../src/ui/ApprovalSheet";
 import { Composer } from "../../src/ui/Composer";
 import { Dot, useReduceMotion } from "../../src/ui/Dot";
 import { Markdown } from "../../src/ui/Markdown";
@@ -137,7 +139,7 @@ export default function SessionScreen() {
 
   const t = useTheme();
   const router = useRouter();
-  const { status, client, relayProtocol, rpc, retryAt, reconnectAttempts, retryNow } = useRelay();
+  const { status, client, relayProtocol, pendingApprovals, rpc, retryAt, reconnectAttempts, retryNow, respondApproval } = useRelay();
   const session = useSessionEvents(sessionId);
 
   const [draft, setDraft] = useState("");
@@ -571,6 +573,55 @@ export default function SessionScreen() {
     setPermissionVisible(true);
   }, [relayProtocol]);
 
+  // ---- Ask-first approvals ----
+  const approvalsActive = status === "ready" && relaySupports(relayProtocol, "askFirst");
+  const approvalRequests = approvalsActive
+    ? pendingApprovals.filter(
+        (request) => request.sessionId === sessionId && request.kind === "permission",
+      )
+    : [];
+  const barRequest = approvalRequests[0];
+  const barRequestKey = barRequest?.key ?? null;
+  const [approvalOpen, setApprovalOpen] = useState(false);
+  const [approvalBusy, setApprovalBusy] = useState<string | null>(null);
+  const [approvalNote, setApprovalNote] = useState<string | null>(null);
+
+  // The request changing (answered here or on the Mac) resets the bar.
+  useEffect(() => {
+    setApprovalBusy(null);
+    setApprovalNote(null);
+  }, [barRequestKey]);
+
+  const sendDecision = useCallback(
+    async (request: ApprovalRequest, decision: ApprovalDecision) => {
+      if (approvalBusy) return;
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      setApprovalBusy(request.key);
+      const result = await respondApproval(request.key, decision);
+      if (result.ok) {
+        setApprovalNote(decision === "allow" ? "Allowed" : "Denied");
+      } else {
+        setApprovalNote(respondFailureText(result.message));
+        setApprovalBusy(null);
+      }
+    },
+    [approvalBusy, respondApproval],
+  );
+
+  const allowRequest = useCallback(
+    (request: ApprovalRequest) => {
+      if (request.risky) {
+        Alert.alert("Allow this command?", request.detail, [
+          { text: "Cancel", style: "cancel" },
+          { text: "Allow", onPress: () => void sendDecision(request, "allow") },
+        ]);
+        return;
+      }
+      void sendDecision(request, "allow");
+    },
+    [sendDecision],
+  );
+
   const currentTitle = renamedTitle ?? session.title ?? routeTitle ?? "";
 
   const showSessionMenu = useCallback(() => {
@@ -772,6 +823,47 @@ export default function SessionScreen() {
           }}
         />
       ) : undefined}
+      {barRequest ? (
+        <View style={[styles.approvalBar, { backgroundColor: t.colors.muted }]}>
+          <Pressable
+            onPress={() => setApprovalOpen(true)}
+            accessibilityRole="button"
+            accessibilityLabel={`Permission request: ${barRequest.summary}. Open details`}
+            style={styles.approvalBarText}
+            hitSlop={4}
+          >
+            <Text variant="caption" numberOfLines={1} style={styles.flex}>
+              {barRequest.summary}
+            </Text>
+            <Text variant="caption" color="subtext">
+              Details
+            </Text>
+          </Pressable>
+          {approvalNote ? (
+            <Text variant="caption" color="subtext" numberOfLines={1}>
+              {approvalNote}
+            </Text>
+          ) : (
+            <View style={styles.approvalBarActions}>
+              <Pill
+                label="Allow once"
+                onPress={() => allowRequest(barRequest)}
+                disabled={Boolean(approvalBusy)}
+                style={styles.approvalPill}
+                accessibilityLabel="Allow once"
+              />
+              <Pill
+                label="Deny"
+                variant="quiet"
+                onPress={() => void sendDecision(barRequest, "deny")}
+                disabled={Boolean(approvalBusy)}
+                style={styles.approvalPill}
+                accessibilityLabel="Deny this request"
+              />
+            </View>
+          )}
+        </View>
+      ) : undefined}
       <View>
         {showJump && items.length > 0 ? (
           <Pressable
@@ -835,6 +927,29 @@ export default function SessionScreen() {
         running={session.running}
         mode={chatSettings.mode}
         onPick={(mode: PhoneMode) => void applyMode(mode)}
+      />
+      <ApprovalSheet
+        visible={approvalOpen && Boolean(barRequest)}
+        title={barRequest?.risky ? "Allow this command?" : "Permission request"}
+        folder={currentTitle}
+        toolName={barRequest?.toolName ?? ""}
+        target={barRequest?.detail ?? ""}
+        reason=""
+        confirmDetail={barRequest?.risky ? barRequest.detail : undefined}
+        onAllow={() => {
+          setApprovalOpen(false);
+          if (barRequest) void sendDecision(barRequest, "allow");
+        }}
+        onDeny={() => {
+          setApprovalOpen(false);
+          if (barRequest) void sendDecision(barRequest, "deny");
+        }}
+        answeredElsewhere={
+          approvalOpen &&
+          Boolean(barRequest) &&
+          !approvalRequests.some((request) => request.key === barRequest?.key)
+        }
+        onDismiss={() => setApprovalOpen(false)}
       />
     </KeyboardAvoidingView>
   );
@@ -1068,6 +1183,25 @@ const styles = StyleSheet.create({
     paddingTop: 6,
   },
   banner: { paddingHorizontal: 20, paddingTop: 6 },
+  approvalBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginHorizontal: 20,
+    marginBottom: 6,
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  approvalBarText: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    minHeight: 32,
+  },
+  approvalBarActions: { flexDirection: "row", gap: 8 },
+  approvalPill: { minHeight: 44, paddingHorizontal: 16 },
   userRow: { flexDirection: "row", justifyContent: "flex-end", marginVertical: 4 },
   bubble: {
     borderRadius: 20,

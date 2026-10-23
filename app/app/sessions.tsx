@@ -17,7 +17,8 @@ import * as Haptics from "expo-haptics";
 import * as Linking from "expo-linking";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRelay } from "../src/useRelay";
-import { isOutdated, outdatedMessage } from "../src/compat";
+import { isOutdated, outdatedMessage, relaySupports } from "../src/compat";
+import { respondFailureText, type ApprovalRequest } from "../src/approvals";
 import { useTheme } from "../src/theme";
 import { retryInSeconds } from "../src/relay/backoff";
 import { buildUsageStatsParams } from "../src/relay/params";
@@ -87,6 +88,7 @@ export default function SessionsScreen() {
     status,
     authFailed,
     relayProtocol,
+    pendingApprovals,
     rpc,
     unpair,
     demo,
@@ -94,6 +96,7 @@ export default function SessionsScreen() {
     retryAt,
     reconnectAttempts,
     retryNow,
+    respondApproval,
   } = useRelay();
   const [sessions, setSessions] = useState<SessionRow[]>([]);
   const [refreshing, setRefreshing] = useState(false);
@@ -103,6 +106,50 @@ export default function SessionsScreen() {
   const [outdatedDismissed, setOutdatedDismissed] = useState(false);
   const showOutdated =
     status === "ready" && !outdatedDismissed && isOutdated(relayProtocol);
+  // Ask-first answering is only offered against a current relay.
+  const approvalsActive = status === "ready" && relaySupports(relayProtocol, "askFirst");
+  // Buttons disable after a tap until the pending list changes; notes hold
+  // the short feedback line per request key.
+  const [busyKeys, setBusyKeys] = useState<string[]>([]);
+  const [notes, setNotes] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    setBusyKeys([]);
+    setNotes({});
+  }, [pendingApprovals]);
+
+  const decideApproval = useCallback(
+    async (request: ApprovalRequest, decision: "allow" | "deny") => {
+      if (busyKeys.includes(request.key)) return;
+      setBusyKeys((current) => [...current, request.key]);
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      const result = await respondApproval(request.key, decision);
+      if (result.ok) {
+        setNotes((current) => ({
+          ...current,
+          [request.key]: decision === "allow" ? "Allowed" : "Denied",
+        }));
+      } else {
+        setNotes((current) => ({ ...current, [request.key]: respondFailureText(result.message) }));
+        setBusyKeys((current) => current.filter((key) => key !== request.key));
+      }
+    },
+    [busyKeys, respondApproval],
+  );
+
+  const allowApproval = useCallback(
+    (request: ApprovalRequest) => {
+      if (request.risky) {
+        Alert.alert("Allow this command?", request.detail, [
+          { text: "Cancel", style: "cancel" },
+          { text: "Allow", onPress: () => void decideApproval(request, "allow") },
+        ]);
+        return;
+      }
+      void decideApproval(request, "allow");
+    },
+    [decideApproval],
+  );
   const [prefs, setPrefs] = useState<Prefs>({
     showWorkOrders: false,
     archivedIds: [],
@@ -336,12 +383,35 @@ export default function SessionsScreen() {
     ({ item }: { item: SessionRow }) => {
       const info = statusInfo(item.status);
       const archived = isArchived(prefs.archivedIds, item.id);
+      const requests = approvalsActive
+        ? pendingApprovals.filter((request) => request.sessionId === item.id)
+        : [];
+      const oldest = requests[0];
       return (
         <SessionCard
           folder={item.folder}
           status={item.status}
           timeLabel={timeAgo(item.updatedAt)}
           showChevron={item.status === "waiting" || item.status === "error"}
+          approval={
+            oldest
+              ? {
+                  summary: oldest.summary,
+                  question: oldest.kind === "question",
+                  moreCount: requests.length - 1,
+                  busy: busyKeys.includes(oldest.key),
+                  note: notes[oldest.key],
+                }
+              : undefined
+          }
+          onAllow={
+            oldest && oldest.kind === "permission" ? () => allowApproval(oldest) : undefined
+          }
+          onDeny={
+            oldest && oldest.kind === "permission"
+              ? () => void decideApproval(oldest, "deny")
+              : undefined
+          }
           onPress={() =>
             router.push({
               pathname: "/session/[id]",
@@ -361,7 +431,18 @@ export default function SessionsScreen() {
         />
       );
     },
-    [router, prefs.archivedIds, toggleArchive, showCardActions],
+    [
+      router,
+      prefs.archivedIds,
+      toggleArchive,
+      showCardActions,
+      approvalsActive,
+      pendingApprovals,
+      busyKeys,
+      notes,
+      decideApproval,
+      allowApproval,
+    ],
   );
 
   return (

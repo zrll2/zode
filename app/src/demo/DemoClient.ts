@@ -1,5 +1,6 @@
-import type { RelayStatus } from "../relay/client";
+import type { RelayStatus, RespondResult } from "../relay/client";
 import type { RelayMessage, RelayServer } from "../relay/protocol";
+import type { ApprovalRequest } from "../approvals";
 import {
   buildSessionList,
   demoHistory,
@@ -21,7 +22,15 @@ export interface RelayClientLike {
   retryAt: number | null;
   // Protocol the relay announced (undefined = older relay, protocol 1).
   readonly relayProtocol: number | undefined;
+  // Permission requests waiting right now (Ask first mode).
+  readonly pendingApprovals: ApprovalRequest[];
   retryNow(): void;
+  respond(
+    server: string,
+    id: string,
+    decision: "allow" | "deny",
+    reason?: string,
+  ): Promise<RespondResult>;
   connect(): Promise<void>;
   rpc<T = unknown>(
     method: string,
@@ -59,6 +68,8 @@ export class DemoClient implements RelayClientLike {
   private sessions: DemoSessionRecord[] = initialDemoSessions();
   private eventCbs = new Set<(msg: RelayMessage, seq: number) => void>();
   private statusCbs = new Set<(status: RelayStatus) => void>();
+  private approvalCbs = new Set<(list: ApprovalRequest[]) => void>();
+  private approvalsValue: ApprovalRequest[] = [];
   private sessionTimers = new Map<string, Timer[]>();
   private runningStarted = new Set<string>();
   private turnNumbers = new Map<string, number>();
@@ -73,6 +84,21 @@ export class DemoClient implements RelayClientLike {
     this.emitStatus();
     this.status = "ready";
     this.emitStatus();
+    this.approvalsValue = [
+      {
+        key: "101:demo-permission-1",
+        server: "101",
+        id: "demo-permission-1",
+        kind: "permission",
+        sessionId: "demo-login-redirect",
+        toolName: "Bash",
+        summary: "Run: rm -rf dist && npm run build",
+        detail: "rm -rf dist && npm run build",
+        risky: true,
+        at: Date.now(),
+      },
+    ];
+    this.emitApprovals();
     return Promise.resolve();
   }
 
@@ -166,6 +192,36 @@ export class DemoClient implements RelayClientLike {
     }
   }
 
+  get pendingApprovals(): ApprovalRequest[] {
+    return this.approvalsValue;
+  }
+
+  onApprovals(cb: (list: ApprovalRequest[]) => void): () => void {
+    this.approvalCbs.add(cb);
+    cb(this.approvalsValue);
+    return () => {
+      this.approvalCbs.delete(cb);
+    };
+  }
+
+  // The sample request resolves a moment after the decision.
+  respond(
+    _server: string,
+    id: string,
+    _decision: "allow" | "deny",
+    _reason?: string,
+  ): Promise<RespondResult> {
+    if (!this.approvalsValue.some((request) => request.id === id)) {
+      return Promise.resolve({ ok: false, message: "request is not pending (already answered?)" });
+    }
+    setTimeout(() => {
+      this.approvalsValue = [];
+      this.emitApprovals();
+      this.markIdle("demo-login-redirect");
+    }, 400);
+    return Promise.resolve({ ok: true });
+  }
+
   onEvent(cb: (msg: RelayMessage, seq: number) => void): () => void {
     this.eventCbs.add(cb);
     return () => {
@@ -187,6 +243,8 @@ export class DemoClient implements RelayClientLike {
     }
     this.sessionTimers.clear();
     this.status = "closed";
+    this.approvalsValue = [];
+    this.emitApprovals();
   }
 
   private find(sessionId: string): DemoSessionRecord | undefined {
@@ -288,6 +346,10 @@ export class DemoClient implements RelayClientLike {
 
   private emitStatus() {
     for (const cb of this.statusCbs) cb(this.status);
+  }
+
+  private emitApprovals() {
+    for (const cb of this.approvalCbs) cb(this.approvalsValue);
   }
 
   private emitEvent(sessionId: string, type: string, payload: Record<string, unknown>) {

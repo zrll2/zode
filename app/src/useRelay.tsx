@@ -9,7 +9,8 @@ import React, {
 } from "react";
 import { friendlyError } from "./friendlyError";
 import * as Linking from "expo-linking";
-import { RelayClient, type RelayStatus } from "./relay/client";
+import { RelayClient, type RelayStatus, type RespondResult } from "./relay/client";
+import type { ApprovalRequest } from "./approvals";
 import type { RelayMessage, RelayServer } from "./relay/protocol";
 import { initialSessionState, reduce, type SessionState } from "./relay/reducer";
 import { DemoClient, type RelayClientLike } from "./demo/DemoClient";
@@ -34,12 +35,15 @@ interface RelayContextValue {
   // Protocol the relay announced in its ready frame; undefined means an
   // older Zode on the Mac (treated as protocol 1). See src/compat.ts.
   relayProtocol: number | undefined;
+  // Ask-first permission requests waiting right now (see src/approvals.ts).
+  pendingApprovals: ApprovalRequest[];
   connect(credentials: Credentials): void;
   startDemo(): void;
   exitDemo(): Promise<void>;
   unpair(): Promise<void>;
   retryNow(): void;
   rpc<T = unknown>(method: string, params?: unknown, server?: string | number): Promise<T>;
+  respondApproval(key: string, decision: "allow" | "deny"): Promise<RespondResult>;
 }
 
 const RelayContext = createContext<RelayContextValue | null>(null);
@@ -56,6 +60,7 @@ export function RelayProvider({ children }: { children: React.ReactNode }) {
   const [retryAt, setRetryAt] = useState<number | null>(null);
   const [reconnectAttempts, setReconnectAttempts] = useState(0);
   const [relayProtocol, setRelayProtocol] = useState<number | undefined>(undefined);
+  const [pendingApprovals, setPendingApprovals] = useState<ApprovalRequest[]>([]);
   const clientRef = useRef<RelayClientLike | null>(null);
 
   // While reconnecting, mirror the client's next-try time and count how many
@@ -96,6 +101,7 @@ export function RelayProvider({ children }: { children: React.ReactNode }) {
       setServers([...next.servers]);
       setRelayProtocol(next.relayProtocol);
     });
+    next.onApprovals((list) => setPendingApprovals(list));
     setAuthFailed(false);
     setLastError(null);
     setDemo(false);
@@ -114,6 +120,7 @@ export function RelayProvider({ children }: { children: React.ReactNode }) {
       setServers([...next.servers]);
       setRelayProtocol(next.relayProtocol);
     });
+    next.onApprovals((list) => setPendingApprovals(list));
     setAuthFailed(false);
     setLastError(null);
     setDemo(true);
@@ -171,6 +178,7 @@ export function RelayProvider({ children }: { children: React.ReactNode }) {
     setStatus("closed");
     setServers([]);
     setRelayProtocol(undefined);
+    setPendingApprovals([]);
   }, []);
 
   const unpair = useCallback(async () => {
@@ -185,6 +193,7 @@ export function RelayProvider({ children }: { children: React.ReactNode }) {
     setAuthFailed(false);
     setLastError(null);
     setRelayProtocol(undefined);
+    setPendingApprovals([]);
   }, []);
 
   const rpc = useCallback(
@@ -192,6 +201,20 @@ export function RelayProvider({ children }: { children: React.ReactNode }) {
       const current = clientRef.current;
       if (!current) return Promise.reject(new Error("Not paired yet."));
       return current.rpc<T>(method, params, server);
+    },
+    [],
+  );
+
+  // Answers a pending request by key; resolves ok or with the calm failure
+  // message. Never throws.
+  const respondApproval = useCallback(
+    async (key: string, decision: "allow" | "deny"): Promise<RespondResult> => {
+      const current = clientRef.current;
+      const request = current?.pendingApprovals.find((entry) => entry.key === key);
+      if (!current || !request) {
+        return { ok: false, message: "request is not pending (already answered?)" };
+      }
+      return current.respond(request.server, request.id, decision);
     },
     [],
   );
@@ -209,12 +232,14 @@ export function RelayProvider({ children }: { children: React.ReactNode }) {
       retryAt,
       reconnectAttempts,
       relayProtocol,
+      pendingApprovals,
       connect,
       startDemo,
       exitDemo,
       unpair,
       retryNow,
       rpc,
+      respondApproval,
     }),
     [
       hydrated,
@@ -228,12 +253,14 @@ export function RelayProvider({ children }: { children: React.ReactNode }) {
       retryAt,
       reconnectAttempts,
       relayProtocol,
+      pendingApprovals,
       connect,
       startDemo,
       exitDemo,
       unpair,
       retryNow,
       rpc,
+      respondApproval,
     ],
   );
 

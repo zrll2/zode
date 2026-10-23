@@ -225,3 +225,102 @@ it("remembers the announced protocol and resets it on disconnect", async () => {
   expect(client.relayProtocol).toBeUndefined();
   client.close();
 });
+
+const READY_PENDING = {
+  ...READY,
+  pending: [
+    {
+      server: "srv-a",
+      id: "p1",
+      method: "interaction/requestPermission",
+      params: {
+        sessionId: "s1",
+        toolName: "Bash",
+        riskLevel: "high",
+        input: { command: "rm -rf /tmp/x" },
+      },
+      at: 100,
+    },
+  ],
+};
+
+it("collects pending approvals from ready, new request events, and tap/resolved", async () => {
+  const { client, sockets } = makeClient();
+  const connected = client.connect();
+  sockets[0].open();
+  sockets[0].receive(READY_PENDING);
+  await connected;
+  expect(client.pendingApprovals.map((request) => request.key)).toEqual(["srv-a:p1"]);
+  expect(client.pendingApprovals[0].risky).toBe(true);
+
+  sockets[0].receive({
+    type: "event",
+    seq: 10,
+    server: "srv-b",
+    msg: {
+      method: "interaction/requestPermission",
+      id: "p2",
+      params: { sessionId: "s1", toolName: "Edit", riskLevel: "low", input: { file_path: "/a/b.ts" } },
+      at: 200,
+    },
+  });
+  expect(client.pendingApprovals.map((request) => request.id)).toEqual(["p1", "p2"]);
+
+  sockets[0].receive({
+    type: "event",
+    seq: 11,
+    server: "srv-a",
+    msg: { method: "tap/resolved", params: { id: "p1" } },
+  });
+  expect(client.pendingApprovals.map((request) => request.id)).toEqual(["p2"]);
+
+  client.close();
+  expect(client.pendingApprovals).toEqual([]);
+});
+
+it("respond resolves ok on success and with a message on failure", async () => {
+  const { client, sockets } = makeClient();
+  const connected = client.connect();
+  sockets[0].open();
+  sockets[0].receive(READY_PENDING);
+  await connected;
+
+  const ok = client.respond("srv-a", "p1", "allow");
+  const frame = sockets[0].sent.find((f) => f.type === "respond");
+  expect(frame).toMatchObject({ type: "respond", server: "srv-a", id: "p1", decision: "allow" });
+  sockets[0].receive({ type: "rpc-result", id: frame.rid, result: {} });
+  await expect(ok).resolves.toEqual({ ok: true });
+
+  const lost = client.respond("srv-a", "p1", "deny");
+  const frame2 = sockets[0].sent.filter((f) => f.type === "respond")[1];
+  sockets[0].receive({
+    type: "rpc-result",
+    id: frame2.rid,
+    error: "request is not pending (already answered?)",
+  });
+  const result = await lost;
+  expect(result.ok).toBe(false);
+  expect(result.message).toContain("not pending");
+  client.close();
+});
+
+it("respond times out after 10 s and refuses when not connected", async () => {
+  jest.useFakeTimers();
+  const { client, sockets } = makeClient();
+  const offline = await client.respond("srv-a", "p1", "allow");
+  expect(offline.ok).toBe(false);
+
+  const connected = client.connect();
+  sockets[0].open();
+  sockets[0].receive(READY_PENDING);
+  await connected;
+
+  const pending = client.respond("srv-a", "p1", "deny");
+  const assertion = expect(pending).resolves.toEqual({
+    ok: false,
+    message: "Couldn't reach your Mac. Try again.",
+  });
+  jest.advanceTimersByTime(10_000);
+  await assertion;
+  client.close();
+});
