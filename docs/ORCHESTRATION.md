@@ -71,5 +71,16 @@ Checked against OpenCode 1.3.3 on this Mac, `opencode serve` (HTTP, localhost):
 - **API fits the adapter interface.** `POST /session` (with `?directory=` to pick the worktree), `POST /session/{id}/prompt_async` (model, parts), `GET /event` (server-sent events: `message.part.delta`, `message.part.updated`, `session.status` idle or busy, `session.diff`), `GET /permission` and `POST /permission/{id}/reply` (`once`, `always`, `reject`, plus a message), `POST /session/{id}/abort`, `GET /session/{id}/message` (per-message token counts), `GET /session/{id}/diff`, `GET /session/status`.
 - **Worked end to end:** the same small order used for the ZCode reasoning comparison, run through the API with GLM-5.3-flash: 26 s, about 1.5k output tokens, 16 passing tests. ZCode at low reasoning took 19 s and about 600 tokens for fewer test cases.
 - **No permission asks** came up for pure file edits, so the existing approval policy (deny commands, allow read-only) maps to the reply endpoint directly.
-- **DeepSeek:** the free DeepSeek model that ships with OpenCode answers 403 ("free tier can only be used from within OpenCode") when driven through the server API. A DeepSeek comparison needs the user's own DeepSeek API key configured as an OpenCode provider.
+- **DeepSeek:** the free DeepSeek model that ships with OpenCode answers 403 ("free tier can only be used from within OpenCode") when driven through the server API. With the user's own DeepSeek key added through `opencode auth login` (the key goes straight into OpenCode's store, never through Zode), two models are available: `deepseek-flash` and `deepseek-v4-pro`.
 - **Credentials:** OpenCode keeps provider keys in its own store (`~/.local/share/opencode/auth.json`); Zode never needs to read them.
+
+### Same small order (a 17-line function plus tests), one run each
+| Backend and model | Time | Output tokens | Tests written, passing |
+|---|---|---|---|
+| ZCode, GLM-5.3-flash, low reasoning | 19 s | ~600 | few cases |
+| ZCode, GLM-5.3-flash, max reasoning | 144 s | ~6,600 | 4 (one expectation wrong) |
+| OpenCode, GLM-5.3-flash | 26 s | ~1,500 | 16 of 16 |
+| OpenCode, DeepSeek flash | 10 s | ~1,900 | 14 of 14 |
+| OpenCode, DeepSeek v4-pro | 24 s | ~2,100 | 13 of 13 |
+
+One trivial task, one run each: it shows the plumbing works and nothing is wildly slow, not which model is better. The next comparison should use a real 3 to 5 file order.
