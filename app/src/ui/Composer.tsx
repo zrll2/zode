@@ -1,11 +1,14 @@
-import React from "react";
-import { StyleSheet, TextInput, View } from "react-native";
+import React, { useEffect, useRef } from "react";
+import { Pressable, StyleSheet, TextInput, View } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { radius, useTheme } from "../theme";
+import type { ComposerVoice } from "../voice";
+import { Dot } from "./Dot";
 import { PressScale } from "./PressScale";
 import { Text } from "./Text";
+import { ThinkingDots } from "./ThinkingDots";
 
 interface ComposerProps {
   value: string;
@@ -25,11 +28,19 @@ interface ComposerProps {
   usageLabel?: string | null;
   usageTone?: "normal" | "warn" | "danger";
   onUsagePress?: () => void;
+  // Voice input (V3): mic in place of send while the field is empty.
+  voice?: ComposerVoice;
 }
 
-// Sticky composer: "+" (attachments), permission pill, usage chip, surface
-// field with a 36 px accent send circle (stop while running). Light haptic
-// on send.
+function clock(totalSeconds: number): string {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+// Sticky composer: "+" (attachments), permission pill, usage chip, then the
+// field with a 36 px accent circle (mic while empty, send with text, stop
+// while running). Voice recording replaces the field with a calm strip.
 export function Composer({
   value,
   onChangeText,
@@ -46,6 +57,7 @@ export function Composer({
   usageLabel,
   usageTone = "normal",
   onUsagePress,
+  voice,
 }: ComposerProps) {
   const t = useTheme();
   const insets = useSafeAreaInsets();
@@ -57,6 +69,26 @@ export function Composer({
       : usageTone === "warn"
         ? t.colors.warn
         : t.colors.subtext;
+
+  const voiceActive = voice?.state === "recording" || voice?.state === "transcribing";
+  const showMic =
+    Boolean(voice?.available) &&
+    !running &&
+    !voiceActive &&
+    value.trim().length === 0 &&
+    !canSend;
+
+  // The keyboard comes back after a transcription so the user can review.
+  const inputRef = useRef<React.ComponentRef<typeof TextInput>>(null);
+  const prevVoiceState = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const previous = prevVoiceState.current;
+    prevVoiceState.current = voice?.state;
+    if (previous === "transcribing" && voice?.state === "idle") inputRef.current?.focus();
+  }, [voice?.state]);
+
+  const tone = { backgroundColor: t.colors.surface, borderColor: t.colors.border };
+
   return (
     <View
       style={[
@@ -128,42 +160,113 @@ export function Composer({
           </PressScale>
         ) : undefined}
       </View>
-      <View style={[styles.field, { backgroundColor: t.colors.surface, borderColor: t.colors.border }]}>
-        <TextInput
-          style={[styles.input, { color: t.colors.text }]}
-          value={value}
-          onChangeText={onChangeText}
-          placeholder={placeholder}
-          placeholderTextColor={t.colors.subtext}
-          multiline
-          autoFocus={autoFocus}
-        />
-        <PressScale
-          onPress={() => {
-            if (running) {
-              onStop();
-              return;
+
+      {voiceActive ? (
+        <View style={[styles.field, tone]}>
+          {voice?.state === "recording" ? (
+            <>
+              <Pressable
+                onPress={voice.onCancel}
+                accessibilityRole="button"
+                accessibilityLabel="Cancel voice input"
+                hitSlop={8}
+                style={styles.voiceCancel}
+              >
+                <Text style={{ color: t.colors.subtext, fontSize: 13, fontWeight: "600" }}>
+                  Cancel
+                </Text>
+              </Pressable>
+              <View style={styles.listeningRow}>
+                <Dot color={t.colors.accent} size={8} pulse />
+                <Text style={[styles.listeningText, { color: t.colors.subtext }]}>
+                  {`Listening... ${clock(voice.seconds)}`}
+                </Text>
+              </View>
+            </>
+          ) : (
+            <View style={styles.listeningRow}>
+              <Text style={[styles.listeningText, { color: t.colors.subtext }]}>
+                Writing it down...
+              </Text>
+              <ThinkingDots />
+            </View>
+          )}
+          <PressScale
+            onPress={voice?.onStop}
+            disabled={voice?.state !== "recording"}
+            accessibilityRole="button"
+            accessibilityLabel="Finish voice input"
+            style={[
+              styles.action,
+              { backgroundColor: t.colors.accent, opacity: voice?.state === "recording" ? 1 : 0.4 },
+            ]}
+          >
+            <Feather name="check" size={18} color={t.colors.onAccent} />
+          </PressScale>
+        </View>
+      ) : (
+        <View style={[styles.field, tone]}>
+          <TextInput
+            ref={inputRef}
+            style={[styles.input, { color: t.colors.text }]}
+            value={value}
+            onChangeText={onChangeText}
+            placeholder={placeholder}
+            placeholderTextColor={t.colors.subtext}
+            multiline
+            autoFocus={autoFocus}
+          />
+          <PressScale
+            onPress={() => {
+              if (showMic) {
+                void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                voice?.onStart();
+                return;
+              }
+              if (running) {
+                onStop();
+                return;
+              }
+              if (!canSend || sendDisabled) return;
+              void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              onSend();
+            }}
+            disabled={!running && !showMic && (!canSend || sendDisabled)}
+            accessibilityRole="button"
+            accessibilityLabel={
+              running ? "Stop" : showMic ? "Speak instead of typing" : "Send message"
             }
-            if (!canSend || sendDisabled) return;
-            void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-            onSend();
-          }}
-          disabled={!running && (!canSend || sendDisabled)}
-          accessibilityRole="button"
-          accessibilityLabel={running ? "Stop" : "Send message"}
-          style={[
-            styles.action,
-            {
-              backgroundColor: t.colors.accent,
-              opacity: !running && (!canSend || sendDisabled) ? 0.4 : 1,
-            },
-          ]}
-        >
-          <Feather name={running ? "square" : "arrow-up"} size={18} color={t.colors.onAccent} />
-        </PressScale>
-      </View>
+            style={[
+              styles.action,
+              {
+                backgroundColor: t.colors.accent,
+                opacity: !running && !showMic && (!canSend || sendDisabled) ? 0.4 : 1,
+              },
+            ]}
+          >
+            <Feather
+              name={running ? "square" : showMic ? "mic" : "arrow-up"}
+              size={18}
+              color={t.colors.onAccent}
+            />
+          </PressScale>
+        </View>
+      )}
+
+      {voice?.error ? (
+        <Text variant="caption" color="danger" numberOfLines={1} style={styles.voiceError}>
+          {voice.error}
+        </Text>
+      ) : undefined}
     </View>
   );
+}
+
+// "42%" → 42; the neutral "Usage" label → 0 (empty gauge).
+function parseUsagePercent(label: string | null | undefined): number {
+  if (!label || !label.endsWith("%")) return 0;
+  const parsed = Number.parseInt(label, 10);
+  return Number.isFinite(parsed) ? Math.min(100, Math.max(0, parsed)) : 0;
 }
 
 const styles = StyleSheet.create({
@@ -233,11 +336,14 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginBottom: 2,
   },
+  voiceCancel: { paddingVertical: 12, paddingRight: 4, alignSelf: "center" },
+  listeningRow: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingVertical: 12,
+  },
+  listeningText: { fontSize: 15, lineHeight: 20, fontVariant: ["tabular-nums"] },
+  voiceError: { marginTop: 4 },
 });
-
-// "42%" → 42; the neutral "Usage" label → 0 (empty gauge).
-function parseUsagePercent(label: string | null | undefined): number {
-  if (!label || !label.endsWith("%")) return 0;
-  const parsed = Number.parseInt(label, 10);
-  return Number.isFinite(parsed) ? Math.min(100, Math.max(0, parsed)) : 0;
-}

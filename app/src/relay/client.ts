@@ -67,6 +67,8 @@ export class RelayClient {
   // Protocol version the relay announced in its ready frame; undefined when
   // the relay is older and does not announce one (treated as protocol 1).
   private relayProtocolValue: number | undefined = undefined;
+  // Optional features the relay announced, e.g. { stt: true }.
+  private relayFeaturesValue: { stt: boolean } = { stt: false };
   // Epoch time of the next automatic reconnect while status is
   // "reconnecting", else null. retryNow() skips the wait.
   retryAt: number | null = null;
@@ -128,6 +130,10 @@ export class RelayClient {
 
   get relayProtocol(): number | undefined {
     return this.relayProtocolValue;
+  }
+
+  get relayFeatures(): { stt: boolean } {
+    return this.relayFeaturesValue;
   }
 
   get pendingApprovals(): ApprovalRequest[] {
@@ -419,6 +425,7 @@ export class RelayClient {
     this.raceSettled = true;
     this.clearRaceTimers();
     this.relayProtocolValue = undefined;
+    this.relayFeaturesValue = { stt: false };
     this.setApprovals([]);
     this.failPending(new Error("relay: disconnected"));
     if (this.stopped) {
@@ -479,6 +486,14 @@ export class RelayClient {
       this.attempts = 0;
       const protocol = (frame as { protocol?: unknown }).protocol;
       this.relayProtocolValue = typeof protocol === "number" ? protocol : undefined;
+      const features = (frame as { features?: unknown }).features;
+      this.relayFeaturesValue = {
+        stt: Boolean(
+          features &&
+            typeof features === "object" &&
+            (features as { stt?: unknown }).stt === true,
+        ),
+      };
       this.setApprovals(reduceApprovals(this.approvalsValue, frame, Date.now()));
       const rawAddresses = (frame as { addresses?: unknown }).addresses;
       const addresses = sanitizeUrlList(rawAddresses);

@@ -51,6 +51,7 @@ import {
 import { loadPrefs, savePrefs } from "../../src/storage";
 import { canAttach, describeAttachment, formatBytes, guessMime, MAX_ATTACHMENTS } from "../../src/attachments";
 import { usageChip } from "../../src/usage";
+import { useVoiceHint, useVoiceInput } from "../../src/voice";
 import {
   isSystemLikeUserText,
   mergeHistoryWithLive,
@@ -140,7 +141,7 @@ export default function SessionScreen() {
 
   const t = useTheme();
   const router = useRouter();
-  const { status, client, relayProtocol, pendingApprovals, rpc, retryAt, reconnectAttempts, retryNow, respondApproval } = useRelay();
+  const { status, client, relayProtocol, relayFeatures, pendingApprovals, rpc, retryAt, reconnectAttempts, retryNow, respondApproval } = useRelay();
   const session = useSessionEvents(sessionId);
 
   const [draft, setDraft] = useState("");
@@ -583,6 +584,16 @@ export default function SessionScreen() {
   const usageLabel = usage ? usage.label : usageSupported ? "Usage" : null;
   const usageTone = usage?.tone ?? "normal";
 
+  // Voice input (V3): mic in the composer when the Mac's relay offers stt.
+  const voiceAvailable = status === "ready" && relayFeatures.stt;
+  const voiceHint = useVoiceHint({ rpc, enabled: voiceAvailable });
+  const voice = useVoiceInput({
+    rpc,
+    available: voiceAvailable,
+    hint: voiceHint,
+    onText: (text) => setDraft((current) => (current ? `${current} ${text}` : text)),
+  });
+
   // ---- Ask-first approvals ----
   const approvalsActive = status === "ready" && relaySupports(relayProtocol, "askFirst");
   const approvalRequests = approvalsActive
@@ -904,6 +915,15 @@ export default function SessionScreen() {
           usageLabel={usageLabel}
           usageTone={usageTone}
           onUsagePress={() => setUsageSheetVisible(true)}
+          voice={{
+            available: voiceAvailable,
+            state: voice.state,
+            seconds: voice.seconds,
+            onStart: voice.start,
+            onStop: voice.stop,
+            onCancel: voice.cancel,
+            error: voice.error,
+          }}
         />
       </View>
 

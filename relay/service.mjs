@@ -418,6 +418,7 @@ export function createRelay(opts = {}) {
     wss.on('error', () => {});                    // a client socket error must never become an uncaught throw
     wss.on('connection', (ws, req) => {
       const ip = req.socket.remoteAddress; const c = { ws, authed: false, device: null };
+      log.log(`connection from ${ip} to ${req.socket.localAddress}`);        // which way in a phone used (Wi-Fi or Tailscale)
       const authTimer = setTimeout(() => ws.close(4001, 'auth timeout'), 10_000);
       ws.on('close', () => { if (clients.delete(c)) emitStatus(); clearTimeout(authTimer); });
       ws.on('message', raw => {
@@ -427,6 +428,7 @@ export function createRelay(opts = {}) {
           const d = findDevice(m.token);
           if (!d) { fail(ip); return ws.close(4003, 'bad token'); }
           c.authed = true; c.device = d; clients.add(c); clearTimeout(authTimer); emitStatus();
+          log.log(`device ${d.id} connected from ${ip}`);
           send(c, { type: 'ready', protocol: PROTOCOL, device: d.id, servers: [...upstream.values()].map(u => ({ pid: u.meta.pid, cwd: u.meta.cwd })), seq, pending: [...pendingReq.values()], features: { stt: !!stt }, addresses: [...publicUrls] });
           if (typeof m.since === 'number') for (const e of replay) if (e.seq > m.since) send(c, { type: 'event', ...e });
           return;
@@ -441,7 +443,8 @@ export function createRelay(opts = {}) {
           if (!DECISIONS.has(m.decision)) return fail('decision must be allow or deny');
           const id = ++relayId; routes.set(id, { client: c, clientId: m.rid, pid: m.server });
           log.log(`respond ${c.device.id} ${m.decision} ${p.params?.toolName ?? '?'} -> ${m.server}`);
-          u.sock.write(JSON.stringify({ id, method: 'tap/respond', params: { id: m.id, result: { decision: m.decision, ...(typeof m.reason === 'string' ? { reason: m.reason.slice(0, 500) } : {}) } } }) + '\n');
+          try { u.sock.write(JSON.stringify({ id, method: 'tap/respond', params: { id: m.id, result: { decision: m.decision, ...(typeof m.reason === 'string' ? { reason: m.reason.slice(0, 500) } : {}) } } }) + '\n'); }
+          catch { routes.delete(id); fail('the server just went away'); }   // a dead socket must not throw out of the message handler
           return;
         }
         if (m.type === 'resume') { for (const e of replay) if (e.seq > (m.since ?? 0)) send(c, { type: 'event', ...e }); return; }

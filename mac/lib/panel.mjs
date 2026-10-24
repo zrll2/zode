@@ -53,11 +53,16 @@ function needOf(line, pending, now) {
       const text = r => str(r.summary) || str(r.toolName) || 'Permission request';
       const ask = text(oldest);
       const others = permissions.slice(1);
+      const pile = permissions.slice(0, 500);
       return {
         ...base, kind: 'ask',
         ask, waiting, requestId: oldest.requestId, risky: oldest.risky === true,
         more: others.length,                                    // the loop case: one command asked over and over
         same: others.filter(r => text(r) === ask).length,
+        pile: pile.map(r => ({ requestId: r.requestId, sock: str(r.sock), risky: r.risky === true })),
+        sameCount: pile.filter(r => text(r) === ask).length,    // the shown one included
+        canAlways: (Array.isArray(oldest.options) ? oldest.options : [])
+          .some(o => o && (o.optionId === 'allow_project' || o.kind === 'allow_always')),
       };
     }
     return { ...base, kind: 'question', ask: 'Waiting for an answer. If this task was started by a script, stop it here.', waiting };
@@ -151,7 +156,7 @@ export function buildPanelModel(input, now = Date.now()) {
         const need = needOf(line, pending, t);
         if (need) needs.push(need);
       } else if (!line.done && line.light === 'green') {
-        working.push({ id: line.id, project: str(line.project) || 'Zode', doing: str(line.title), t: relAge(ageOf(line, t)) });
+        working.push({ id: line.id, project: str(line.project) || 'Zode', doing: str(line.title).replace(/^[#>*\s-]+/, '').trim(), t: relAge(ageOf(line, t)) });
       } else if (line.done) {
         const row = { id: line.id, project: str(line.project) || 'Zode', t: str(line.status) || relAge(ageOf(line, t)) };
         (line.older ? earlier : done).push(row);
