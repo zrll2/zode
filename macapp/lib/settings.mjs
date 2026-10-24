@@ -18,9 +18,13 @@ export function loadSettings(file) {
   try { return sanitize(JSON.parse(fs.readFileSync(file, 'utf8'))); } catch { return { ...DEFAULTS }; }
 }
 
+// The file is shared with the newer menu bar app (setupDone, keepAwake, voice*, ...): keep the keys
+// this older app does not know instead of wiping them on every save.
 export function saveSettings(file, settings = {}) {
   const s = sanitize(settings);
-  fs.writeFileSync(file, JSON.stringify(s, null, 2) + '\n', { mode: 0o600 });
+  let kept = {};
+  try { const raw = JSON.parse(fs.readFileSync(file, 'utf8')); if (raw && typeof raw === 'object' && !Array.isArray(raw)) kept = raw; } catch { /* first save */ }
+  fs.writeFileSync(file, JSON.stringify({ ...kept, ...s }, null, 2) + '\n', { mode: 0o600 });
   fs.chmodSync(file, 0o600);                                      // umask may have masked the mode
   return s;
 }

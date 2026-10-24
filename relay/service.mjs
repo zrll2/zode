@@ -443,7 +443,8 @@ export function createRelay(opts = {}) {
           if (!DECISIONS.has(m.decision)) return fail('decision must be allow or deny');
           const id = ++relayId; routes.set(id, { client: c, clientId: m.rid, pid: m.server });
           log.log(`respond ${c.device.id} ${m.decision} ${p.params?.toolName ?? '?'} -> ${m.server}`);
-          u.sock.write(JSON.stringify({ id, method: 'tap/respond', params: { id: m.id, result: { decision: m.decision, ...(typeof m.reason === 'string' ? { reason: m.reason.slice(0, 500) } : {}) } } }) + '\n');
+          try { u.sock.write(JSON.stringify({ id, method: 'tap/respond', params: { id: m.id, result: { decision: m.decision, ...(typeof m.reason === 'string' ? { reason: m.reason.slice(0, 500) } : {}) } } }) + '\n'); }
+          catch { routes.delete(id); fail('the server just went away'); }   // a dead socket must not throw out of the message handler
           return;
         }
         if (m.type === 'resume') { for (const e of replay) if (e.seq > (m.since ?? 0)) send(c, { type: 'event', ...e }); return; }

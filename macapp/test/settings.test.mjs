@@ -42,3 +42,15 @@ test('saveSettings drops unknown keys and out-of-range ports', () => {
   assert.deepEqual(saved, { relayEnabled: true, addressId: 'lan', port: 8787, launchAtLogin: false, foldFinished: false });
   assert.deepEqual(JSON.parse(fs.readFileSync(f, 'utf8')), saved);
 });
+
+test('saving keeps keys this older app does not know (the file is shared with the menu bar app)', () => {
+  const dir = tmp(), file = path.join(dir, 's.json');
+  fs.writeFileSync(file, JSON.stringify({ setupDone: true, keepAwake: false, voiceLanguage: 'zh', port: 9000 }));
+  saveSettings(file, { port: 8123 });
+  const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(raw.setupDone, true);
+  assert.equal(raw.keepAwake, false);
+  assert.equal(raw.voiceLanguage, 'zh');
+  assert.equal(raw.port, 8123);
+  fs.rmSync(dir, { recursive: true, force: true });
+});

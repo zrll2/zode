@@ -91,7 +91,7 @@ export async function listSessions({ dir = tapDir(), timeoutMs = 1500, connect =
         }
       }
     }
-    return [...byId.values()].map(kept => kept.session);
+    return withRealActivity([...byId.values()].map(kept => kept.session));   // the agent says updatedAt = now for anything it has loaded
   } catch { return []; }
 }
 
