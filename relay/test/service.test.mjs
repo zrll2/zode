@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import WebSocket from 'ws';
@@ -44,7 +45,7 @@ function fakeUpstream() {
   const tapDir = path.join(home, 'tap'); fs.mkdirSync(tapDir);
   const sockPath = path.join(tapDir, 'upstream.sock');
   const received = [];
-  let sock = null, beginSession = null, commitSeq = 0;
+  let sock = null, beginSession = null, commitSeq = 0, pendingAsks = 0;
   const answers = {
     'session/resume': () => ({}),
     'v4/attachment/begin': (m) => { beginSession = m.params.sessionId; return { uploadId: m.params.uploadId, state: 'staging', nextChunkIndex: 0 }; },
@@ -58,7 +59,11 @@ function fakeUpstream() {
       while ((i = buf.indexOf('\n')) >= 0) {
         const l = buf.slice(0, i); buf = buf.slice(i + 1); if (!l.trim()) continue;
         const m = JSON.parse(l);
-        if (m.method === 'tap/pending') s.write(JSON.stringify({ id: m.id, tapReply: true, result: { pending: [] } }) + '\n');
+        if (m.method === 'tap/pending') {
+          pendingAsks += 1;
+          const answer = answers['tap/pending'];
+          s.write(JSON.stringify({ id: m.id, tapReply: true, result: answer ? answer(m) : { pending: [] } }) + '\n');
+        }
         else {
           received.push(m);
           const answer = answers[m.method];
@@ -71,10 +76,30 @@ function fakeUpstream() {
   fs.writeFileSync(path.join(tapDir, `${process.pid}.json`), JSON.stringify({ pid: process.pid, cwd: '/tmp/fake-workspace', sock: sockPath }));
   return {
     home, tapDir, received,
+    get pendingAsks() { return pendingAsks; },                      // how often the relay asked what is still pending
     answer: (method, fn) => { answers[method] = fn; },
     send: (o) => sock.write(JSON.stringify(o) + '\n'),                                              // upstream -> relay
     respond: (m, result) => sock.write(JSON.stringify({ id: m.id, tapReply: true, result }) + '\n'),
     close: async () => { sock?.destroy(); await new Promise((r) => server.close(r)); rm(home); },
+  };
+}
+
+// A fake host speech engine (the `stt` option): records every request; tests override what it
+// answers through `over` (and can mutate `over` between calls).
+function fakeStt(over = {}) {
+  const calls = [];
+  return {
+    calls,
+    transcribe: async (req) => {
+      calls.push({ kind: 'transcribe', req });
+      if (over.transcribe) return over.transcribe(req);
+      return { ok: true, text: 'hello worktree', ms: 42, language: req.language ?? 'en' };
+    },
+    status: async () => {
+      calls.push({ kind: 'status' });
+      return over.status ?? { engine: true, models: { small: { state: 'ready', bytes: 487601967 }, 'base.en': { state: 'missing', bytes: 0 } } };
+    },
+    defaultLanguage: () => over.language ?? 'en',
   };
 }
 
@@ -109,6 +134,61 @@ test('start / status / stop; stop twice is safe; busy port rejects with EADDRINU
   } finally { rm(state, tap, busyState); }
 });
 
+// Two listeners on one port: a LAN IPv4 plus IPv6 loopback (loopback IPv4 is dropped when there is
+// more than one host, and a laptop rarely has two LAN addresses). Skips with no LAN address.
+const lanHost = Object.values(os.networkInterfaces()).flat().find((i) => i && i.family === 'IPv4' && !i.internal)?.address;
+const multi = lanHost ? test : test.skip;
+
+multi('two hosts: both listeners answer, the payload carries every url, ready lists them, stop closes all', async () => {
+  const state = tmp(), tap = tmp();
+  try {
+    const port = await freePort();
+    const urls = [`ws://${lanHost}:${port}`, `ws://[::1]:${port}`];
+    const relay = createRelay({ hosts: [lanHost, '::1'], publicUrls: urls, port, stateDir: state, tapDir: tap, log: silent });
+    assert.deepEqual(await relay.start(), { host: lanHost, port });
+    const st = relay.status();
+    assert.deepEqual(st.hosts, [lanHost, '::1']);
+    assert.deepEqual(st.publicUrls, urls);
+
+    const p = relay.createPairing();
+    const payload = JSON.parse(p.payload);
+    assert.equal(payload.u, urls[0].replace('ws:', 'http:'));
+    assert.deepEqual(payload.urls, urls);
+    assert.equal(payload.c, p.code);
+    assert.deepEqual(p.publicUrls, urls);
+
+    const { token } = await (await fetch(`http://${lanHost}:${port}/pair`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: p.code, name: 'phone' }) })).json();
+    const { ws, ready } = await authed(urls[1], token);                     // a live socket on the second listener
+    assert.deepEqual(ready.addresses, urls);
+    const p2 = relay.createPairing();
+    const second = await fetch(`http://[::1]:${port}/pair`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: p2.code, name: 'second' }) });
+    assert.equal(second.status, 200);                                       // /pair answers on the second listener too
+    ws.close();
+
+    await relay.stop();
+    for (const base of [`http://${lanHost}:${port}`, `http://[::1]:${port}`]) {
+      await assert.rejects(fetch(`${base}/health`));                        // both listeners are gone
+    }
+  } finally { rm(state, tap); }
+});
+
+multi('a bind failure on the second host closes the first listener and rejects', async () => {
+  const state = tmp(), tap = tmp();
+  try {
+    const port = await freePort();
+    const holder = net.createServer();                                      // occupies [::1]:<port>
+    await new Promise((r, j) => { holder.once('error', j); holder.listen(port, '::1', r); });
+    holder.unref();
+    const relay = createRelay({ hosts: [lanHost, '::1'], port, stateDir: state, tapDir: tap, log: silent });
+    await assert.rejects(relay.start(), (e) => e.code === 'EADDRINUSE');
+    assert.equal(relay.status().running, false);
+    // the first listener was closed with the second's failure: the LAN address is free again
+    await new Promise((r, j) => { const s = net.createServer(); s.once('error', j); s.listen(port, lanHost, () => s.close(r)); });
+    await relay.stop();                                                     // safe after a failed start
+    await new Promise((r) => holder.close(r));
+  } finally { rm(state, tap); }
+});
+
 test('pairing: POST /pair returns a token; a code is one-time and expires', async () => {
   const state = tmp(), tap = tmp();
   try {
@@ -117,7 +197,7 @@ test('pairing: POST /pair returns a token; a code is one-time and expires', asyn
     await relay.start();
 
     const p = relay.createPairing();
-    assert.equal(p.payload, JSON.stringify({ u: `http://127.0.0.1:${port}`, w: `ws://127.0.0.1:${port}`, c: p.code }));
+    assert.equal(p.payload, JSON.stringify({ u: `http://127.0.0.1:${port}`, urls: [`ws://127.0.0.1:${port}`], w: `ws://127.0.0.1:${port}`, c: p.code }));
     assert.ok(p.expiresAt > Date.now() && p.expiresAt - Date.now() <= 200);
 
     const res = await pair(port, p.code, 'iphone');
@@ -146,14 +226,15 @@ test('listDevices after pairing; revokeDevice removes it and closes the live soc
     const p = relay.createPairing();
     const { id, token } = await (await pair(port, p.code, 'test-phone')).json();
     const devs = relay.listDevices();
-    assert.deepEqual(devs, [{ id, name: 'test-phone', pairedAt: devs[0].pairedAt }]);
-    assert.deepEqual(Object.keys(devs[0]).sort(), ['id', 'name', 'pairedAt']);   // no token hash leaks
+    assert.deepEqual(devs, [{ id, name: 'test-phone', pairedAt: devs[0].pairedAt, connected: false }]);
+    assert.deepEqual(Object.keys(devs[0]).sort(), ['connected', 'id', 'name', 'pairedAt']);   // no token hash leaks
 
     const { ws, ready } = await authed(`ws://127.0.0.1:${port}`, token);
     assert.equal(ready.device, id);
     assert.equal(ready.protocol, PROTOCOL);                                  // the phone uses this to know which features this Mac supports
     assert.equal(PROTOCOL, 2);
     assert.equal(relay.status().clients, 1);
+    assert.equal(relay.listDevices()[0].connected, true);                    // the authed socket says so
     const closed = new Promise((r) => ws.on('close', (code) => r(code)));
 
     assert.equal(relay.revokeDevice(id), true);
@@ -227,6 +308,101 @@ test('a fake upstream (unix socket + <pid>.json meta) delivers events to an auth
     await relay.stop();
     await up.close();
   }
+});
+
+test('session/list replies carry the live truth: running after prompt_started, idle after prompt_completed, waiting while a request pends', async () => {
+  const port = await freePort();
+  const up = fakeUpstream();
+  const relay = createRelay({ port, stateDir: path.join(up.home, 'state'), tapDir: up.tapDir, log: silent });
+  await relay.start();
+  try {
+    await waitFor(() => relay.status().upstreams === 1);
+    const { token } = await (await pair(port, relay.createPairing().code, 'phone')).json();
+    const { ws } = await authed(`ws://127.0.0.1:${port}`, token);
+    // An id the sqlite activity lookup skips (over 80 characters), so the test never touches a real database.
+    const sid = 'sess_' + 'live'.repeat(30);
+    const row = () => ({ sessionId: sid, status: 'idle', updatedAt: 123 });
+    let answered = 0;
+    const askList = async (id) => {
+      const resP = nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === id);        // listen first
+      ws.send(JSON.stringify({ type: 'rpc', id, method: 'session/list', params: {} }));
+      await waitFor(() => up.received.filter(m => m.method === 'session/list').length === answered + 1);
+      const req = up.received.filter(m => m.method === 'session/list')[answered];
+      answered += 1;
+      up.respond(req, { sessions: [row()] });
+      return (await resP).result.sessions[0];
+    };
+
+    assert.equal((await askList(121)).status, 'idle');                    // the list's own word, before anything happens
+
+    up.send({ method: 'state.updated', params: { type: 'state.updated', scope: 'session', sessionId: sid, patch: { status: 'running' }, reason: 'prompt_started', revision: 1 } });
+    const running = await askList(122);
+    assert.equal(running.status, 'running');                              // mid-turn, the list would still say idle
+    assert.ok(running.updatedAt > 123);                                   // the tracker bumped it to the event time
+
+    up.send({ method: 'state.updated', params: { type: 'state.updated', scope: 'session', sessionId: sid, patch: {}, reason: 'prompt_completed', revision: 2 } });
+    const done = await askList(123);
+    assert.equal(done.status, 'idle');
+    assert.equal(done.updatedAt, 123);                                    // settled: the list's own object stands
+
+    up.send({ id: 'req-9', method: 'interaction/requestPermission', params: { sessionId: sid, toolName: 'Bash', input: {} } });
+    assert.equal((await askList(124)).status, 'waiting');                 // an open request outranks the settled status
+    up.send({ method: 'tap/resolved', params: { id: 'req-9' } });
+    assert.equal((await askList(125)).status, 'idle');
+    ws.close();
+  } finally { await relay.stop(); await up.close(); }
+});
+
+test('the relay reconciles its pending list with what the wrapper still holds', async () => {
+  const port = await freePort();
+  const up = fakeUpstream();
+  const relay = createRelay({ port, stateDir: path.join(up.home, 'state'), tapDir: up.tapDir, log: silent, pendingSyncMs: 60 });
+  await relay.start();
+  try {
+    await waitFor(() => relay.status().upstreams === 1);
+    const { token } = await (await pair(port, relay.createPairing().code, 'phone')).json();
+    const { ws } = await authed(`ws://127.0.0.1:${port}`, token);
+    const until = async (fn, ms = 2000) => { const end = Date.now() + ms; while (Date.now() < end) { const v = await fn(); if (v) return v; await sleep(25); } throw new Error('condition not met in time'); };
+    const askPending = async () => {
+      const resP = nextMessage(ws, (m) => m.type === 'pending');
+      ws.send(JSON.stringify({ type: 'pending' }));
+      return (await resP).pending;
+    };
+    const sid = 'sess_' + 'r'.repeat(85);                               // over 80 characters: the sqlite activity lookup skips it
+
+    // The wrapper holds one old request: a reconcile brings it to the relay and the phone sees it.
+    up.answer('tap/pending', () => ({ pending: [{ id: 'req-1', method: 'interaction/requestPermission', params: { sessionId: sid, toolName: 'Bash' }, at: Date.now() - 10_000 }] }));
+    await until(async () => (await askPending()).length === 1);
+
+    // The session's list said waiting while the request stood, and stops once the wrapper's list is empty.
+    let lists = 0;
+    const askList = async (id) => {
+      const resP = nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === id);
+      ws.send(JSON.stringify({ type: 'rpc', id, method: 'session/list', params: {} }));
+      await waitFor(() => up.received.filter(m => m.method === 'session/list').length === lists + 1);
+      const req = up.received.filter(m => m.method === 'session/list')[lists];
+      lists += 1;
+      up.respond(req, { sessions: [{ sessionId: sid, status: 'idle', updatedAt: 123 }] });
+      return (await resP).result.sessions[0];
+    };
+    assert.equal((await askList(131)).status, 'waiting');
+    up.answer('tap/pending', () => ({ pending: [] }));                  // the turn was stopped; the truth is empty
+    await until(async () => (await askPending()).length === 0);         // the ghost is gone within a couple of intervals
+    assert.equal((await askList(132)).status, 'idle');                  // and the list no longer says waiting
+
+    // A request that just arrived as an event survives a reconcile that does not list it.
+    up.send({ id: 'req-2', method: 'interaction/requestPermission', params: { sessionId: sid, toolName: 'Edit' } });
+    await until(async () => (await askPending()).some(p => p.id === 'req-2'));
+    await sleep(200);                                                   // more than three reconcile intervals
+    assert.deepEqual((await askPending()).map(p => p.id), ['req-2']);   // younger than 5 s: kept
+
+    // stop() leaves no timer behind: no further tap/pending goes out.
+    const asks = up.pendingAsks;
+    await relay.stop();
+    await sleep(250);                                                   // more than three reconcile intervals
+    assert.equal(up.pendingAsks, asks);
+    ws.close();
+  } finally { await up.close(); }
 });
 
 test('checkPolicy: rename/upload session ids, upload file rules, send attachments, usage ranges, no raw commands', () => {
@@ -494,6 +670,193 @@ test('session/delete was removed: a phone gets method not allowed', async () => 
     const res = await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === 51);
     assert.equal(res.error.code, -32001);
     assert.equal(res.error.message, 'method not allowed: session/delete');
+    ws.close();
+  } finally { await relay.stop(); rm(state, tap); }
+});
+
+// ---- stt/transcribe and stt/status ------------------------------------------------------------
+
+const goodAudio = Buffer.from('abc').toString('base64');   // 'YWJj'
+
+test('stt/transcribe: the relay answers itself, the host gets the exact bytes, nothing is forwarded', async () => {
+  const port = await freePort();
+  const up = fakeUpstream();
+  const stt = fakeStt();
+  const lines = [];
+  const log = { log: (...a) => lines.push(a.join(' ')), warn() {}, error() {} };
+  const relay = createRelay({ port, stateDir: path.join(up.home, 'state'), tapDir: up.tapDir, log, stt });
+  await relay.start();
+  try {
+    await waitFor(() => relay.status().upstreams === 1);
+    const { id: device, token } = await (await pair(port, relay.createPairing().code, 'phone')).json();
+    const { ws, ready } = await authed(`ws://127.0.0.1:${port}`, token);
+    assert.deepEqual(ready.features, { stt: true });
+
+    const raw = Buffer.from('watch aac bytes \u00e9\u4e2d', 'utf8');
+    const long = 'x'.repeat(100);
+    ws.send(JSON.stringify({ type: 'rpc', id: 61, method: 'stt/transcribe', params: {
+      audio: raw.toString('base64'), format: 'm4a', language: 'zh',
+      hint: { projects: [long, 'proj', 42, ...Array.from({ length: 25 }, (_, i) => `prj${i}`)], titles: ['', '   ', 'title one'] },
+    } }));
+    const res = await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === 61);
+    assert.deepEqual(res.result, { ok: true, text: 'hello worktree', ms: 42, language: 'zh' });
+
+    assert.equal(stt.calls.length, 1);
+    const req = stt.calls[0].req;
+    assert.ok(Buffer.isBuffer(req.audio));
+    assert.deepEqual(req.audio, raw);                     // byte-for-byte what the phone sent
+    assert.equal(req.format, 'm4a');
+    assert.equal(req.language, 'zh');
+    assert.deepEqual(req.hint.projects, ['x'.repeat(60), 'proj', ...Array.from({ length: 18 }, (_, i) => `prj${i}`)]);   // clamped, not refused
+    assert.deepEqual(req.hint.titles, ['title one']);
+
+    await sleep(150);
+    assert.deepEqual(up.received.filter((m) => String(m.method).startsWith('stt/')), []);   // never forwarded upstream
+    const line = lines.find((l) => l.startsWith(`stt ${device} `));
+    assert.ok(line, 'one stt log line');
+    assert.match(line, / \d+B lang=zh 42ms ok$/);
+    assert.ok(!line.includes('worktree'));                // the transcript is never logged
+    ws.close();
+  } finally { await relay.stop(); await up.close(); }
+});
+
+test('stt/transcribe: bad-params and too-large answer -32020 even with no ZCode server', async () => {
+  const state = tmp(), tap = tmp();
+  const port = await freePort();
+  const relay = createRelay({ port, stateDir: state, tapDir: tap, log: silent, stt: fakeStt() });
+  await relay.start();
+  try {
+    const { token } = await (await pair(port, relay.createPairing().code, 'phone')).json();
+    const { ws } = await authed(`ws://127.0.0.1:${port}`, token);
+    const cases = [
+      [62, {}, 'bad-params'],
+      [63, { audio: '', format: 'wav' }, 'bad-params'],
+      [64, { audio: 'not base64!!', format: 'wav' }, 'bad-params'],
+      [65, { audio: goodAudio, format: 'aac' }, 'bad-params'],
+      [66, { audio: goodAudio, format: 'wav', language: 'fr' }, 'bad-params'],
+      [67, { audio: Buffer.alloc(3_000_001, 1).toString('base64'), format: 'wav' }, 'too-large'],
+    ];
+    for (const [id, params, reason] of cases) {
+      ws.send(JSON.stringify({ type: 'rpc', id, method: 'stt/transcribe', params }));
+      const res = await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === id);
+      assert.equal(res.error.code, -32020, `id ${id}`);
+      assert.equal(res.error.data.reason, reason, `id ${id}`);
+    }
+    ws.close();
+  } finally { await relay.stop(); rm(state, tap); }
+});
+
+test('stt without a host engine: features.stt is false and both methods answer voice-off', async () => {
+  const state = tmp(), tap = tmp();
+  const port = await freePort();
+  const relay = createRelay({ port, stateDir: state, tapDir: tap, log: silent });
+  await relay.start();
+  try {
+    const { token } = await (await pair(port, relay.createPairing().code, 'phone')).json();
+    const { ws, ready } = await authed(`ws://127.0.0.1:${port}`, token);
+    assert.deepEqual(ready.features, { stt: false });
+    ws.send(JSON.stringify({ type: 'rpc', id: 71, method: 'stt/transcribe', params: { audio: goodAudio, format: 'wav' } }));
+    const res = await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === 71);
+    assert.equal(res.error.code, -32020);
+    assert.equal(res.error.data.reason, 'voice-off');
+    ws.send(JSON.stringify({ type: 'rpc', id: 72, method: 'stt/status', params: {} }));
+    const st = await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === 72);
+    assert.equal(st.error.code, -32020);
+    assert.equal(st.error.data.reason, 'voice-off');
+    ws.close();
+  } finally { await relay.stop(); rm(state, tap); }
+});
+
+test('stt/status: shaped from the host status; no engine or a partial model means not available', async () => {
+  const state = tmp(), tap = tmp();
+  const port = await freePort();
+  const over = { language: 'zh' };
+  const relay = createRelay({ port, stateDir: state, tapDir: tap, log: silent, stt: fakeStt(over) });
+  await relay.start();
+  try {
+    const { token } = await (await pair(port, relay.createPairing().code, 'phone')).json();
+    const { ws } = await authed(`ws://127.0.0.1:${port}`, token);
+    const ask = async (id) => { ws.send(JSON.stringify({ type: 'rpc', id, method: 'stt/status', params: {} })); return nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === id); };
+
+    assert.deepEqual((await ask(74)).result, { available: true, language: 'zh', model: 'small', modelState: 'ready' });
+    over.status = { engine: false, models: { small: { state: 'ready', bytes: 1 } } };
+    assert.deepEqual((await ask(75)).result, { available: false, language: 'zh', model: 'small', modelState: 'ready' });
+    over.status = { engine: true, models: { small: { state: 'partial', bytes: 5 } } };
+    assert.deepEqual((await ask(76)).result, { available: false, language: 'zh', model: 'small', modelState: 'partial' });
+    ws.close();
+  } finally { await relay.stop(); rm(state, tap); }
+});
+
+test('stt/transcribe: one in flight per device — the second is rate-limited while the first runs', async () => {
+  const state = tmp(), tap = tmp();
+  const port = await freePort();
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const stt = fakeStt({ transcribe: () => gate.then(() => ({ ok: true, text: 'slow transcript', ms: 5, language: 'en' })) });
+  const relay = createRelay({ port, stateDir: state, tapDir: tap, log: silent, stt });
+  await relay.start();
+  try {
+    const { token } = await (await pair(port, relay.createPairing().code, 'phone')).json();
+    const { ws } = await authed(`ws://127.0.0.1:${port}`, token);
+    const first = nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === 81);   // listen first
+    ws.send(JSON.stringify({ type: 'rpc', id: 81, method: 'stt/transcribe', params: { audio: goodAudio, format: 'wav' } }));
+    await waitFor(() => stt.calls.length === 1);
+    ws.send(JSON.stringify({ type: 'rpc', id: 82, method: 'stt/transcribe', params: { audio: goodAudio, format: 'wav' } }));
+    const second = await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === 82);
+    assert.equal(second.error.code, -32020);
+    assert.equal(second.error.data.reason, 'rate-limited');
+    release();
+    assert.deepEqual((await first).result, { ok: true, text: 'slow transcript', ms: 5, language: 'en' });
+    ws.close();
+  } finally { await relay.stop(); rm(state, tap); }
+});
+
+test('stt/transcribe: at most 20 per device per minute', async () => {
+  const state = tmp(), tap = tmp();
+  const port = await freePort();
+  const relay = createRelay({ port, stateDir: state, tapDir: tap, log: silent, stt: fakeStt() });
+  await relay.start();
+  try {
+    const { token } = await (await pair(port, relay.createPairing().code, 'phone')).json();
+    const { ws } = await authed(`ws://127.0.0.1:${port}`, token);
+    for (let id = 90; id < 110; id++) {
+      ws.send(JSON.stringify({ type: 'rpc', id, method: 'stt/transcribe', params: { audio: goodAudio, format: 'wav' } }));
+      const res = await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === id);
+      assert.equal(res.result?.ok, true, `id ${id}`);       // sequential, so the in-flight rule never trips
+    }
+    ws.send(JSON.stringify({ type: 'rpc', id: 110, method: 'stt/transcribe', params: { audio: goodAudio, format: 'wav' } }));
+    const over = await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === 110);
+    assert.equal(over.error.code, -32020);
+    assert.equal(over.error.data.reason, 'rate-limited');
+    ws.close();
+  } finally { await relay.stop(); rm(state, tap); }
+});
+
+test('stt/transcribe: engine failures pass the engine reason through; a throwing engine is engine-failed', async () => {
+  const state = tmp(), tap = tmp();
+  const port = await freePort();
+  const engine = { respond: async () => ({ ok: false, code: 'no-model', error: 'model small is missing' }) };
+  const relay = createRelay({ port, stateDir: state, tapDir: tap, log: silent, stt: fakeStt({ transcribe: () => engine.respond() }) });
+  await relay.start();
+  try {
+    const { token } = await (await pair(port, relay.createPairing().code, 'phone')).json();
+    const { ws } = await authed(`ws://127.0.0.1:${port}`, token);
+    const ask = async (id) => { ws.send(JSON.stringify({ type: 'rpc', id, method: 'stt/transcribe', params: { audio: goodAudio, format: 'wav' } })); return nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === id); };
+
+    let res = await ask(111);
+    assert.equal(res.error.code, -32020);
+    assert.equal(res.error.data.reason, 'no-model');
+    assert.equal(res.error.message, 'model small is missing');
+
+    engine.respond = async () => ({ ok: false, code: 'busy' });
+    res = await ask(112);
+    assert.equal(res.error.data.reason, 'busy');
+    assert.equal(res.error.message, 'transcription failed');   // the engine gave no message
+
+    engine.respond = async () => { throw new Error('engine exploded'); };
+    res = await ask(113);
+    assert.equal(res.error.data.reason, 'engine-failed');
+    assert.equal(res.error.message, 'engine exploded');
     ws.close();
   } finally { await relay.stop(); rm(state, tap); }
 });

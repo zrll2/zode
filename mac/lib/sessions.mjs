@@ -95,6 +95,18 @@ export async function listSessions({ dir = tapDir(), timeoutMs = 1500, connect =
   } catch { return []; }
 }
 
+// The list never says running mid-turn; the relay's event tracker does. Run the listing through
+// relay.liveStatus.apply here (a no-op when the relay is off, never a throw: the list stands on any
+// failure), then summarize as usual.
+export function withLiveStatus(sessions, liveStatus) {
+  if (!Array.isArray(sessions)) return [];
+  if (!liveStatus || typeof liveStatus.apply !== 'function') return sessions;
+  try {
+    const applied = liveStatus.apply(sessions);
+    return Array.isArray(applied) ? applied : sessions;
+  } catch { return sessions; }
+}
+
 // One request over a fresh connection: send one line, take the tap reply that carries our id, close.
 // Returns the reply ({ result } or { error }) or null on any failure.
 async function ask(sock, method, params, timeoutMs = 1500, connect = defaultConnect) {
@@ -170,6 +182,45 @@ export async function listPending({ dir = tapDir(), timeoutMs = 1500, connect = 
     }
     return requests.sort((a, b) => a.at - b.at).map(({ at, ...request }) => request);
   } catch { return []; }
+}
+
+// { today, week } from one usage/stats reply, or null when it does not add up: week is
+// summary.totalTokens, today the last heatmap day whose date is the Mac's local date (the agent
+// reports its days in its own time zone; null day entries are skipped; anything else is today 0).
+function usageFrom(result, now) {
+  try {
+    if (!result || typeof result !== 'object') return null;
+    const week = Number(result.summary?.totalTokens);
+    if (!Number.isFinite(week) || week < 0) return null;
+    const d = now instanceof Date ? now : new Date(now);
+    const local = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    let today = 0;
+    const weeks = Array.isArray(result.heatmap?.weeks) ? result.heatmap.weeks : [];
+    for (const w of weeks) {
+      for (const day of Array.isArray(w?.days) ? w.days : []) {
+        if (!day || typeof day !== 'object' || day.date !== local) continue;
+        const n = Number(day.totalTokens);
+        if (Number.isFinite(n) && n >= 0) today = n;                    // the last matching day wins
+      }
+    }
+    return { today, week };
+  } catch { return null; }
+}
+
+// Token usage for the panel footer: ask every live server usage/stats {range:'7d'} and take the
+// first usable reply. Never throws; null when nobody answers within the timeout.
+export async function readUsage({ dir = tapDir(), timeoutMs = 4000, connect = defaultConnect, now = new Date() } = {}) {
+  try {
+    const servers = readTapServers(dir);
+    if (servers.length === 0) return null;
+    const attempts = servers.map(async server => {
+      const reply = await ask(server.sock, 'usage/stats', { range: '7d' }, timeoutMs, connect);
+      const usage = usageFrom(reply?.result, now);
+      if (!usage) throw new Error('no usable usage');
+      return usage;
+    });
+    return await Promise.any(attempts);
+  } catch { return null; }
 }
 
 // Answer a pending permission request. The first answer wins — a late answer comes back as an error

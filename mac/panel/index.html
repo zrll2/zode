@@ -21,16 +21,22 @@
     </div>
     <div class="foot" id="foot">
       <button class="chip" id="phones"><i></i><span id="phoneTxt">No phone yet</span></button>
-      <button class="btn" id="openZ">Open ZCode</button>
+      <button class="btn" id="openZ">Open Zode</button>
+      <span class="usage" id="usage"></span>
     </div>
     <div class="toast" id="toast" role="status"></div>
+    <div class="phones-pop" id="phonesPop" hidden></div>
     <div class="sheet" id="sheet" aria-hidden="true">
       <header><button class="ib" id="back" aria-label="Back"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3 5 8l5 5"/></svg></button><b>Settings</b></header>
       <div class="list">
         <div class="set"><div>Keep my Mac awake<small>So your phone does not lose it</small></div><button class="sw" id="swAwake" role="switch" aria-checked="false" aria-label="Keep my Mac awake"></button></div>
         <div class="set"><div>Phone connection<small>Turn off to stop remote access</small></div><button class="sw" id="swRelay" role="switch" aria-checked="false" aria-label="Phone connection"></button></div>
         <div class="set"><div>Start Zode at login</div><button class="sw" id="swLogin" role="switch" aria-checked="false" aria-label="Start Zode at login"></button></div>
-        <div class="set"><div>Reachable from</div><select id="addr" aria-label="Reachable from"></select></div>
+        <div class="set"><div>Reachable from<small>Automatic lets your phone connect over Wi-Fi at home and over Tailscale anywhere. Wi-Fi is not encrypted; Tailscale is.</small></div><select id="addr" aria-label="Reachable from"></select></div>
+        <div class="set"><div>Voice language<small>For dictation from your phone or watch</small></div>
+          <div class="seg" id="voiceLang" role="radiogroup" aria-label="Voice language"><button class="segopt" data-lang="en" role="radio" aria-checked="false">English</button><button class="segopt" data-lang="zh" role="radio" aria-checked="false">中文</button></div></div>
+        <div class="set"><div>Voice model<small id="voiceState">Not downloaded</small></div><span class="voiceact" id="voiceAction"></span></div>
+        <div class="note">Speech is turned into text on this Mac. Nothing leaves your network.</div>
         <div class="linkrow"><button class="btn" id="pairBtn">Pair a phone…</button><button class="btn" id="updatesBtn">Check for updates</button><button class="btn" id="setupBtn">Set up ZCode…</button></div>
         <div class="linkrow"><span class="ver" id="version">Zode</span><button class="btn quiet" id="quitBtn">Quit Zode</button></div>
       </div>

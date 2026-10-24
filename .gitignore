@@ -13,3 +13,4 @@ zcode.real.cjs
 .env
 .env.*
 mac/release/
+mac/vendor/

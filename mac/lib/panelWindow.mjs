@@ -32,12 +32,12 @@ export function panelBounds(opts) {
   return { x: Math.round(x), y: Math.round(y), width: w, height: Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, want, fits)) };
 }
 
-// The tray icon per panel glyph and menu bar appearance: the quiet state is a template image that
-// macOS tints itself; the dot variants are colored PNGs — the 'Light' files are for a light menu bar
-// (a dark glyph), the 'Dark' ones for a dark bar.
-export function trayImageName({ glyph, dark } = {}) {
-  if (glyph === 'working') return dark === true ? 'trayWorkingDark.png' : 'trayWorkingLight.png';
-  if (glyph === 'needs') return dark === true ? 'trayNeedsDark.png' : 'trayNeedsLight.png';
+// The tray icon per panel glyph: the quiet state is a template image that macOS tints itself; the
+// dot variants are colored PNGs with a white glyph, always. The app theme says nothing about the menu
+// bar (it follows the wallpaper), and a dark glyph vanished on a dark bar; white reads on both.
+export function trayImageName({ glyph } = {}) {
+  if (glyph === 'working') return 'trayWorkingDark.png';
+  if (glyph === 'needs') return 'trayNeedsDark.png';
   return 'trayTemplate.png';
 }
 

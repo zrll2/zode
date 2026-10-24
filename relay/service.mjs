@@ -3,6 +3,8 @@
 // Downstream: paired phones over WebSocket. Pair and revoke through createPairing() / revokeDevice().
 // Transport security is the network's job: bind to a Tailscale/WireGuard address. Default is 127.0.0.1.
 import { withRealActivity } from './activity.mjs';
+import { createLiveStatus } from './live.mjs';
+import { validateTranscribe, createLimiter } from './stt.mjs';
 import net from 'node:net';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -26,7 +28,10 @@ const eq = (a, b) => { const x = Buffer.from(a), y = Buffer.from(b); return x.le
 // ---- policy: what a phone may call ------------------------------------------
 const ALLOWED = new Set(['session/list', 'session/create', 'session/resume', 'session/read', 'session/messages', 'session/events',
   'session/subscribe', 'session/send', 'session/stop', 'session/close', 'session/setModel', 'session/setThoughtLevel', 'session/setMode',
-  'session/usage', 'session/goal', 'session/compact', 'session/rename', 'usage/stats', 'attachment/upload']);
+  'session/usage', 'session/goal', 'session/compact', 'session/rename', 'usage/stats', 'attachment/upload',
+  // stt/* are answered by the relay itself (never forwarded); the handler validates their params and
+  // answers failures with its own -32020 codes, so checkPolicy has nothing more to say about them.
+  'stt/transcribe', 'stt/status']);
 const SAFE_MODES = new Set(['plan', 'edit', 'guarded']);       // never yolo / build from a phone
 const DECISIONS = new Set(['allow', 'deny']);   // a phone may only allow or deny; never modify, escalate or add rules
 // session/rename and session/send (with attachments) are the phone methods that become agent commands: the relay builds
@@ -84,16 +89,28 @@ export function checkPolicy(method, params) {
 }
 
 // Bumped when the phone can rely on new relay methods. 2 = rename, usage/stats, attachments, send with attachments.
+// The speech engine rides alongside without a bump: the phone reads features.stt from the ready frame.
 export const PROTOCOL = 2;
 
 export function createRelay(opts = {}) {
-  const host = opts.host || '127.0.0.1';
   const port = Number(opts.port || 8787);
-  const publicUrl = opts.publicUrl || `ws://${host}:${port}`;
+  // One relay, every way in: one http listener per host, all on the same port. `host` still works as
+  // a one-element `hosts`. The wildcard is never bound; loopback only when it is the only host left.
+  const raw = (Array.isArray(opts.hosts) && opts.hosts.length ? opts.hosts : [opts.host || '127.0.0.1']).filter(h => typeof h === 'string' && h !== '');
+  let hosts = [...new Set(raw.filter(h => h !== '0.0.0.0'))];
+  if (hosts.length > 1) hosts = hosts.filter(h => h !== '127.0.0.1');
+  if (hosts.length === 0) hosts = ['127.0.0.1'];
+  const givenUrls = Array.isArray(opts.publicUrls) ? opts.publicUrls.filter(u => typeof u === 'string' && u) : [];
+  const publicUrls = givenUrls.length ? givenUrls
+    : (typeof opts.publicUrl === 'string' && opts.publicUrl ? [opts.publicUrl] : hosts.map(h => `ws://${h}:${port}`));
+  const publicUrl = publicUrls[0];
   const stateDir = opts.stateDir || path.join(HOME, '.zode', 'relay');
   const tapDir = opts.tapDir || path.join(HOME, '.zcode-tap');
   const codeTtlMs = opts.codeTtlMs ?? CODE_TTL_MS;
+  const pendingSyncMs = Number.isFinite(opts.pendingSyncMs) ? Math.max(0, opts.pendingSyncMs) : 10_000;   // how often the pending list is reconciled with the wrapper's truth; 0 disables
   const log = opts.log ?? console;
+  const stt = opts.stt ?? null;               // the host's speech engine ({transcribe, status, defaultLanguage}); absent -> voice-off
+  const sttLimiter = createLimiter();         // per device: one transcribe in flight, at most 20 per minute
   const DEVICES = path.join(stateDir, 'devices.json');
   const CODES = path.join(stateDir, 'pair-codes.json');
 
@@ -107,11 +124,17 @@ export function createRelay(opts = {}) {
   const pendingReq = new Map();      // `${pid}:${id}` -> {server, id, method, params, at}  (permission / user-input requests waiting for an answer)
   const listeners = new Map();        // event -> Set<fn>
   let relayId = 0, seq = 0;
-  let srv = null, wss = null, syncTimer = null, statusTimer = null;
+  let servers = [], wss = null, syncTimer = null, statusTimer = null, pendingTimer = null;
   let running = false;
 
+  // What is really running, from the event stream the servers already send: session/list keeps
+  // saying 'idle' mid-turn, so every upstream line feeds this tracker, every session/list reply to a
+  // phone carries its verdict, and the host reads the same truth through relay.liveStatus.
+  const live = createLiveStatus();
+  const syncPending = () => live.setPending([...pendingReq.values()].map(p => ({ sessionId: p.params?.sessionId, method: p.method })));
+
   function status() {
-    return { running, host, port, publicUrl, upstreams: upstream.size, clients: clients.size, devices: readJson(DEVICES, []).length };
+    return { running, host: hosts[0], hosts: [...hosts], port, publicUrl, publicUrls: [...publicUrls], upstreams: upstream.size, clients: clients.size, devices: readJson(DEVICES, []).length };
   }
   function emitStatus() {             // at most one 'status' per STATUS_DEBOUNCE_MS
     if (statusTimer) return;
@@ -140,6 +163,7 @@ export function createRelay(opts = {}) {
       sock.on('close', () => {
         upstream.delete(pid); emitStatus();
         for (const k of pendingReq.keys()) if (k.startsWith(pid + ':')) pendingReq.delete(k);
+        syncPending();
         for (const [rid, r] of routes) if (r.internalCall && r.pid === pid) { routes.delete(rid); clearTimeout(r.timer); r.reject(new Error('upstream closed')); }
       });
       sock.on('error', () => {});
@@ -147,12 +171,49 @@ export function createRelay(opts = {}) {
       sock.write(JSON.stringify({ id: sid, method: 'tap/pending', params: {} }) + '\n');
     }
   }
+
+  // Ask one server what it still holds as pending — the same internal round-trip the first sync uses.
+  function requestPending(pid) {
+    const u = upstream.get(pid);
+    if (!u) return;
+    const id = ++relayId;
+    routes.set(id, { internal: true, pid });
+    try { u.sock.write(JSON.stringify({ id, method: 'tap/pending', params: {} }) + '\n'); } catch {}
+  }
+
+  // The wrapper's own pending list is the truth: events go stale when a turn is stopped or cancelled
+  // and its request vanishes without a tap/resolved. Add what the reply lists and the relay does not
+  // know yet, drop what vanished — but only requests old enough that they cannot have arrived while
+  // the question was in flight (5 s) — then tell the running tracker. Never throws; a missing or
+  // garbled reply changes nothing.
+  function reconcilePending(pid, pending) {
+    try {
+      if (!Array.isArray(pending)) return;
+      const now = Date.now();
+      const listed = new Set();
+      for (const p of pending) {
+        if (!p || typeof p !== 'object' || p.id == null) continue;
+        const key = `${pid}:${p.id}`;
+        listed.add(String(p.id));
+        if (!pendingReq.has(key)) pendingReq.set(key, { server: pid, ...p, seenAt: now });
+      }
+      const cutoff = now - 5_000;
+      for (const [key, p] of pendingReq) {
+        if (p.server !== pid || listed.has(String(key.slice(String(pid).length + 1)))) continue;
+        const at = Number.isFinite(p.at) && p.at > 1e12 ? p.at : p.seenAt ?? now;   // when the request really became known
+        if (at < cutoff) pendingReq.delete(key);
+      }
+      syncPending();
+    } catch { /* the next round tries again */ }
+  }
+
   function fromUpstream(pid, line) {
     let m; try { m = JSON.parse(line); } catch { return; }
+    live.observe(m);                                                // every line feeds the running tracker; it ignores what is not session traffic
     if (m.id !== undefined && !m.method) {                          // reply
       if (!m.tapReply) return;                                      // copy of a desktop reply
       const r = routes.get(m.id); if (!r) return; routes.delete(m.id);
-      if (r.internal) { for (const p of m.result?.pending ?? []) pendingReq.set(`${r.pid}:${p.id}`, { server: r.pid, ...p }); return; }
+      if (r.internal) { reconcilePending(r.pid, m.result?.pending); return; }
       if (r.internalCall) {
         clearTimeout(r.timer);
         const err = m.error ?? (m.result?.status === 'rejected' ? m.result : m.result?.error);
@@ -161,12 +222,19 @@ export function createRelay(opts = {}) {
       }
       delete m.tapReply; m.id = r.clientId;
       // The agent reports updatedAt = now for every conversation it has loaded; ZCode's database has the real time.
-      if (r.method === 'session/list' && Array.isArray(m.result?.sessions)) m.result.sessions = withRealActivity(m.result.sessions);
+      if (r.method === 'session/list' && Array.isArray(m.result?.sessions)) {
+        m.result.sessions = withRealActivity(m.result.sessions);
+        m.result.sessions = live.apply(m.result.sessions);          // the live verdict wins, after the real times
+      }
       return send(r.client, { type: 'rpc-result', server: pid, ...fitForMobile(r.method, m) });
     }
     if (m.method === 'startup/storageState' || m.method === 'process/mcpTelemetry' || m.method?.startsWith('v4/telemetry')) return;
-    if (m.method && m.id !== undefined && /^interaction\/request(Permission|UserInput)$/.test(m.method)) pendingReq.set(`${pid}:${m.id}`, { server: pid, id: m.id, method: m.method, params: m.params, at: Date.now() });
-    if (m.method === 'tap/resolved') pendingReq.delete(`${pid}:${m.params?.id}`);
+    if (m.method && m.id !== undefined && /^interaction\/request(Permission|UserInput)$/.test(m.method)) {
+      const now = Date.now();
+      pendingReq.set(`${pid}:${m.id}`, { server: pid, id: m.id, method: m.method, params: m.params, at: now, seenAt: now });
+      syncPending();
+    }
+    if (m.method === 'tap/resolved') { pendingReq.delete(`${pid}:${m.params?.id}`); syncPending(); }
     const e = { seq: ++seq, server: pid, msg: m };
     replay.push(e); if (replay.length > REPLAY_MAX) replay.shift();
     for (const c of clients) if (c.authed) send(c, JSON.stringify(e).length > MAX_FRAME ? { type: 'event', seq: e.seq, server: pid, msg: { method: m.method, params: { sessionId: m.params?.sessionId, type: m.params?.type, truncated: true } } } : { type: 'event', ...e });
@@ -218,12 +286,18 @@ export function createRelay(opts = {}) {
   const findDevice = token => readJson(DEVICES, []).find(d => eq(d.tokenHash, sha(String(token))));
 
   function createPairing(over = {}) {
-    const url = over.publicUrl || publicUrl;
+    const first = typeof over.publicUrl === 'string' && over.publicUrl ? over.publicUrl : publicUrl;
+    const urls = over.publicUrl ? [first, ...publicUrls.filter(u => u !== first)] : [...publicUrls];
     const { code, expiresAt } = newPairCode();
-    const payload = JSON.stringify({ u: url.replace(/^ws/, 'http'), w: url, c: code });
-    return { code, expiresAt, publicUrl: url, payload };
+    // Old phones read u (the http form of the first address) and w; newer ones read every ws url.
+    const payload = JSON.stringify({ u: first.replace(/^ws/, 'http'), urls, w: first, c: code });
+    return { code, expiresAt, publicUrl: first, publicUrls: urls, payload };
   }
-  function listDevices() { return readJson(DEVICES, []).map(({ id, name, pairedAt }) => ({ id, name, pairedAt })); }
+  function listDevices() {
+    const live = new Set();
+    for (const c of clients) if (c.authed && c.device && c.device.id != null) live.add(c.device.id);
+    return readJson(DEVICES, []).map(({ id, name, pairedAt }) => ({ id, name, pairedAt, connected: live.has(id) }));
+  }
   function revokeDevice(id) {
     const devs = readJson(DEVICES, []); const next = devs.filter(d => d.id !== id);
     if (next.length === devs.length) return false;
@@ -275,13 +349,53 @@ export function createRelay(opts = {}) {
     } catch (err) { fail(err.message); }
   }
 
+  // stt/transcribe and stt/status: answered here from the host-provided engine, never forwarded
+  // upstream (no ZCode server needed). Failures are rpc errors with code -32020 and the reason in
+  // data.reason — the engine's own code, or the relay's bad-params / too-large / rate-limited / voice-off.
+  const sttFail = (c, m, reason, message) => send(c, { type: 'rpc-result', id: m.id, error: { code: -32020, message, data: { reason } } });
+  async function handleStt(c, m) {
+    if (!stt) return sttFail(c, m, 'voice-off', 'this relay has no speech engine');
+    if (m.method === 'stt/status') {
+      let s = null;
+      try { s = await stt.status(); } catch (err) { return sttFail(c, m, 'engine-failed', err?.message ?? String(err)); }
+      let language = 'en';
+      try { language = stt.defaultLanguage?.() ?? 'en'; } catch { /* keep 'en' */ }
+      const small = s?.models?.small ?? null;
+      return send(c, { type: 'rpc-result', id: m.id, result: {
+        available: s?.engine === true && small?.state === 'ready',
+        language, model: 'small', modelState: small?.state ?? 'missing',
+      } });
+    }
+    const v = validateTranscribe(m.params);
+    if (!v.ok) return sttFail(c, m, v.reason, v.message);
+    if (!sttLimiter.take(c.device.id)) return sttFail(c, m, 'rate-limited', 'one transcription at a time, at most 20 per minute');
+    const startedAt = Date.now();
+    let line = null;
+    try {
+      const res = await stt.transcribe({ audio: v.value.audio, format: v.value.format, language: v.value.language, hint: { projects: v.value.projects, titles: v.value.titles } });
+      if (res?.ok) {
+        line = `stt ${c.device.id} ${v.value.audio.length}B lang=${res.language} ${res.ms}ms ok`;   // never the transcript
+        return send(c, { type: 'rpc-result', id: m.id, result: { ok: true, text: res.text, ms: res.ms, language: res.language } });
+      }
+      const reason = res?.code ?? 'engine-failed';
+      line = `stt ${c.device.id} ${v.value.audio.length}B lang=${v.value.language ?? '-'} ${Date.now() - startedAt}ms failed (${reason})`;
+      return sttFail(c, m, reason, res?.error ?? 'transcription failed');
+    } catch (err) {
+      line = `stt ${c.device.id} ${v.value.audio.length}B lang=${v.value.language ?? '-'} ${Date.now() - startedAt}ms failed (engine-failed)`;
+      return sttFail(c, m, 'engine-failed', err?.message ?? String(err));
+    } finally {
+      sttLimiter.release(c.device.id);
+      if (line) log.log(line);
+    }
+  }
+
   // ---- server --------------------------------------------------------------------
   function start() {
-    if (running) return Promise.resolve({ host, port });
+    if (running) return Promise.resolve({ host: hosts[0], port });
     const failures = new Map();                                     // ip -> {n, until}
     const throttled = ip => (failures.get(ip)?.until ?? 0) > Date.now();
     const fail = ip => { const f = failures.get(ip) ?? { n: 0 }; f.n++; if (f.n >= 5) { f.until = Date.now() + 60_000; f.n = 0; } failures.set(ip, f); };
-    srv = http.createServer((req, res) => {
+    const handle = (req, res) => {
       const ip = req.socket.remoteAddress;
       if (req.method === 'GET' && req.url === '/health') { res.end(JSON.stringify({ ok: true, servers: upstream.size })); return; }
       if (req.method === 'POST' && req.url === '/pair') {
@@ -297,9 +411,11 @@ export function createRelay(opts = {}) {
         return;
       }
       res.writeHead(404).end();
-    });
-    wss = new WebSocketServer({ server: srv, maxPayload: 14 * 1024 * 1024 });   // an 8 MiB upload is ~10.7 MiB as base64; MAX_FRAME still caps frames to phones
-    wss.on('error', () => {});                    // ws re-emits srv's 'error' on wss; without a listener it throws uncaught and aborts the srv emit before srv.once below runs
+    };
+    // One shared WebSocketServer and one shared /pair handler behind every listener: each server hands
+    // its upgrades to the same wss, so phones get identical service on every address.
+    wss = new WebSocketServer({ noServer: true, maxPayload: 14 * 1024 * 1024 });   // an 8 MiB upload is ~10.7 MiB as base64; MAX_FRAME still caps frames to phones
+    wss.on('error', () => {});                    // a client socket error must never become an uncaught throw
     wss.on('connection', (ws, req) => {
       const ip = req.socket.remoteAddress; const c = { ws, authed: false, device: null };
       const authTimer = setTimeout(() => ws.close(4001, 'auth timeout'), 10_000);
@@ -311,7 +427,7 @@ export function createRelay(opts = {}) {
           const d = findDevice(m.token);
           if (!d) { fail(ip); return ws.close(4003, 'bad token'); }
           c.authed = true; c.device = d; clients.add(c); clearTimeout(authTimer); emitStatus();
-          send(c, { type: 'ready', protocol: PROTOCOL, device: d.id, servers: [...upstream.values()].map(u => ({ pid: u.meta.pid, cwd: u.meta.cwd })), seq, pending: [...pendingReq.values()] });
+          send(c, { type: 'ready', protocol: PROTOCOL, device: d.id, servers: [...upstream.values()].map(u => ({ pid: u.meta.pid, cwd: u.meta.cwd })), seq, pending: [...pendingReq.values()], features: { stt: !!stt }, addresses: [...publicUrls] });
           if (typeof m.since === 'number') for (const e of replay) if (e.seq > m.since) send(c, { type: 'event', ...e });
           return;
         }
@@ -332,6 +448,7 @@ export function createRelay(opts = {}) {
         if (m.type === 'rpc') {
           const bad = checkPolicy(m.method, m.params);
           if (bad) return send(c, { type: 'rpc-result', id: m.id, error: { code: -32001, message: bad } });
+          if (m.method === 'stt/transcribe' || m.method === 'stt/status') return handleStt(c, m);   // relay-answered: no upstream needed, never forwarded
           const u = (m.server && upstream.get(m.server)) || [...upstream.values()].find(x => x.meta.cwd === m.params?.workspace?.workspacePath) || [...upstream.values()][0];
           if (!u) return send(c, { type: 'rpc-result', id: m.id, error: { code: -32002, message: 'no ZCode server (is Zode.app running?)' } });
           if (m.method === 'attachment/upload') return uploadAttachment(c, m, u);        // multi-step: resume, begin, chunks, commit
@@ -351,33 +468,54 @@ export function createRelay(opts = {}) {
         }
       });
     });
+    servers = hosts.map(host => {
+      const srv = http.createServer(handle);
+      srv.on('upgrade', (req, sock, head) => { try { wss.handleUpgrade(req, sock, head, ws => wss.emit('connection', ws, req)); } catch { /* the client retries */ } });
+      return { host, srv };
+    });
     syncTimer = setInterval(syncUpstream, 2000); syncUpstream();
+    if (pendingSyncMs > 0) {                                        // the wrapper's truth, checked regularly
+      pendingTimer = setInterval(() => { for (const pid of [...upstream.keys()]) requestPending(pid); }, pendingSyncMs);
+      pendingTimer.unref?.();
+    }
     return new Promise((resolve, reject) => {
-      srv.once('error', async err => { await stop().catch(() => {}); reject(err); });
-      srv.listen(port, host, () => {
-        running = true;
-        log.log(`zcode-relay listening ws://${host}:${port}  (upstream servers: ${upstream.size})`);
-        if (host === '0.0.0.0') log.warn('WARNING: bound to all interfaces without TLS. Prefer a Tailscale/WireGuard address.');
-        emitStatus();
-        resolve({ host, port });
-      });
+      let failed = false, listening = 0;
+      const boom = async err => {                     // the first bind error closes every other listener, as a failed start always did
+        if (failed) return;
+        failed = true;
+        await stop().catch(() => {});
+        reject(err);
+      };
+      for (const { host, srv } of servers) {
+        srv.once('error', err => boom(err));
+        srv.listen(port, host, () => {
+          if (failed || ++listening < servers.length) return;         // resolved only when every address answers
+          running = true;
+          log.log(`zcode-relay listening ${hosts.map(h => `ws://${h}:${port}`).join(' and ')}  (upstream servers: ${upstream.size})`);
+          emitStatus();
+          resolve({ host: hosts[0], port });
+        });
+      }
     });
   }
 
   async function stop() {
-    const s = srv, w = wss, t = syncTimer;
-    if (!running && !s && !w && !t) return;                         // safe to call twice
-    running = false; srv = null; wss = null; syncTimer = null;
+    const all = servers, w = wss, t = syncTimer, pt = pendingTimer;
+    if (!running && all.length === 0 && !w && !t && !pt) return;    // safe to call twice
+    running = false; servers = []; wss = null; syncTimer = null; pendingTimer = null;
     if (t) clearInterval(t);
+    if (pt) clearInterval(pt);
     for (const u of upstream.values()) u.sock.destroy();
     upstream.clear();
-    routes.clear(); pendingReq.clear();
+    routes.clear(); pendingReq.clear(); live.setPending([]);
     for (const c of [...clients]) { try { c.ws.close(1001, 'relay stopping'); } catch {} }
     clients.clear();
     if (w) { try { await new Promise(r => w.close(r)); } catch {} }
-    if (s) { try { s.closeIdleConnections?.(); await new Promise(r => s.close(() => r())); } catch {} }
+    for (const { srv } of all) {
+      try { srv.closeIdleConnections?.(); await new Promise(r => srv.close(() => r())); } catch {}
+    }
     emitStatus();
   }
 
-  return { start, stop, status, createPairing, listDevices, revokeDevice, on, off };
+  return { start, stop, status, createPairing, listDevices, revokeDevice, on, off, liveStatus: live };
 }

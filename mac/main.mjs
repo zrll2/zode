@@ -10,7 +10,7 @@ import updaterPkg from 'electron-updater';
 const { autoUpdater } = updaterPkg;
 import QRCode from 'qrcode';
 import { createRelay } from '../relay/service.mjs';
-import { detectAddresses, defaultAddress } from './lib/addresses.mjs';
+import { detectAddresses, defaultAddress, autoAddresses } from './lib/addresses.mjs';
 import { loadSettings, saveSettings } from './lib/settings.mjs';
 import { buildMenuTemplate } from './lib/menu.mjs';
 import { buildPanelModel } from './lib/panel.mjs';
@@ -18,8 +18,11 @@ import { panelBounds, trayImageName, isTemplate } from './lib/panelWindow.mjs';
 import { setupSteps, parseBuildProgress, friendlySetupError, kitDir } from './lib/setup.mjs';
 import { isRunning, quitApp, tapAlive, findOriginal, findEngine, findOldIntegrated, runBuild } from './lib/system.mjs';
 import { readVersion, compareVersions, checkRelease, engineRebuildScript } from './lib/updates.mjs';
-import { listSessions, listPending, readTapServers, summarize, respondPermission, stopSession, sendToSession, nudgeSession, RETRY_MESSAGE } from './lib/sessions.mjs';
+import { listSessions, listPending, readTapServers, summarize, withLiveStatus, readUsage, respondPermission, stopSession, sendToSession, nudgeSession, RETRY_MESSAGE } from './lib/sessions.mjs';
 import { createSelfUpdater } from './lib/selfupdate.mjs';
+import { createStt } from './lib/stt.mjs';
+import { buildPrompt } from './lib/vocab.mjs';
+import { voiceHint } from './lib/voiceHint.mjs';
 
 const HOME = os.homedir();
 const SETTINGS_FILE = path.join(HOME, '.zode', 'settings.json');
@@ -32,6 +35,9 @@ const RELEASE_CHECK_DELAY_MS = 30 * 1000;             // after start; startup ne
 const RELEASE_CHECK_MS = 6 * 60 * 60 * 1000;
 const WORK_TIMEOUT_MS = 1500;                         // per tap socket, and the cap on the tray-click wait
 const WORK_POLL_MS = 30 * 1000;                       // background refresh while a ZCode server is live
+const WORK_POLL_ACTIVE_MS = 10 * 1000;                // the same, while a conversation is running: follow the turn
+const ADDRESS_POLL_MS = 10 * 1000;                    // how often the network is re-checked (Wi-Fi joins, Tailscale starts)
+const USAGE_TTL_MS = 60 * 1000;                       // the agent is asked for token usage at most this often
 const WORK_SETTLE_MS = 1000;                          // after a menu action, before the refresh + reopen
 const PANEL_WIDTH = 340;                              // the panel that opens under the menu bar icon
 const PANEL_REOPEN_MS = 250;                          // a tray click this soon after a blur-hide is the click that closed it
@@ -84,6 +90,7 @@ async function start() {
     let settings = loadSettings(SETTINGS_FILE);
     let addresses = detectAddresses();
     let relay = null, tray = null, pairWindow = null, currentPairing = null, pairedCount = 0;
+    let relayHostSig = '';                             // the addresses the running relay listens on, its ips comma-joined
     let error = null;
     let quitting = false;
     let enginePath = null;
@@ -98,7 +105,8 @@ async function start() {
     let releaseCheck = null;
     let updating = false;                              // one engine job (update or rebuild) at a time
     // What ZCode is doing right now, read from the tap sockets; the menu only ever sees the cached value.
-    let work = { lines: [], more: 0, counts: { working: 0, waiting: 0, failed: 0 }, pending: {} };
+    let work = { lines: [], more: 0, counts: { working: 0, waiting: 0, failed: 0 }, pending: {}, usage: null };
+    let usageCache = { at: 0, usage: null };           // the last answer from the agent, good for a minute
     let workActive = 0;                                // the active count last logged, so a change logs once
     let workRefresh = null;
     let workPoll = null;
@@ -107,8 +115,17 @@ async function start() {
     let panelHidingAt = 0;                             // when the panel last hid on blur, to skip the closing click
     let panelHoldBlur = false;                         // a dialog is anchored to the panel: keep it up
 
-    const chosen = () => addresses.find(a => a.id === settings.addressId) ?? defaultAddress(addresses);
-    const publicUrlFor = a => `ws://${a.ip}:${settings.port}`;
+    const chosen = (list = addresses) => (Array.isArray(list) ? list : []).find(a => a.id === settings.addressId) ?? defaultAddress(list);
+    // The ips the relay should listen on for the chosen mode: every real way in when automatic,
+    // exactly the pinned address otherwise (an explicit restriction — Tailscale only, say — is
+    // honoured), loopback alone when nothing else exists.
+    const hostIps = (list = addresses) => {
+      const a = chosen(list);
+      const pick = a && a.id === 'auto' ? autoAddresses(list) : [a];
+      const ips = (Array.isArray(pick) ? pick : []).filter(x => x && typeof x.ip === 'string' && x.ip).map(x => x.ip);
+      return ips.length ? ips : ['127.0.0.1'];
+    };
+    const publicUrlsFor = (list = addresses) => hostIps(list).map(ip => `ws://${ip}:${settings.port}`);
     const save = () => { settings = saveSettings(SETTINGS_FILE, settings); };
     const relayLog = {
       log: (...a) => appendLog('relay: ' + a.join(' ')),
@@ -119,6 +136,76 @@ async function start() {
       ? `port ${settings.port} is in use. Is the old Zode still running?`
       : (err?.message ?? String(err));
     const say = opts => { try { dialog.showMessageBox(opts).catch(() => {}); } catch { /* never */ } };
+
+    // The voice language is picked once, from the macOS system language; the panel changes it later.
+    if (settings.voiceLanguage !== 'en' && settings.voiceLanguage !== 'zh') {
+      settings.voiceLanguage = (app.getLocale() || '').toLowerCase().startsWith('zh') ? 'zh' : 'en';
+      save();
+    }
+
+    // ---- voice (speech to text) -----------------------------------------------------------------
+    // One engine for the whole app; the relay gets a small adapter that adds the user's language and
+    // the live vocabulary hint (open projects, recent titles — what the user tends to say). The
+    // packaged binary sits in Resources/bin; in development build-whisper.sh leaves it in mac/vendor.
+    const sttBinary = app.isPackaged
+      ? path.join(process.resourcesPath, 'bin', 'whisper-cli')
+      : path.join(devRoot() ?? path.join(import.meta.dirname, '..'), 'mac', 'vendor', 'whisper-cli');
+    const stt = createStt({
+      binary: sttBinary,
+      modelDir: path.join(HOME, '.zode', 'models'),
+      tmpDir: path.join(os.tmpdir(), 'zode-voice'),
+      spawn, fs,
+      fetch: globalThis.fetch,
+      log: (m) => appendLog(m),
+    });
+    let voiceStatus = { engine: false, modelState: 'missing', modelBytes: 0 };    // cached: the panel model is built synchronously
+    let voiceDownload = { state: 'idle', received: 0, total: 0, error: null };
+    async function refreshVoice() {
+      try {
+        const s = await stt.status();
+        const small = s?.models?.small ?? { state: 'missing', bytes: 0 };
+        voiceStatus = { engine: s.engine === true, modelState: small.state ?? 'missing', modelBytes: Number(small.bytes) || 0 };
+        pushPanel();
+      } catch (err) { appendLog(`zode: voice status: ${err?.stack || err}`); }
+    }
+    const sttAdapter = {
+      transcribe: async (req) => {
+        const language = req?.language === 'zh' || req?.language === 'en' ? req.language : settings.voiceLanguage;
+        const hint = voiceHint({ lines: work.lines, now: Date.now() });
+        const prompt = buildPrompt({ language, projects: hint.projects, titles: hint.titles });
+        return stt.transcribe({ audio: req?.audio, format: req?.format, language, model: settings.voiceModel, prompt });
+      },
+      status: async () => ({ ...(await stt.status()), language: settings.voiceLanguage, model: settings.voiceModel }),
+      defaultLanguage: () => settings.voiceLanguage,
+    };
+    // Plain words for the panel; the engine's own error text never shows to the user.
+    const shortVoiceError = (err) => (String(err ?? '').match(/abort/i) ? 'Stopped. Try again when you like.' : 'The download did not finish. Try again.');
+    function startVoiceDownload() {
+      if (voiceDownload.state === 'downloading') return;                  // one download at a time
+      voiceDownload = { state: 'downloading', received: 0, total: 0, error: null };
+      pushPanel();
+      let lastPercent = -1;
+      stt.ensureModel(settings.voiceModel, ({ received, total }) => {
+        voiceDownload.received = received;
+        voiceDownload.total = total;
+        const percent = total > 0 ? Math.floor((received / total) * 100) : 0;
+        if (percent !== lastPercent) { lastPercent = percent; pushPanel(); }        // every 1 % step
+      }).then((res) => {
+        if (res?.ok) {
+          voiceDownload = { state: 'idle', received: res.bytes ?? voiceDownload.received, total: res.bytes ?? voiceDownload.total, error: null };
+          appendLog(`zode: voice model ${settings.voiceModel} is ready`);
+          refreshVoice().then(() => stt.warm().catch(() => {})).catch(() => {});
+        } else {
+          voiceDownload = { state: 'failed', received: voiceDownload.received, total: voiceDownload.total, error: shortVoiceError(res?.error) };
+          appendLog(`zode: voice model download failed: ${res?.error ?? 'unknown'}`);
+        }
+        pushPanel();
+      }).catch((err) => {
+        voiceDownload = { state: 'failed', received: voiceDownload.received, total: voiceDownload.total, error: shortVoiceError(err) };
+        appendLog(`zode: voice model download failed: ${err?.stack || err}`);
+        pushPanel();
+      });
+    }
 
     // Zode updating itself from GitHub Releases: packaged builds only, a development run skips it.
     const selfUpdater = createSelfUpdater({
@@ -142,8 +229,9 @@ async function start() {
       if (relay) { await relay.stop().catch(() => {}); relay = null; }
       currentPairing = null;
       if (settings.relayEnabled) {
-        const a = chosen();                                       // never 0.0.0.0: one concrete address
-        relay = createRelay({ host: a.ip, port: settings.port, publicUrl: publicUrlFor(a), log: relayLog });
+        const ips = hostIps();                                    // concrete addresses only, never 0.0.0.0
+        relayHostSig = ips.join(',');
+        relay = createRelay({ hosts: ips, port: settings.port, publicUrls: publicUrlsFor(), log: relayLog, stt: sttAdapter });
         relay.on('status', refresh);
         try { await relay.start(); } catch (err) { error = startError(err); }
       }
@@ -247,6 +335,16 @@ async function start() {
       };
     }
 
+    // Token usage for the footer: asked at most once a minute, and only from a refresh tick (the
+    // background poll, an open panel or a menu action). A dead or silent tap keeps the last value.
+    async function readUsageCached() {
+      if (Date.now() - usageCache.at < USAGE_TTL_MS) return usageCache.usage;
+      let usage = null;
+      try { usage = await readUsage({ timeoutMs: WORK_TIMEOUT_MS }); } catch { usage = null; }
+      usageCache = { at: Date.now(), usage };
+      return usage;
+    }
+
     // One shared listing across every live ZCode server (1.5 s per socket, never twice at once). The
     // menu and the tooltip read only the cached `work`, so a slow refresh keeps the previous lines.
     function refreshSessions() {
@@ -254,10 +352,15 @@ async function start() {
       workRefresh = (async () => {
         try {
           const listed = await listSessions({ timeoutMs: WORK_TIMEOUT_MS });
-          const summary = summarize(listed, Date.now());
-          // The panel shows ages since the last activity; summarize drops the timestamps, so keep them.
-          const at = new Map(listed.map(s => [s?.sessionId, Number(s?.updatedAt) || 0]));
-          summary.lines = summary.lines.map(l => (at.has(l.id) ? { ...l, at: at.get(l.id) } : l));
+          // The list never says running mid-turn; the relay's event tracker does. Its verdict (and its
+          // bumped activity times) feed the summary and the panel ages alike.
+          const sessions = withLiveStatus(listed, relay ? relay.liveStatus : null);
+          const summary = summarize(sessions, Date.now());
+          // The panel shows ages since the last activity, and the voice hint wants the titles;
+          // summarize drops both, so re-join them from the listing.
+          const at = new Map(sessions.map(s => [s?.sessionId, Number(s?.updatedAt) || 0]));
+          const title = new Map(sessions.map(s => [s?.sessionId, typeof s?.title === 'string' ? s.title : '']));
+          summary.lines = summary.lines.map(l => ({ ...l, at: at.get(l.id) ?? 0, title: title.get(l.id) ?? '' }));
           const pending = {};
           if (summary.counts.waiting > 0) {            // only waiting conversations can have something pending
             for (const request of await listPending({ timeoutMs: WORK_TIMEOUT_MS })) {
@@ -265,7 +368,8 @@ async function start() {
               (pending[request.sessionId] ??= []).push(request);
             }
           }
-          work = await withMeasures({ ...summary, pending });
+          const usage = await readUsageCached();
+          work = await withMeasures({ ...summary, pending, usage });
           const active = work.counts.working + work.counts.waiting + work.counts.failed;
           if (active !== workActive) {
             workActive = active;
@@ -279,12 +383,40 @@ async function start() {
       return workRefresh;
     }
 
-    // Fresh lines every 30 s while a ZCode server is live. A tick with none is one local readdir that
-    // touches no sockets, so nothing runs (and no server is asked) while ZCode is closed.
+    // Fresh lines every 30 s while a ZCode server is live, every 10 s while one of its conversations
+    // is running so the panel follows a turn closely. A tick with no live server is one local readdir
+    // that touches no sockets, so nothing runs (and no server is asked) while ZCode is closed.
     function pollSessions() {
       if (workPoll) return;
-      workPoll = setInterval(() => { if (readTapServers().length > 0) refreshSessions(); }, WORK_POLL_MS);
-      workPoll.unref?.();
+      const tick = () => {
+        workPoll = setTimeout(() => {
+          if (readTapServers().length > 0) refreshSessions();
+          tick();
+        }, work.counts.working > 0 ? WORK_POLL_ACTIVE_MS : WORK_POLL_MS);
+        workPoll.unref?.();
+      };
+      tick();
+    }
+
+    // Wi-Fi joins and Tailscale starts come and go: re-detect every 10 s and restart the relay only
+    // when the addresses it listens on really changed. Devices live on disk, so nothing is lost; a
+    // phone just reconnects once.
+    let addressPoll = null;
+    async function pollAddressesOnce() {
+      const next = detectAddresses();
+      const sig = hostIps(next).join(',');
+      const changed = sig !== relayHostSig;
+      addresses = next;
+      if (!changed) return;
+      relayHostSig = sig;
+      if (!settings.relayEnabled) { refresh(); return; }          // nothing is listening; the labels follow
+      appendLog(`zode: addresses changed to ${sig}; restarting the phone relay`);
+      await applyRelay();                                         // refreshes and re-applies the power blocker too
+    }
+    function pollAddresses() {
+      if (addressPoll) return;
+      addressPoll = setInterval(() => { pollAddressesOnce().catch(err => appendLog(`zode: address check: ${err?.stack || err}`)); }, ADDRESS_POLL_MS);
+      addressPoll.unref?.();
     }
 
     function menuState() {
@@ -312,7 +444,8 @@ async function start() {
 
     function pingPairWindow() {
       if (!pairWindow || pairWindow.isDestroyed()) return;
-      pairWindow.webContents.send('zode:status', { running: !!(relay?.status().running), error, publicUrl: publicUrlFor(chosen()) });
+      const urls = publicUrlsFor();
+      pairWindow.webContents.send('zode:status', { running: !!(relay?.status().running), error, publicUrl: urls[0], publicUrls: urls, reachable: hostIps() });
     }
 
     // State changed: tell the pairing window. The tray menu itself is built when the icon is clicked (see below).
@@ -508,19 +641,20 @@ async function start() {
     };
 
     async function pairingView() {
-      const publicUrl = publicUrlFor(chosen());
+      const urls = publicUrlsFor();
+      const base = { publicUrl: urls[0], publicUrls: urls, reachable: hostIps() };
       if (error || !relay?.status().running) {
         currentPairing = null;
-        return { running: false, error, publicUrl, qrSvg: null, code: null, expiresAt: null, payload: null };
+        return { running: false, error, ...base, qrSvg: null, code: null, expiresAt: null, payload: null };
       }
       try {
         if (!currentPairing || currentPairing.expiresAt < Date.now()) currentPairing = relay.createPairing();
         const qrSvg = await QRCode.toString(currentPairing.payload, { type: 'svg', margin: 1 });
-        return { running: true, error: null, publicUrl, qrSvg, code: currentPairing.code, expiresAt: currentPairing.expiresAt, payload: currentPairing.payload };
+        return { running: true, error: null, ...base, qrSvg, code: currentPairing.code, expiresAt: currentPairing.expiresAt, payload: currentPairing.payload };
       } catch (err) {                                               // a failed QR never rejects out of the IPC handler
         appendLog(`zode: pairing view: ${err?.stack || err}`);
         currentPairing = null;
-        return { running: false, error: err?.message ?? String(err), publicUrl, qrSvg: null, code: null, expiresAt: null, payload: null };
+        return { running: false, error: err?.message ?? String(err), ...base, qrSvg: null, code: null, expiresAt: null, payload: null };
       }
     }
 
@@ -563,6 +697,8 @@ async function start() {
         return buildPanelModel({
           running: !!(relay?.status().running),
           phones: devices.length,
+          phoneList: devices.map(d => ({ id: d.id, name: d.name, connected: d.connected === true, lastSeen: Number(d.pairedAt) || 0 })),
+          usage: work.usage ?? null,
           addresses,
           addressId: chosen().id,
           launchAtLogin: settings.launchAtLogin,
@@ -576,6 +712,12 @@ async function start() {
           work,
           selfUpdate: selfUpdater.getState(),
           version: app.getVersion(),
+          voice: {
+            language: settings.voiceLanguage,
+            engine: voiceStatus.engine,
+            model: { id: settings.voiceModel, state: voiceStatus.modelState, bytes: voiceStatus.modelBytes },
+            download: { ...voiceDownload },
+          },
         });
       } catch (err) {
         appendLog(`zode: panel model: ${err?.stack || err}`);
@@ -700,8 +842,17 @@ async function start() {
         if (p.key === 'keepAwake') actions.toggleKeepAwake();
         else if (p.key === 'relayEnabled') actions.toggleRelay();
         else if (p.key === 'launchAtLogin') actions.toggleLaunchAtLogin();
+      } else if (name === 'removePhone') {
+        if (typeof p.id === 'string' && p.id) actions.revoke(p.id);       // the popover's two-click remove
       } else if (name === 'foldFinished') {
         actions.toggleFoldFinished();
+      } else if (name === 'setVoiceLanguage') {
+        if (p.language !== 'en' && p.language !== 'zh') return;
+        settings.voiceLanguage = p.language;
+        save();
+        pushPanel();
+      } else if (name === 'downloadVoiceModel') {
+        startVoiceDownload();
       } else if (name === 'setAddress') {
         if (typeof p.id !== 'string' || !addresses.some(a => a && a.id === p.id)) return;
         actions.selectAddress(p.id);
@@ -963,7 +1114,22 @@ async function start() {
     setInterval(checkReleaseOnce, RELEASE_CHECK_MS);
     refreshSessions();
     pollSessions();
+    pollAddresses();
+    refreshVoice();                                   // the panel should show the real model state, not the assumption
     selfUpdater.start();
+
+    // Pay the GPU warm-up once, 20 s in, so the first dictation is not the slow one. Never blocks
+    // startup: without the model or the engine this quietly does nothing.
+    setTimeout(() => {
+      (async () => {
+        await refreshVoice();
+        if (voiceStatus.engine && voiceStatus.modelState === 'ready') {
+          const t0 = Date.now();
+          const r = await stt.warm().catch(() => null);
+          appendLog(`zode: voice warm ${r?.ok === true ? 'done' : 'skipped'} in ${Date.now() - t0} ms`);
+        }
+      })().catch((err) => appendLog(`zode: voice warm: ${err?.stack || err}`));
+    }, 20_000).unref?.();
 
     // First run, or the Engine is gone: walk through setup.
     // Someone who already uses Zode (engine built, ZCode connected, a phone paired, e.g. coming from the old app)
