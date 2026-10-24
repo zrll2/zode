@@ -1,8 +1,8 @@
 # Homebrew cask for Zode for Mac. Copy to a tap (homebrew-zode/Casks/zode.rb) and fill in version and sha256
 # from the release: `shasum -a 256 Zode-<version>-arm64.dmg`.
 cask "zode" do
-  version "1.0.2"
-  sha256 "18c1d7ee50fde1b009c7f134324b51bcd9764529a99a343552e25910f2863433"
+  version "1.1.0"
+  sha256 "dd2ee63567fcdbd0f9dc7cb27ef641e750bf3322d39600dc91d7e7d0b7c47021"
 
   url "https://github.com/zrll2/zode/releases/download/v#{version}/Zode-#{version}-arm64.dmg"
   name "Zode"
