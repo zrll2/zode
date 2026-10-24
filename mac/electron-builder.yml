@@ -21,6 +21,8 @@ extraResources:                      # the "engine kit": what the setup wizard n
     to: engine-kit/scripts/update-zcode.sh
   - from: ../bridge/agent-wrapper.mjs
     to: engine-kit/bridge/agent-wrapper.mjs
+  - from: vendor/whisper-cli          # the voice engine (whisper.cpp, built by scripts/build-whisper.sh)
+    to: bin/whisper-cli               # the app runs it at process.resourcesPath/bin/whisper-cli
 mac:
   category: public.app-category.developer-tools
   icon: ../assets/Zode.icns
@@ -30,6 +32,8 @@ mac:
     - target: zip
       arch: [arm64]
   hardenedRuntime: true
+  binaries:                           # extra Mach-O to sign: the packaged whisper engine
+    - Contents/Resources/bin/whisper-cli
   gatekeeperAssess: false
   entitlements: resources/entitlements.mac.plist
   entitlementsInherit: resources/entitlements.mac.plist

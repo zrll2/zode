@@ -3,6 +3,7 @@
 // Downstream: paired phones over WebSocket. Pair and revoke through createPairing() / revokeDevice().
 // Transport security is the network's job: bind to a Tailscale/WireGuard address. Default is 127.0.0.1.
 import { withRealActivity } from './activity.mjs';
+import { validateTranscribe, createLimiter } from './stt.mjs';
 import net from 'node:net';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -26,7 +27,10 @@ const eq = (a, b) => { const x = Buffer.from(a), y = Buffer.from(b); return x.le
 // ---- policy: what a phone may call ------------------------------------------
 const ALLOWED = new Set(['session/list', 'session/create', 'session/resume', 'session/read', 'session/messages', 'session/events',
   'session/subscribe', 'session/send', 'session/stop', 'session/close', 'session/setModel', 'session/setThoughtLevel', 'session/setMode',
-  'session/usage', 'session/goal', 'session/compact', 'session/rename', 'usage/stats', 'attachment/upload']);
+  'session/usage', 'session/goal', 'session/compact', 'session/rename', 'usage/stats', 'attachment/upload',
+  // stt/* are answered by the relay itself (never forwarded); the handler validates their params and
+  // answers failures with its own -32020 codes, so checkPolicy has nothing more to say about them.
+  'stt/transcribe', 'stt/status']);
 const SAFE_MODES = new Set(['plan', 'edit', 'guarded']);       // never yolo / build from a phone
 const DECISIONS = new Set(['allow', 'deny']);   // a phone may only allow or deny; never modify, escalate or add rules
 // session/rename and session/send (with attachments) are the phone methods that become agent commands: the relay builds
@@ -84,6 +88,7 @@ export function checkPolicy(method, params) {
 }
 
 // Bumped when the phone can rely on new relay methods. 2 = rename, usage/stats, attachments, send with attachments.
+// The speech engine rides alongside without a bump: the phone reads features.stt from the ready frame.
 export const PROTOCOL = 2;
 
 export function createRelay(opts = {}) {
@@ -94,6 +99,8 @@ export function createRelay(opts = {}) {
   const tapDir = opts.tapDir || path.join(HOME, '.zcode-tap');
   const codeTtlMs = opts.codeTtlMs ?? CODE_TTL_MS;
   const log = opts.log ?? console;
+  const stt = opts.stt ?? null;               // the host's speech engine ({transcribe, status, defaultLanguage}); absent -> voice-off
+  const sttLimiter = createLimiter();         // per device: one transcribe in flight, at most 20 per minute
   const DEVICES = path.join(stateDir, 'devices.json');
   const CODES = path.join(stateDir, 'pair-codes.json');
 
@@ -275,6 +282,46 @@ export function createRelay(opts = {}) {
     } catch (err) { fail(err.message); }
   }
 
+  // stt/transcribe and stt/status: answered here from the host-provided engine, never forwarded
+  // upstream (no ZCode server needed). Failures are rpc errors with code -32020 and the reason in
+  // data.reason — the engine's own code, or the relay's bad-params / too-large / rate-limited / voice-off.
+  const sttFail = (c, m, reason, message) => send(c, { type: 'rpc-result', id: m.id, error: { code: -32020, message, data: { reason } } });
+  async function handleStt(c, m) {
+    if (!stt) return sttFail(c, m, 'voice-off', 'this relay has no speech engine');
+    if (m.method === 'stt/status') {
+      let s = null;
+      try { s = await stt.status(); } catch (err) { return sttFail(c, m, 'engine-failed', err?.message ?? String(err)); }
+      let language = 'en';
+      try { language = stt.defaultLanguage?.() ?? 'en'; } catch { /* keep 'en' */ }
+      const small = s?.models?.small ?? null;
+      return send(c, { type: 'rpc-result', id: m.id, result: {
+        available: s?.engine === true && small?.state === 'ready',
+        language, model: 'small', modelState: small?.state ?? 'missing',
+      } });
+    }
+    const v = validateTranscribe(m.params);
+    if (!v.ok) return sttFail(c, m, v.reason, v.message);
+    if (!sttLimiter.take(c.device.id)) return sttFail(c, m, 'rate-limited', 'one transcription at a time, at most 20 per minute');
+    const startedAt = Date.now();
+    let line = null;
+    try {
+      const res = await stt.transcribe({ audio: v.value.audio, format: v.value.format, language: v.value.language, hint: { projects: v.value.projects, titles: v.value.titles } });
+      if (res?.ok) {
+        line = `stt ${c.device.id} ${v.value.audio.length}B lang=${res.language} ${res.ms}ms ok`;   // never the transcript
+        return send(c, { type: 'rpc-result', id: m.id, result: { ok: true, text: res.text, ms: res.ms, language: res.language } });
+      }
+      const reason = res?.code ?? 'engine-failed';
+      line = `stt ${c.device.id} ${v.value.audio.length}B lang=${v.value.language ?? '-'} ${Date.now() - startedAt}ms failed (${reason})`;
+      return sttFail(c, m, reason, res?.error ?? 'transcription failed');
+    } catch (err) {
+      line = `stt ${c.device.id} ${v.value.audio.length}B lang=${v.value.language ?? '-'} ${Date.now() - startedAt}ms failed (engine-failed)`;
+      return sttFail(c, m, 'engine-failed', err?.message ?? String(err));
+    } finally {
+      sttLimiter.release(c.device.id);
+      if (line) log.log(line);
+    }
+  }
+
   // ---- server --------------------------------------------------------------------
   function start() {
     if (running) return Promise.resolve({ host, port });
@@ -311,7 +358,7 @@ export function createRelay(opts = {}) {
           const d = findDevice(m.token);
           if (!d) { fail(ip); return ws.close(4003, 'bad token'); }
           c.authed = true; c.device = d; clients.add(c); clearTimeout(authTimer); emitStatus();
-          send(c, { type: 'ready', protocol: PROTOCOL, device: d.id, servers: [...upstream.values()].map(u => ({ pid: u.meta.pid, cwd: u.meta.cwd })), seq, pending: [...pendingReq.values()] });
+          send(c, { type: 'ready', protocol: PROTOCOL, device: d.id, servers: [...upstream.values()].map(u => ({ pid: u.meta.pid, cwd: u.meta.cwd })), seq, pending: [...pendingReq.values()], features: { stt: !!stt } });
           if (typeof m.since === 'number') for (const e of replay) if (e.seq > m.since) send(c, { type: 'event', ...e });
           return;
         }
@@ -332,6 +379,7 @@ export function createRelay(opts = {}) {
         if (m.type === 'rpc') {
           const bad = checkPolicy(m.method, m.params);
           if (bad) return send(c, { type: 'rpc-result', id: m.id, error: { code: -32001, message: bad } });
+          if (m.method === 'stt/transcribe' || m.method === 'stt/status') return handleStt(c, m);   // relay-answered: no upstream needed, never forwarded
           const u = (m.server && upstream.get(m.server)) || [...upstream.values()].find(x => x.meta.cwd === m.params?.workspace?.workspacePath) || [...upstream.values()][0];
           if (!u) return send(c, { type: 'rpc-result', id: m.id, error: { code: -32002, message: 'no ZCode server (is Zode.app running?)' } });
           if (m.method === 'attachment/upload') return uploadAttachment(c, m, u);        // multi-step: resume, begin, chunks, commit

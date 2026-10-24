@@ -78,6 +78,25 @@ function fakeUpstream() {
   };
 }
 
+// A fake host speech engine (the `stt` option): records every request; tests override what it
+// answers through `over` (and can mutate `over` between calls).
+function fakeStt(over = {}) {
+  const calls = [];
+  return {
+    calls,
+    transcribe: async (req) => {
+      calls.push({ kind: 'transcribe', req });
+      if (over.transcribe) return over.transcribe(req);
+      return { ok: true, text: 'hello worktree', ms: 42, language: req.language ?? 'en' };
+    },
+    status: async () => {
+      calls.push({ kind: 'status' });
+      return over.status ?? { engine: true, models: { small: { state: 'ready', bytes: 487601967 }, 'base.en': { state: 'missing', bytes: 0 } } };
+    },
+    defaultLanguage: () => over.language ?? 'en',
+  };
+}
+
 test('start / status / stop; stop twice is safe; busy port rejects with EADDRINUSE', async () => {
   const state = tmp(), tap = tmp(), busyState = tmp();
   try {
@@ -494,6 +513,193 @@ test('session/delete was removed: a phone gets method not allowed', async () => 
     const res = await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === 51);
     assert.equal(res.error.code, -32001);
     assert.equal(res.error.message, 'method not allowed: session/delete');
+    ws.close();
+  } finally { await relay.stop(); rm(state, tap); }
+});
+
+// ---- stt/transcribe and stt/status ------------------------------------------------------------
+
+const goodAudio = Buffer.from('abc').toString('base64');   // 'YWJj'
+
+test('stt/transcribe: the relay answers itself, the host gets the exact bytes, nothing is forwarded', async () => {
+  const port = await freePort();
+  const up = fakeUpstream();
+  const stt = fakeStt();
+  const lines = [];
+  const log = { log: (...a) => lines.push(a.join(' ')), warn() {}, error() {} };
+  const relay = createRelay({ port, stateDir: path.join(up.home, 'state'), tapDir: up.tapDir, log, stt });
+  await relay.start();
+  try {
+    await waitFor(() => relay.status().upstreams === 1);
+    const { id: device, token } = await (await pair(port, relay.createPairing().code, 'phone')).json();
+    const { ws, ready } = await authed(`ws://127.0.0.1:${port}`, token);
+    assert.deepEqual(ready.features, { stt: true });
+
+    const raw = Buffer.from('watch aac bytes \u00e9\u4e2d', 'utf8');
+    const long = 'x'.repeat(100);
+    ws.send(JSON.stringify({ type: 'rpc', id: 61, method: 'stt/transcribe', params: {
+      audio: raw.toString('base64'), format: 'm4a', language: 'zh',
+      hint: { projects: [long, 'proj', 42, ...Array.from({ length: 25 }, (_, i) => `prj${i}`)], titles: ['', '   ', 'title one'] },
+    } }));
+    const res = await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === 61);
+    assert.deepEqual(res.result, { ok: true, text: 'hello worktree', ms: 42, language: 'zh' });
+
+    assert.equal(stt.calls.length, 1);
+    const req = stt.calls[0].req;
+    assert.ok(Buffer.isBuffer(req.audio));
+    assert.deepEqual(req.audio, raw);                     // byte-for-byte what the phone sent
+    assert.equal(req.format, 'm4a');
+    assert.equal(req.language, 'zh');
+    assert.deepEqual(req.hint.projects, ['x'.repeat(60), 'proj', ...Array.from({ length: 18 }, (_, i) => `prj${i}`)]);   // clamped, not refused
+    assert.deepEqual(req.hint.titles, ['title one']);
+
+    await sleep(150);
+    assert.deepEqual(up.received.filter((m) => String(m.method).startsWith('stt/')), []);   // never forwarded upstream
+    const line = lines.find((l) => l.startsWith(`stt ${device} `));
+    assert.ok(line, 'one stt log line');
+    assert.match(line, / \d+B lang=zh 42ms ok$/);
+    assert.ok(!line.includes('worktree'));                // the transcript is never logged
+    ws.close();
+  } finally { await relay.stop(); await up.close(); }
+});
+
+test('stt/transcribe: bad-params and too-large answer -32020 even with no ZCode server', async () => {
+  const state = tmp(), tap = tmp();
+  const port = await freePort();
+  const relay = createRelay({ port, stateDir: state, tapDir: tap, log: silent, stt: fakeStt() });
+  await relay.start();
+  try {
+    const { token } = await (await pair(port, relay.createPairing().code, 'phone')).json();
+    const { ws } = await authed(`ws://127.0.0.1:${port}`, token);
+    const cases = [
+      [62, {}, 'bad-params'],
+      [63, { audio: '', format: 'wav' }, 'bad-params'],
+      [64, { audio: 'not base64!!', format: 'wav' }, 'bad-params'],
+      [65, { audio: goodAudio, format: 'aac' }, 'bad-params'],
+      [66, { audio: goodAudio, format: 'wav', language: 'fr' }, 'bad-params'],
+      [67, { audio: Buffer.alloc(3_000_001, 1).toString('base64'), format: 'wav' }, 'too-large'],
+    ];
+    for (const [id, params, reason] of cases) {
+      ws.send(JSON.stringify({ type: 'rpc', id, method: 'stt/transcribe', params }));
+      const res = await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === id);
+      assert.equal(res.error.code, -32020, `id ${id}`);
+      assert.equal(res.error.data.reason, reason, `id ${id}`);
+    }
+    ws.close();
+  } finally { await relay.stop(); rm(state, tap); }
+});
+
+test('stt without a host engine: features.stt is false and both methods answer voice-off', async () => {
+  const state = tmp(), tap = tmp();
+  const port = await freePort();
+  const relay = createRelay({ port, stateDir: state, tapDir: tap, log: silent });
+  await relay.start();
+  try {
+    const { token } = await (await pair(port, relay.createPairing().code, 'phone')).json();
+    const { ws, ready } = await authed(`ws://127.0.0.1:${port}`, token);
+    assert.deepEqual(ready.features, { stt: false });
+    ws.send(JSON.stringify({ type: 'rpc', id: 71, method: 'stt/transcribe', params: { audio: goodAudio, format: 'wav' } }));
+    const res = await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === 71);
+    assert.equal(res.error.code, -32020);
+    assert.equal(res.error.data.reason, 'voice-off');
+    ws.send(JSON.stringify({ type: 'rpc', id: 72, method: 'stt/status', params: {} }));
+    const st = await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === 72);
+    assert.equal(st.error.code, -32020);
+    assert.equal(st.error.data.reason, 'voice-off');
+    ws.close();
+  } finally { await relay.stop(); rm(state, tap); }
+});
+
+test('stt/status: shaped from the host status; no engine or a partial model means not available', async () => {
+  const state = tmp(), tap = tmp();
+  const port = await freePort();
+  const over = { language: 'zh' };
+  const relay = createRelay({ port, stateDir: state, tapDir: tap, log: silent, stt: fakeStt(over) });
+  await relay.start();
+  try {
+    const { token } = await (await pair(port, relay.createPairing().code, 'phone')).json();
+    const { ws } = await authed(`ws://127.0.0.1:${port}`, token);
+    const ask = async (id) => { ws.send(JSON.stringify({ type: 'rpc', id, method: 'stt/status', params: {} })); return nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === id); };
+
+    assert.deepEqual((await ask(74)).result, { available: true, language: 'zh', model: 'small', modelState: 'ready' });
+    over.status = { engine: false, models: { small: { state: 'ready', bytes: 1 } } };
+    assert.deepEqual((await ask(75)).result, { available: false, language: 'zh', model: 'small', modelState: 'ready' });
+    over.status = { engine: true, models: { small: { state: 'partial', bytes: 5 } } };
+    assert.deepEqual((await ask(76)).result, { available: false, language: 'zh', model: 'small', modelState: 'partial' });
+    ws.close();
+  } finally { await relay.stop(); rm(state, tap); }
+});
+
+test('stt/transcribe: one in flight per device — the second is rate-limited while the first runs', async () => {
+  const state = tmp(), tap = tmp();
+  const port = await freePort();
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const stt = fakeStt({ transcribe: () => gate.then(() => ({ ok: true, text: 'slow transcript', ms: 5, language: 'en' })) });
+  const relay = createRelay({ port, stateDir: state, tapDir: tap, log: silent, stt });
+  await relay.start();
+  try {
+    const { token } = await (await pair(port, relay.createPairing().code, 'phone')).json();
+    const { ws } = await authed(`ws://127.0.0.1:${port}`, token);
+    const first = nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === 81);   // listen first
+    ws.send(JSON.stringify({ type: 'rpc', id: 81, method: 'stt/transcribe', params: { audio: goodAudio, format: 'wav' } }));
+    await waitFor(() => stt.calls.length === 1);
+    ws.send(JSON.stringify({ type: 'rpc', id: 82, method: 'stt/transcribe', params: { audio: goodAudio, format: 'wav' } }));
+    const second = await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === 82);
+    assert.equal(second.error.code, -32020);
+    assert.equal(second.error.data.reason, 'rate-limited');
+    release();
+    assert.deepEqual((await first).result, { ok: true, text: 'slow transcript', ms: 5, language: 'en' });
+    ws.close();
+  } finally { await relay.stop(); rm(state, tap); }
+});
+
+test('stt/transcribe: at most 20 per device per minute', async () => {
+  const state = tmp(), tap = tmp();
+  const port = await freePort();
+  const relay = createRelay({ port, stateDir: state, tapDir: tap, log: silent, stt: fakeStt() });
+  await relay.start();
+  try {
+    const { token } = await (await pair(port, relay.createPairing().code, 'phone')).json();
+    const { ws } = await authed(`ws://127.0.0.1:${port}`, token);
+    for (let id = 90; id < 110; id++) {
+      ws.send(JSON.stringify({ type: 'rpc', id, method: 'stt/transcribe', params: { audio: goodAudio, format: 'wav' } }));
+      const res = await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === id);
+      assert.equal(res.result?.ok, true, `id ${id}`);       // sequential, so the in-flight rule never trips
+    }
+    ws.send(JSON.stringify({ type: 'rpc', id: 110, method: 'stt/transcribe', params: { audio: goodAudio, format: 'wav' } }));
+    const over = await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === 110);
+    assert.equal(over.error.code, -32020);
+    assert.equal(over.error.data.reason, 'rate-limited');
+    ws.close();
+  } finally { await relay.stop(); rm(state, tap); }
+});
+
+test('stt/transcribe: engine failures pass the engine reason through; a throwing engine is engine-failed', async () => {
+  const state = tmp(), tap = tmp();
+  const port = await freePort();
+  const engine = { respond: async () => ({ ok: false, code: 'no-model', error: 'model small is missing' }) };
+  const relay = createRelay({ port, stateDir: state, tapDir: tap, log: silent, stt: fakeStt({ transcribe: () => engine.respond() }) });
+  await relay.start();
+  try {
+    const { token } = await (await pair(port, relay.createPairing().code, 'phone')).json();
+    const { ws } = await authed(`ws://127.0.0.1:${port}`, token);
+    const ask = async (id) => { ws.send(JSON.stringify({ type: 'rpc', id, method: 'stt/transcribe', params: { audio: goodAudio, format: 'wav' } })); return nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === id); };
+
+    let res = await ask(111);
+    assert.equal(res.error.code, -32020);
+    assert.equal(res.error.data.reason, 'no-model');
+    assert.equal(res.error.message, 'model small is missing');
+
+    engine.respond = async () => ({ ok: false, code: 'busy' });
+    res = await ask(112);
+    assert.equal(res.error.data.reason, 'busy');
+    assert.equal(res.error.message, 'transcription failed');   // the engine gave no message
+
+    engine.respond = async () => { throw new Error('engine exploded'); };
+    res = await ask(113);
+    assert.equal(res.error.data.reason, 'engine-failed');
+    assert.equal(res.error.message, 'engine exploded');
     ws.close();
   } finally { await relay.stop(); rm(state, tap); }
 });
