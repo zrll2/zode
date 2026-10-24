@@ -3,6 +3,7 @@
 // Downstream: paired phones over WebSocket. Pair and revoke through createPairing() / revokeDevice().
 // Transport security is the network's job: bind to a Tailscale/WireGuard address. Default is 127.0.0.1.
 import { withRealActivity } from './activity.mjs';
+import { createLiveStatus } from './live.mjs';
 import { validateTranscribe, createLimiter } from './stt.mjs';
 import net from 'node:net';
 import fs from 'node:fs';
@@ -117,6 +118,12 @@ export function createRelay(opts = {}) {
   let srv = null, wss = null, syncTimer = null, statusTimer = null;
   let running = false;
 
+  // What is really running, from the event stream the servers already send: session/list keeps
+  // saying 'idle' mid-turn, so every upstream line feeds this tracker, every session/list reply to a
+  // phone carries its verdict, and the host reads the same truth through relay.liveStatus.
+  const live = createLiveStatus();
+  const syncPending = () => live.setPending([...pendingReq.values()].map(p => ({ sessionId: p.params?.sessionId, method: p.method })));
+
   function status() {
     return { running, host, port, publicUrl, upstreams: upstream.size, clients: clients.size, devices: readJson(DEVICES, []).length };
   }
@@ -147,6 +154,7 @@ export function createRelay(opts = {}) {
       sock.on('close', () => {
         upstream.delete(pid); emitStatus();
         for (const k of pendingReq.keys()) if (k.startsWith(pid + ':')) pendingReq.delete(k);
+        syncPending();
         for (const [rid, r] of routes) if (r.internalCall && r.pid === pid) { routes.delete(rid); clearTimeout(r.timer); r.reject(new Error('upstream closed')); }
       });
       sock.on('error', () => {});
@@ -156,10 +164,11 @@ export function createRelay(opts = {}) {
   }
   function fromUpstream(pid, line) {
     let m; try { m = JSON.parse(line); } catch { return; }
+    live.observe(m);                                                // every line feeds the running tracker; it ignores what is not session traffic
     if (m.id !== undefined && !m.method) {                          // reply
       if (!m.tapReply) return;                                      // copy of a desktop reply
       const r = routes.get(m.id); if (!r) return; routes.delete(m.id);
-      if (r.internal) { for (const p of m.result?.pending ?? []) pendingReq.set(`${r.pid}:${p.id}`, { server: r.pid, ...p }); return; }
+      if (r.internal) { for (const p of m.result?.pending ?? []) pendingReq.set(`${r.pid}:${p.id}`, { server: r.pid, ...p }); syncPending(); return; }
       if (r.internalCall) {
         clearTimeout(r.timer);
         const err = m.error ?? (m.result?.status === 'rejected' ? m.result : m.result?.error);
@@ -168,12 +177,18 @@ export function createRelay(opts = {}) {
       }
       delete m.tapReply; m.id = r.clientId;
       // The agent reports updatedAt = now for every conversation it has loaded; ZCode's database has the real time.
-      if (r.method === 'session/list' && Array.isArray(m.result?.sessions)) m.result.sessions = withRealActivity(m.result.sessions);
+      if (r.method === 'session/list' && Array.isArray(m.result?.sessions)) {
+        m.result.sessions = withRealActivity(m.result.sessions);
+        m.result.sessions = live.apply(m.result.sessions);          // the live verdict wins, after the real times
+      }
       return send(r.client, { type: 'rpc-result', server: pid, ...fitForMobile(r.method, m) });
     }
     if (m.method === 'startup/storageState' || m.method === 'process/mcpTelemetry' || m.method?.startsWith('v4/telemetry')) return;
-    if (m.method && m.id !== undefined && /^interaction\/request(Permission|UserInput)$/.test(m.method)) pendingReq.set(`${pid}:${m.id}`, { server: pid, id: m.id, method: m.method, params: m.params, at: Date.now() });
-    if (m.method === 'tap/resolved') pendingReq.delete(`${pid}:${m.params?.id}`);
+    if (m.method && m.id !== undefined && /^interaction\/request(Permission|UserInput)$/.test(m.method)) {
+      pendingReq.set(`${pid}:${m.id}`, { server: pid, id: m.id, method: m.method, params: m.params, at: Date.now() });
+      syncPending();
+    }
+    if (m.method === 'tap/resolved') { pendingReq.delete(`${pid}:${m.params?.id}`); syncPending(); }
     const e = { seq: ++seq, server: pid, msg: m };
     replay.push(e); if (replay.length > REPLAY_MAX) replay.shift();
     for (const c of clients) if (c.authed) send(c, JSON.stringify(e).length > MAX_FRAME ? { type: 'event', seq: e.seq, server: pid, msg: { method: m.method, params: { sessionId: m.params?.sessionId, type: m.params?.type, truncated: true } } } : { type: 'event', ...e });
@@ -419,7 +434,7 @@ export function createRelay(opts = {}) {
     if (t) clearInterval(t);
     for (const u of upstream.values()) u.sock.destroy();
     upstream.clear();
-    routes.clear(); pendingReq.clear();
+    routes.clear(); pendingReq.clear(); live.setPending([]);
     for (const c of [...clients]) { try { c.ws.close(1001, 'relay stopping'); } catch {} }
     clients.clear();
     if (w) { try { await new Promise(r => w.close(r)); } catch {} }
@@ -427,5 +442,5 @@ export function createRelay(opts = {}) {
     emitStatus();
   }
 
-  return { start, stop, status, createPairing, listDevices, revokeDevice, on, off };
+  return { start, stop, status, createPairing, listDevices, revokeDevice, on, off, liveStatus: live };
 }

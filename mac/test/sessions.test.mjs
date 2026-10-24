@@ -4,7 +4,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { readTapServers, listSessions, listPending, describeSession, summarize, summarizeRequest, respondPermission, stopSession, sendToSession, nudgeSession, NUDGE_MESSAGE } from '../lib/sessions.mjs';
+import { readTapServers, listSessions, listPending, describeSession, summarize, summarizeRequest, respondPermission, stopSession, sendToSession, nudgeSession, withLiveStatus, NUDGE_MESSAGE } from '../lib/sessions.mjs';
+import { createLiveStatus } from '../../relay/live.mjs';
 
 const NOW = 1_700_000_000_000;
 const min = 60 * 1000;
@@ -240,4 +241,58 @@ test('nudgeSession: stop first, then the continue message, on the same socket', 
     ['/x', { id: 1, method: 'session/stop', params: { sessionId: 's1' } }],
     ['/x', { id: 1, method: 'session/send', params: { sessionId: 's1', content: NUDGE_MESSAGE } }],
   ]);
+});
+
+// ---- the live running status -------------------------------------------------------------------
+
+const startedMsg = sessionId => ({ method: 'state.updated', params: { type: 'state.updated', scope: 'session', sessionId, patch: { status: 'running' }, reason: 'prompt_started', revision: 1 } });
+const completedMsg = sessionId => ({ method: 'state.updated', params: { type: 'state.updated', scope: 'session', sessionId, patch: {}, reason: 'prompt_completed', revision: 2 } });
+const eventMsg = sessionId => ({ method: 'session/event', params: { sessionId } });
+
+test('withLiveStatus: no relay, no tracker, or a throwing apply all leave the list alone', () => {
+  const rows = [session({ sessionId: 's1', status: 'idle', updatedAt: NOW - min })];
+  assert.deepEqual(withLiveStatus(rows, null), rows);
+  assert.deepEqual(withLiveStatus(rows, undefined), rows);
+  assert.deepEqual(withLiveStatus(rows, {}), rows);                                   // no apply method
+  assert.deepEqual(withLiveStatus(rows, { apply: () => { throw new Error('boom'); } }), rows);
+  assert.deepEqual(withLiveStatus(undefined, null), []);
+  assert.deepEqual(withLiveStatus(undefined, { apply: v => v }), []);
+});
+
+test('withLiveStatus: a running turn shows Working even though the list says idle with an old time', () => {
+  let t = NOW;
+  const live = createLiveStatus({ now: () => t });
+  live.observe(startedMsg('s1'));
+  const rows = [session({ sessionId: 's1', status: 'idle', updatedAt: NOW - 40 * min })];
+  const applied = withLiveStatus(rows, live);
+  assert.notEqual(applied, rows);
+  assert.equal(applied[0].status, 'running');
+  assert.equal(applied[0].updatedAt, NOW);                                            // bumped to the tracker's last event time
+  const s = summarize(applied, NOW);
+  assert.deepEqual(s.counts, { working: 1, waiting: 0, failed: 0 });
+  assert.deepEqual([s.lines[0].status, s.lines[0].light], ['Working', 'green']);
+});
+
+test('withLiveStatus: quiet minutes only count when events really stop; a settled turn hands the list back', () => {
+  let t = NOW;
+  const live = createLiveStatus({ now: () => t });
+  live.observe(startedMsg('s1'));
+  const rows = [session({ sessionId: 's1', status: 'idle', updatedAt: NOW - 40 * min })];
+  for (let i = 1; i <= 6; i++) { t = NOW + i * 60_000; live.observe(eventMsg('s1')); }   // events keep the turn fresh
+  const applied = withLiveStatus(rows, live);
+  assert.equal(applied[0].updatedAt, NOW + 6 * 60_000);
+  assert.deepEqual(describeSession(applied[0], NOW + 6 * 60_000), { light: 'green', text: 'Working' });
+  t = NOW + 6 * 60_000 + 121_000;                                                     // events stop: the mark expires
+  assert.deepEqual(withLiveStatus(rows, live), rows);
+  t += 60_000;
+  live.observe(completedMsg('s1'));                                                   // an explicit settle: the list's object stands
+  assert.deepEqual(withLiveStatus(rows, live), rows);
+});
+
+test('withLiveStatus: an open permission request shows Waiting for you', () => {
+  const live = createLiveStatus({ now: () => NOW });
+  live.setPending([{ sessionId: 's1', method: 'interaction/requestPermission' }]);
+  const rows = [session({ sessionId: 's1', status: 'idle', updatedAt: NOW - min })];
+  const s = summarize(withLiveStatus(rows, live), NOW);
+  assert.deepEqual([s.lines[0].status, s.lines[0].light], ['Waiting for you', 'amber']);
 });

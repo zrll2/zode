@@ -248,6 +248,49 @@ test('a fake upstream (unix socket + <pid>.json meta) delivers events to an auth
   }
 });
 
+test('session/list replies carry the live truth: running after prompt_started, idle after prompt_completed, waiting while a request pends', async () => {
+  const port = await freePort();
+  const up = fakeUpstream();
+  const relay = createRelay({ port, stateDir: path.join(up.home, 'state'), tapDir: up.tapDir, log: silent });
+  await relay.start();
+  try {
+    await waitFor(() => relay.status().upstreams === 1);
+    const { token } = await (await pair(port, relay.createPairing().code, 'phone')).json();
+    const { ws } = await authed(`ws://127.0.0.1:${port}`, token);
+    // An id the sqlite activity lookup skips (over 80 characters), so the test never touches a real database.
+    const sid = 'sess_' + 'live'.repeat(30);
+    const row = () => ({ sessionId: sid, status: 'idle', updatedAt: 123 });
+    let answered = 0;
+    const askList = async (id) => {
+      const resP = nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === id);        // listen first
+      ws.send(JSON.stringify({ type: 'rpc', id, method: 'session/list', params: {} }));
+      await waitFor(() => up.received.filter(m => m.method === 'session/list').length === answered + 1);
+      const req = up.received.filter(m => m.method === 'session/list')[answered];
+      answered += 1;
+      up.respond(req, { sessions: [row()] });
+      return (await resP).result.sessions[0];
+    };
+
+    assert.equal((await askList(121)).status, 'idle');                    // the list's own word, before anything happens
+
+    up.send({ method: 'state.updated', params: { type: 'state.updated', scope: 'session', sessionId: sid, patch: { status: 'running' }, reason: 'prompt_started', revision: 1 } });
+    const running = await askList(122);
+    assert.equal(running.status, 'running');                              // mid-turn, the list would still say idle
+    assert.ok(running.updatedAt > 123);                                   // the tracker bumped it to the event time
+
+    up.send({ method: 'state.updated', params: { type: 'state.updated', scope: 'session', sessionId: sid, patch: {}, reason: 'prompt_completed', revision: 2 } });
+    const done = await askList(123);
+    assert.equal(done.status, 'idle');
+    assert.equal(done.updatedAt, 123);                                    // settled: the list's own object stands
+
+    up.send({ id: 'req-9', method: 'interaction/requestPermission', params: { sessionId: sid, toolName: 'Bash', input: {} } });
+    assert.equal((await askList(124)).status, 'waiting');                 // an open request outranks the settled status
+    up.send({ method: 'tap/resolved', params: { id: 'req-9' } });
+    assert.equal((await askList(125)).status, 'idle');
+    ws.close();
+  } finally { await relay.stop(); await up.close(); }
+});
+
 test('checkPolicy: rename/upload session ids, upload file rules, send attachments, usage ranges, no raw commands', () => {
   const id100 = 'sess_' + 'x'.repeat(95);                              // exactly 100 characters
   const png = { fileName: 'a.png', mime: 'image/png', dataBase64: Buffer.from('hello').toString('base64') };

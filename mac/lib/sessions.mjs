@@ -95,6 +95,18 @@ export async function listSessions({ dir = tapDir(), timeoutMs = 1500, connect =
   } catch { return []; }
 }
 
+// The list never says running mid-turn; the relay's event tracker does. Run the listing through
+// relay.liveStatus.apply here (a no-op when the relay is off, never a throw: the list stands on any
+// failure), then summarize as usual.
+export function withLiveStatus(sessions, liveStatus) {
+  if (!Array.isArray(sessions)) return [];
+  if (!liveStatus || typeof liveStatus.apply !== 'function') return sessions;
+  try {
+    const applied = liveStatus.apply(sessions);
+    return Array.isArray(applied) ? applied : sessions;
+  } catch { return sessions; }
+}
+
 // One request over a fresh connection: send one line, take the tap reply that carries our id, close.
 // Returns the reply ({ result } or { error }) or null on any failure.
 async function ask(sock, method, params, timeoutMs = 1500, connect = defaultConnect) {

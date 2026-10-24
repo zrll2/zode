@@ -18,7 +18,7 @@ import { panelBounds, trayImageName, isTemplate } from './lib/panelWindow.mjs';
 import { setupSteps, parseBuildProgress, friendlySetupError, kitDir } from './lib/setup.mjs';
 import { isRunning, quitApp, tapAlive, findOriginal, findEngine, findOldIntegrated, runBuild } from './lib/system.mjs';
 import { readVersion, compareVersions, checkRelease, engineRebuildScript } from './lib/updates.mjs';
-import { listSessions, listPending, readTapServers, summarize, respondPermission, stopSession, sendToSession, nudgeSession, RETRY_MESSAGE } from './lib/sessions.mjs';
+import { listSessions, listPending, readTapServers, summarize, withLiveStatus, respondPermission, stopSession, sendToSession, nudgeSession, RETRY_MESSAGE } from './lib/sessions.mjs';
 import { createSelfUpdater } from './lib/selfupdate.mjs';
 
 const HOME = os.homedir();
@@ -32,6 +32,7 @@ const RELEASE_CHECK_DELAY_MS = 30 * 1000;             // after start; startup ne
 const RELEASE_CHECK_MS = 6 * 60 * 60 * 1000;
 const WORK_TIMEOUT_MS = 1500;                         // per tap socket, and the cap on the tray-click wait
 const WORK_POLL_MS = 30 * 1000;                       // background refresh while a ZCode server is live
+const WORK_POLL_ACTIVE_MS = 10 * 1000;                // the same, while a conversation is running: follow the turn
 const WORK_SETTLE_MS = 1000;                          // after a menu action, before the refresh + reopen
 const PANEL_WIDTH = 340;                              // the panel that opens under the menu bar icon
 const PANEL_REOPEN_MS = 250;                          // a tray click this soon after a blur-hide is the click that closed it
@@ -254,9 +255,12 @@ async function start() {
       workRefresh = (async () => {
         try {
           const listed = await listSessions({ timeoutMs: WORK_TIMEOUT_MS });
-          const summary = summarize(listed, Date.now());
+          // The list never says running mid-turn; the relay's event tracker does. Its verdict (and its
+          // bumped activity times) feed the summary and the panel ages alike.
+          const sessions = withLiveStatus(listed, relay ? relay.liveStatus : null);
+          const summary = summarize(sessions, Date.now());
           // The panel shows ages since the last activity; summarize drops the timestamps, so keep them.
-          const at = new Map(listed.map(s => [s?.sessionId, Number(s?.updatedAt) || 0]));
+          const at = new Map(sessions.map(s => [s?.sessionId, Number(s?.updatedAt) || 0]));
           summary.lines = summary.lines.map(l => (at.has(l.id) ? { ...l, at: at.get(l.id) } : l));
           const pending = {};
           if (summary.counts.waiting > 0) {            // only waiting conversations can have something pending
@@ -279,12 +283,19 @@ async function start() {
       return workRefresh;
     }
 
-    // Fresh lines every 30 s while a ZCode server is live. A tick with none is one local readdir that
-    // touches no sockets, so nothing runs (and no server is asked) while ZCode is closed.
+    // Fresh lines every 30 s while a ZCode server is live, every 10 s while one of its conversations
+    // is running so the panel follows a turn closely. A tick with no live server is one local readdir
+    // that touches no sockets, so nothing runs (and no server is asked) while ZCode is closed.
     function pollSessions() {
       if (workPoll) return;
-      workPoll = setInterval(() => { if (readTapServers().length > 0) refreshSessions(); }, WORK_POLL_MS);
-      workPoll.unref?.();
+      const tick = () => {
+        workPoll = setTimeout(() => {
+          if (readTapServers().length > 0) refreshSessions();
+          tick();
+        }, work.counts.working > 0 ? WORK_POLL_ACTIVE_MS : WORK_POLL_MS);
+        workPoll.unref?.();
+      };
+      tick();
     }
 
     function menuState() {
