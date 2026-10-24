@@ -1,5 +1,13 @@
 # Zode for Mac
 
+## 1.1.1
+- **Answer a pile of permission requests at once.** When a conversation keeps asking for the same permission, the card now offers Allow all, Deny all and Always allow this here (ZCode's own "always allow in this project" rule), plus Stop task.
+- **Fixed:** the menu bar panel showed old conversations as "Just now"; it uses the real last-activity time again.
+- **Fixed:** the older Zode-in-ZCode app no longer wipes the newer settings (setup, keep awake, voice) from the shared settings file.
+- **Fixed:** a phone answering a permission request could crash the relay if ZCode had just closed.
+- The refresh button no longer shows a permanent focus ring, and conversation summaries drop leading markdown marks.
+- The relay now logs which address (Wi-Fi or Tailscale) a phone connects through, to make connection problems easy to diagnose.
+
 ## 1.1.0
 - **Connects over Wi-Fi and Tailscale at once.** The phone now learns every address of your Mac and uses whichever works, so leaving the Wi-Fi no longer drops the connection. The Mac re-checks its network every 10 seconds. Choose a single address in Settings if you prefer.
 - **Running work shows up.** Conversations that are mid-turn now appear under Working (the agent never reported this itself); stale "waiting" cards clear on their own.
