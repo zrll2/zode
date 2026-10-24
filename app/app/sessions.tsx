@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   ActionSheetIOS,
   Alert,
+  Animated,
   Platform,
   Pressable,
   RefreshControl,
@@ -19,16 +20,19 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRelay } from "../src/useRelay";
 import { useTheme } from "../src/theme";
 import { describeAddress } from "../src/pairing";
+import { connectionHint, offlineView, type ConnectionHintActionKind } from "../src/connectionHint";
+import { friendlyError } from "../src/friendlyError";
 import { isOutdated, outdatedMessage, relaySupports } from "../src/compat";
+import { ConnectingDots } from "../src/ui/ConnectingDots";
 import { respondFailureText, type ApprovalRequest } from "../src/approvals";
-import { buildHomeList, projectsOf, withAlpha, type HomeItem } from "../src/homeList";
+import { buildHomeList, projectsOf, type HomeItem } from "../src/homeList";
 import { buildUsageStatsParams } from "../src/relay/params";
 import { PRIVACY_URL, SUPPORT_URL } from "../src/config";
 import { addArchived, removeArchived } from "../src/sessionActions";
 import { loadPrefs, savePrefs, type Prefs } from "../src/storage";
 import { parseSessionList, type SessionRow } from "../src/util";
 import type { RelayStatus } from "../src/relay/client";
-import { Dot } from "../src/ui/Dot";
+import { Dot, useReduceMotion } from "../src/ui/Dot";
 import { ActionButton, NeedCard } from "../src/ui/NeedCard";
 import { FilterChips } from "../src/ui/FilterChips";
 import { HomeRow } from "../src/ui/HomeRow";
@@ -43,6 +47,19 @@ import { buildMenuItems } from "../src/ui/menu";
 const APP_VERSION = Constants.expoConfig?.version;
 // Loaded in app/_layout.tsx; falls back to the system font until it is.
 const WORDMARK_FONT = "Nunito_800ExtraBold";
+
+const TAILSCALE_SCHEME = "tailscale://";
+const TAILSCALE_STORE = "https://apps.apple.com/app/tailscale/id1470499037";
+
+// Open the Tailscale app; fall back to the App Store page when the app
+// (or the url scheme) is not on this phone.
+async function openTailscale() {
+  let canOpen = false;
+  try {
+    canOpen = await Linking.canOpenURL(TAILSCALE_SCHEME);
+  } catch {}
+  void Linking.openURL(canOpen ? TAILSCALE_SCHEME : TAILSCALE_STORE).catch(() => {});
+}
 
 interface ToastState {
   message: string;
@@ -92,6 +109,7 @@ export default function SessionsScreen() {
     relayProtocol,
     pendingApprovals,
     connectedUrl,
+    credentials,
     rpc,
     unpair,
     demo,
@@ -137,6 +155,82 @@ export default function SessionsScreen() {
     return () => clearInterval(id);
   }, []);
 
+  // Count the seconds since the connection dropped so the plain-words hint
+  // waits out the first, usually-harmless reconnect window. The status
+  // string keeps changing while offline (connecting → reconnecting); the
+  // clock must not restart with it.
+  const offlineSinceRef = useRef<number | null>(null);
+  const [offlineSeconds, setOfflineSeconds] = useState(0);
+  useEffect(() => {
+    if (status === "ready") {
+      offlineSinceRef.current = null;
+      setOfflineSeconds(0);
+      return;
+    }
+    if (offlineSinceRef.current === null) offlineSinceRef.current = Date.now();
+    const tick = () =>
+      setOfflineSeconds(
+        Math.floor((Date.now() - (offlineSinceRef.current ?? Date.now())) / 1000),
+      );
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [status]);
+
+  // The plain-words explanation for a long offline stretch, from what the
+  // phone knows about the Mac's addresses (P7). Demo never needs it.
+  const hint = useMemo(
+    () =>
+      demo || authFailed || status === "ready"
+        ? null
+        : connectionHint({
+            urls: credentials?.wsUrls ?? [],
+            lastGood: credentials?.lastGood ?? null,
+            status,
+            secondsDisconnected: offlineSeconds,
+          }),
+    [demo, authFailed, status, credentials, offlineSeconds],
+  );
+
+  const runHintAction = useCallback(
+    (kind: ConnectionHintActionKind) => {
+      if (kind === "retry") {
+        retryNow();
+        return;
+      }
+      if (kind === "scan") {
+        router.push("/pair");
+        return;
+      }
+      void openTailscale();
+    },
+    [retryNow, router],
+  );
+
+  // The centred connecting state (P7b): dots while offline and nothing has
+  // loaded yet, the hint card once it has something to say, and a short
+  // fade back to the list when the connection comes up.
+  const [connectedOnce, setConnectedOnce] = useState(false);
+  const view = offlineView({ status, connectedOnce, hint: Boolean(hint) });
+  const reduceMotion = useReduceMotion();
+  const [paneVisible, setPaneVisible] = useState(view === "dots" || view === "hint");
+  const paneOpacity = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    const showing = view === "dots" || view === "hint";
+    if (showing) {
+      paneOpacity.setValue(1);
+      setPaneVisible(true);
+      return;
+    }
+    if (reduceMotion) {
+      setPaneVisible(false);
+      return;
+    }
+    Animated.timing(paneOpacity, { toValue: 0, duration: 150, useNativeDriver: true }).start(() =>
+      setPaneVisible(false),
+    );
+  }, [view, reduceMotion, paneOpacity]);
+
   const showToast = useCallback((message: string, onUndo?: () => void) => {
     if (toastTimer.current) clearTimeout(toastTimer.current);
     setToast({ message, onUndo });
@@ -181,8 +275,9 @@ export default function SessionsScreen() {
     try {
       const result = await rpc("session/list", {});
       setSessions(parseSessionList(result));
+      setConnectedOnce(true);
     } catch (e: any) {
-      setError(e?.message ?? "Failed to load sessions.");
+      setError(friendlyError(e));
     } finally {
       setRefreshing(false);
     }
@@ -391,7 +486,6 @@ export default function SessionsScreen() {
   );
 
   const showOutdated = status === "ready" && !outdatedDismissed && isOutdated(relayProtocol);
-  const offline = status === "reconnecting" || (status === "closed" && !authFailed);
   const statusLabel: Record<RelayStatus, string> = {
     connecting: "Connecting",
     ready: "Connected",
@@ -496,6 +590,41 @@ export default function SessionsScreen() {
         </Text>
       ) : undefined}
 
+      {paneVisible ? (
+        <Animated.View
+          style={[styles.centerPane, { opacity: paneOpacity }]}
+          pointerEvents="box-none"
+        >
+          {authFailed ? (
+            <Text color="danger" style={styles.plainLine}>
+              Pairing rejected — unpair and pair again
+            </Text>
+          ) : view === "hint" && hint ? (
+            <View style={[styles.hintCard, { backgroundColor: t.colors.surface }]}>
+              <Text style={[styles.hintTitle, { color: t.colors.text }]}>{hint.title}</Text>
+              <Text style={[styles.hintBody, { color: t.colors.subtext }]}>{hint.body}</Text>
+              <View style={styles.hintActions}>
+                {hint.actions.map((action) => (
+                  <ActionButton
+                    key={action.label}
+                    label={action.label}
+                    variant={action.quiet ? "quiet" : "primary"}
+                    onPress={() => runHintAction(action.kind)}
+                    accessibilityLabel={action.label}
+                  />
+                ))}
+              </View>
+            </View>
+          ) : (
+            <>
+              <ConnectingDots />
+              <Text variant="rowSubtitle" color="subtext">
+                Connecting to your Mac...
+              </Text>
+            </>
+          )}
+        </Animated.View>
+      ) : (
       <ScrollView
         contentContainerStyle={{
           paddingHorizontal: 16,
@@ -510,36 +639,6 @@ export default function SessionsScreen() {
         }
         keyboardShouldPersistTaps="handled"
       >
-        {offline ? (
-          <View
-            style={[
-              styles.offlineBanner,
-              {
-                backgroundColor: withAlpha(t.colors.danger, 0.1),
-                borderColor: withAlpha(t.colors.danger, 0.35),
-              },
-            ]}
-          >
-            <View style={styles.offlineText}>
-              <Text style={[styles.offlineTitle, { color: t.colors.text }]}>
-                Can’t reach your Mac
-              </Text>
-              <Text style={[styles.offlineSub, { color: t.colors.subtext }]}>
-                Is it awake, with Zode open, on the same Wi-Fi?
-              </Text>
-            </View>
-            <ActionButton label="Retry" variant="quiet" onPress={retryNow} />
-          </View>
-        ) : status === "connecting" ? (
-          <Text color="subtext" style={styles.plainLine}>
-            Connecting…
-          </Text>
-        ) : authFailed ? (
-          <Text color="danger" style={styles.plainLine}>
-            Pairing rejected — unpair and pair again
-          </Text>
-        ) : undefined}
-
         {showOutdated ? (
           <View style={styles.outdatedRow}>
             <Text variant="caption" color="warn" style={styles.flex}>
@@ -563,7 +662,7 @@ export default function SessionsScreen() {
           </View>
         ) : undefined}
 
-        {error ? (
+        {error && !hint ? (
           <Text variant="caption" color="danger" numberOfLines={2} style={styles.plainLine}>
             {error}
           </Text>
@@ -651,7 +750,16 @@ export default function SessionsScreen() {
               No conversations match.
             </Text>
           ) : sessions.length === 0 ? (
-            status !== "ready" ? (
+            connectedOnce ? (
+              <View style={styles.empty}>
+                <Text variant="display" style={{ fontSize: 22, lineHeight: 28 }}>
+                  No sessions yet
+                </Text>
+                <Text variant="rowSubtitle" color="subtext" style={styles.emptyLine}>
+                  Sessions running on your Mac will appear here.
+                </Text>
+              </View>
+            ) : (
               <View style={styles.skeletonWrap}>
                 {[0, 1, 2].map((index) => (
                   <View
@@ -661,15 +769,6 @@ export default function SessionsScreen() {
                     <View style={[styles.skeletonBar, { backgroundColor: t.colors.muted }]} />
                   </View>
                 ))}
-              </View>
-            ) : (
-              <View style={styles.empty}>
-                <Text variant="display" style={{ fontSize: 22, lineHeight: 28 }}>
-                  No sessions yet
-                </Text>
-                <Text variant="rowSubtitle" color="subtext" style={styles.emptyLine}>
-                  Sessions running on your Mac will appear here.
-                </Text>
               </View>
             )
           ) : undefined
@@ -703,6 +802,7 @@ export default function SessionsScreen() {
           </Pressable>
         ) : undefined}
       </ScrollView>
+      )}
 
       <PressScale
         onPress={() => router.push("/new")}
@@ -783,20 +883,23 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 14,
   },
-  offlineBanner: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
+  hintCard: {
     marginTop: 4,
     marginBottom: 10,
-    borderRadius: 12,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 16,
+    padding: 14,
+    gap: 6,
   },
-  offlineText: { flex: 1 },
-  offlineTitle: { fontSize: 13, lineHeight: 18, fontWeight: "700" },
-  offlineSub: { fontSize: 12, lineHeight: 16, marginTop: 1 },
+  hintTitle: { fontSize: 15, lineHeight: 20, fontWeight: "700" },
+  hintBody: { fontSize: 13, lineHeight: 18 },
+  hintActions: { flexDirection: "row", gap: 8, marginTop: 6 },
+  centerPane: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 14,
+    paddingHorizontal: 24,
+  },
   outdatedRow: {
     flexDirection: "row",
     alignItems: "center",

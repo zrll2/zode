@@ -22,6 +22,8 @@ export interface RelayClientLike {
   retryAt: number | null;
   // Protocol the relay announced (undefined = older relay, protocol 1).
   readonly relayProtocol: number | undefined;
+  // Optional relay features (V3): demo announces voice.
+  readonly relayFeatures: { stt: boolean };
   // Permission requests waiting right now (Ask first mode).
   readonly pendingApprovals: ApprovalRequest[];
   retryNow(): void;
@@ -60,8 +62,9 @@ export class DemoClient implements RelayClientLike {
   servers: RelayServer[] = DEMO_SERVERS;
   authFailed = false;
   retryAt: number | null = null; // the demo never reconnects
-  // Demo behaves as a current (protocol 2) relay.
+  // Demo behaves as a current (protocol 2) relay with voice available.
   readonly relayProtocol: number | undefined = 2;
+  readonly relayFeatures: { stt: boolean } = { stt: true };
 
   retryNow() {}
 
@@ -105,6 +108,27 @@ export class DemoClient implements RelayClientLike {
   rpc<T = unknown>(method: string, params?: unknown, _server?: string | number): Promise<T> {
     const request = (params ?? {}) as Record<string, any>;
     switch (method) {
+      case "stt/status":
+        return Promise.resolve({
+          available: true,
+          language: "en",
+          model: "whisper-small",
+          modelState: "ready",
+        } as T);
+      case "stt/transcribe":
+        // Canned answer after a realistic beat so the demo shows the strip.
+        return new Promise<T>((resolve) =>
+          setTimeout(
+            () =>
+              resolve({
+                ok: true,
+                text: "Add a dark mode toggle to the settings page",
+                ms: 700,
+                language: "en",
+              } as T),
+            700,
+          ),
+        );
       case "session/list":
         return Promise.resolve({
           sessions: buildSessionList(this.sessions, Date.now()),
