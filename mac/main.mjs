@@ -18,7 +18,7 @@ import { panelBounds, trayImageName, isTemplate } from './lib/panelWindow.mjs';
 import { setupSteps, parseBuildProgress, friendlySetupError, kitDir } from './lib/setup.mjs';
 import { isRunning, quitApp, tapAlive, findOriginal, findEngine, findOldIntegrated, runBuild } from './lib/system.mjs';
 import { readVersion, compareVersions, checkRelease, engineRebuildScript } from './lib/updates.mjs';
-import { listSessions, listPending, readTapServers, summarize, withLiveStatus, respondPermission, stopSession, sendToSession, nudgeSession, RETRY_MESSAGE } from './lib/sessions.mjs';
+import { listSessions, listPending, readTapServers, summarize, withLiveStatus, readUsage, respondPermission, stopSession, sendToSession, nudgeSession, RETRY_MESSAGE } from './lib/sessions.mjs';
 import { createSelfUpdater } from './lib/selfupdate.mjs';
 import { createStt } from './lib/stt.mjs';
 import { buildPrompt } from './lib/vocab.mjs';
@@ -37,6 +37,7 @@ const WORK_TIMEOUT_MS = 1500;                         // per tap socket, and the
 const WORK_POLL_MS = 30 * 1000;                       // background refresh while a ZCode server is live
 const WORK_POLL_ACTIVE_MS = 10 * 1000;                // the same, while a conversation is running: follow the turn
 const ADDRESS_POLL_MS = 10 * 1000;                    // how often the network is re-checked (Wi-Fi joins, Tailscale starts)
+const USAGE_TTL_MS = 60 * 1000;                       // the agent is asked for token usage at most this often
 const WORK_SETTLE_MS = 1000;                          // after a menu action, before the refresh + reopen
 const PANEL_WIDTH = 340;                              // the panel that opens under the menu bar icon
 const PANEL_REOPEN_MS = 250;                          // a tray click this soon after a blur-hide is the click that closed it
@@ -104,7 +105,8 @@ async function start() {
     let releaseCheck = null;
     let updating = false;                              // one engine job (update or rebuild) at a time
     // What ZCode is doing right now, read from the tap sockets; the menu only ever sees the cached value.
-    let work = { lines: [], more: 0, counts: { working: 0, waiting: 0, failed: 0 }, pending: {} };
+    let work = { lines: [], more: 0, counts: { working: 0, waiting: 0, failed: 0 }, pending: {}, usage: null };
+    let usageCache = { at: 0, usage: null };           // the last answer from the agent, good for a minute
     let workActive = 0;                                // the active count last logged, so a change logs once
     let workRefresh = null;
     let workPoll = null;
@@ -333,6 +335,16 @@ async function start() {
       };
     }
 
+    // Token usage for the footer: asked at most once a minute, and only from a refresh tick (the
+    // background poll, an open panel or a menu action). A dead or silent tap keeps the last value.
+    async function readUsageCached() {
+      if (Date.now() - usageCache.at < USAGE_TTL_MS) return usageCache.usage;
+      let usage = null;
+      try { usage = await readUsage({ timeoutMs: WORK_TIMEOUT_MS }); } catch { usage = null; }
+      usageCache = { at: Date.now(), usage };
+      return usage;
+    }
+
     // One shared listing across every live ZCode server (1.5 s per socket, never twice at once). The
     // menu and the tooltip read only the cached `work`, so a slow refresh keeps the previous lines.
     function refreshSessions() {
@@ -356,7 +368,8 @@ async function start() {
               (pending[request.sessionId] ??= []).push(request);
             }
           }
-          work = await withMeasures({ ...summary, pending });
+          const usage = await readUsageCached();
+          work = await withMeasures({ ...summary, pending, usage });
           const active = work.counts.working + work.counts.waiting + work.counts.failed;
           if (active !== workActive) {
             workActive = active;
@@ -684,6 +697,8 @@ async function start() {
         return buildPanelModel({
           running: !!(relay?.status().running),
           phones: devices.length,
+          phoneList: devices.map(d => ({ id: d.id, name: d.name, connected: d.connected === true, lastSeen: Number(d.pairedAt) || 0 })),
+          usage: work.usage ?? null,
           addresses,
           addressId: chosen().id,
           launchAtLogin: settings.launchAtLogin,
@@ -827,6 +842,8 @@ async function start() {
         if (p.key === 'keepAwake') actions.toggleKeepAwake();
         else if (p.key === 'relayEnabled') actions.toggleRelay();
         else if (p.key === 'launchAtLogin') actions.toggleLaunchAtLogin();
+      } else if (name === 'removePhone') {
+        if (typeof p.id === 'string' && p.id) actions.revoke(p.id);       // the popover's two-click remove
       } else if (name === 'foldFinished') {
         actions.toggleFoldFinished();
       } else if (name === 'setVoiceLanguage') {

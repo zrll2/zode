@@ -45,7 +45,7 @@ function fakeUpstream() {
   const tapDir = path.join(home, 'tap'); fs.mkdirSync(tapDir);
   const sockPath = path.join(tapDir, 'upstream.sock');
   const received = [];
-  let sock = null, beginSession = null, commitSeq = 0;
+  let sock = null, beginSession = null, commitSeq = 0, pendingAsks = 0;
   const answers = {
     'session/resume': () => ({}),
     'v4/attachment/begin': (m) => { beginSession = m.params.sessionId; return { uploadId: m.params.uploadId, state: 'staging', nextChunkIndex: 0 }; },
@@ -59,7 +59,11 @@ function fakeUpstream() {
       while ((i = buf.indexOf('\n')) >= 0) {
         const l = buf.slice(0, i); buf = buf.slice(i + 1); if (!l.trim()) continue;
         const m = JSON.parse(l);
-        if (m.method === 'tap/pending') s.write(JSON.stringify({ id: m.id, tapReply: true, result: { pending: [] } }) + '\n');
+        if (m.method === 'tap/pending') {
+          pendingAsks += 1;
+          const answer = answers['tap/pending'];
+          s.write(JSON.stringify({ id: m.id, tapReply: true, result: answer ? answer(m) : { pending: [] } }) + '\n');
+        }
         else {
           received.push(m);
           const answer = answers[m.method];
@@ -72,6 +76,7 @@ function fakeUpstream() {
   fs.writeFileSync(path.join(tapDir, `${process.pid}.json`), JSON.stringify({ pid: process.pid, cwd: '/tmp/fake-workspace', sock: sockPath }));
   return {
     home, tapDir, received,
+    get pendingAsks() { return pendingAsks; },                      // how often the relay asked what is still pending
     answer: (method, fn) => { answers[method] = fn; },
     send: (o) => sock.write(JSON.stringify(o) + '\n'),                                              // upstream -> relay
     respond: (m, result) => sock.write(JSON.stringify({ id: m.id, tapReply: true, result }) + '\n'),
@@ -221,14 +226,15 @@ test('listDevices after pairing; revokeDevice removes it and closes the live soc
     const p = relay.createPairing();
     const { id, token } = await (await pair(port, p.code, 'test-phone')).json();
     const devs = relay.listDevices();
-    assert.deepEqual(devs, [{ id, name: 'test-phone', pairedAt: devs[0].pairedAt }]);
-    assert.deepEqual(Object.keys(devs[0]).sort(), ['id', 'name', 'pairedAt']);   // no token hash leaks
+    assert.deepEqual(devs, [{ id, name: 'test-phone', pairedAt: devs[0].pairedAt, connected: false }]);
+    assert.deepEqual(Object.keys(devs[0]).sort(), ['connected', 'id', 'name', 'pairedAt']);   // no token hash leaks
 
     const { ws, ready } = await authed(`ws://127.0.0.1:${port}`, token);
     assert.equal(ready.device, id);
     assert.equal(ready.protocol, PROTOCOL);                                  // the phone uses this to know which features this Mac supports
     assert.equal(PROTOCOL, 2);
     assert.equal(relay.status().clients, 1);
+    assert.equal(relay.listDevices()[0].connected, true);                    // the authed socket says so
     const closed = new Promise((r) => ws.on('close', (code) => r(code)));
 
     assert.equal(relay.revokeDevice(id), true);
@@ -345,6 +351,58 @@ test('session/list replies carry the live truth: running after prompt_started, i
     assert.equal((await askList(125)).status, 'idle');
     ws.close();
   } finally { await relay.stop(); await up.close(); }
+});
+
+test('the relay reconciles its pending list with what the wrapper still holds', async () => {
+  const port = await freePort();
+  const up = fakeUpstream();
+  const relay = createRelay({ port, stateDir: path.join(up.home, 'state'), tapDir: up.tapDir, log: silent, pendingSyncMs: 60 });
+  await relay.start();
+  try {
+    await waitFor(() => relay.status().upstreams === 1);
+    const { token } = await (await pair(port, relay.createPairing().code, 'phone')).json();
+    const { ws } = await authed(`ws://127.0.0.1:${port}`, token);
+    const until = async (fn, ms = 2000) => { const end = Date.now() + ms; while (Date.now() < end) { const v = await fn(); if (v) return v; await sleep(25); } throw new Error('condition not met in time'); };
+    const askPending = async () => {
+      const resP = nextMessage(ws, (m) => m.type === 'pending');
+      ws.send(JSON.stringify({ type: 'pending' }));
+      return (await resP).pending;
+    };
+    const sid = 'sess_' + 'r'.repeat(85);                               // over 80 characters: the sqlite activity lookup skips it
+
+    // The wrapper holds one old request: a reconcile brings it to the relay and the phone sees it.
+    up.answer('tap/pending', () => ({ pending: [{ id: 'req-1', method: 'interaction/requestPermission', params: { sessionId: sid, toolName: 'Bash' }, at: Date.now() - 10_000 }] }));
+    await until(async () => (await askPending()).length === 1);
+
+    // The session's list said waiting while the request stood, and stops once the wrapper's list is empty.
+    let lists = 0;
+    const askList = async (id) => {
+      const resP = nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === id);
+      ws.send(JSON.stringify({ type: 'rpc', id, method: 'session/list', params: {} }));
+      await waitFor(() => up.received.filter(m => m.method === 'session/list').length === lists + 1);
+      const req = up.received.filter(m => m.method === 'session/list')[lists];
+      lists += 1;
+      up.respond(req, { sessions: [{ sessionId: sid, status: 'idle', updatedAt: 123 }] });
+      return (await resP).result.sessions[0];
+    };
+    assert.equal((await askList(131)).status, 'waiting');
+    up.answer('tap/pending', () => ({ pending: [] }));                  // the turn was stopped; the truth is empty
+    await until(async () => (await askPending()).length === 0);         // the ghost is gone within a couple of intervals
+    assert.equal((await askList(132)).status, 'idle');                  // and the list no longer says waiting
+
+    // A request that just arrived as an event survives a reconcile that does not list it.
+    up.send({ id: 'req-2', method: 'interaction/requestPermission', params: { sessionId: sid, toolName: 'Edit' } });
+    await until(async () => (await askPending()).some(p => p.id === 'req-2'));
+    await sleep(200);                                                   // more than three reconcile intervals
+    assert.deepEqual((await askPending()).map(p => p.id), ['req-2']);   // younger than 5 s: kept
+
+    // stop() leaves no timer behind: no further tap/pending goes out.
+    const asks = up.pendingAsks;
+    await relay.stop();
+    await sleep(250);                                                   // more than three reconcile intervals
+    assert.equal(up.pendingAsks, asks);
+    ws.close();
+  } finally { await up.close(); }
 });
 
 test('checkPolicy: rename/upload session ids, upload file rules, send attachments, usage ranges, no raw commands', () => {

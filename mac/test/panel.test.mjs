@@ -99,9 +99,11 @@ test('busy: every need kind, red before amber, working rows, finished split by a
   assert.equal(ask.waiting, '5 min');
   assert.equal(ask.sessionId, 'a1');
   assert.equal(ask.sock, '/sock');
+  assert.deepEqual([ask.more, ask.same], [1, 0]);     // one other permission, none with the same command (the question does not count)
   assert.equal(m.needs[2].kind, 'question');          // the question behind the permissions wins nothing
-  assert.equal(m.needs[2].ask, 'Needs an answer in ZCode');
+  assert.equal(m.needs[2].ask, 'Waiting for an answer. If this task was started by a script, stop it here.');
   assert.equal('requestId' in m.needs[2], false);
+  assert.equal('more' in m.needs[2], false);
   assert.equal(m.needs[3].ask, 'No activity for 12 min. It may be stuck.');
   assert.equal(m.needs[3].waiting, '12 min');
   assert.deepEqual(m.working, [{ id: 'w1', project: 'web', doing: 'Working', t: '3 min' }]);
@@ -120,12 +122,74 @@ test('a waiting session with only a question — or nothing pending — still as
     work: { lines: [line({ id: 'a', light: 'amber', status: 'Waiting for you', at: NOW - min })], pending: { a: [perm({ kind: 'question', summary: '' })] } },
   }), NOW);
   assert.equal(withQuestion.needs[0].kind, 'question');
-  assert.equal(withQuestion.needs[0].ask, 'Needs an answer in ZCode');
+  assert.equal(withQuestion.needs[0].ask, 'Waiting for an answer. If this task was started by a script, stop it here.');
   const withNothing = buildPanelModel(input({
     work: { lines: [line({ id: 'b', light: 'amber', status: 'Waiting for you', at: NOW - min })] },
   }), NOW);
   assert.equal(withNothing.needs[0].kind, 'question');
   assert.equal(withNothing.needs[0].waiting, '1 min');
+});
+
+test('repeated requests: more counts the others, same counts identical commands, none with a single request', () => {
+  const perms = (summary, requestId) => perm({ requestId, summary });
+  const loop = buildPanelModel(input({
+    work: { lines: [line({ id: 'a', light: 'amber', status: 'Waiting for you' })],
+      pending: { a: [perms('Run: npm test', '1'), perms('Run: npm test', '2'), perms('Run: npm test', '3'), perms('Run: npm install', '4')] } },
+  }), NOW);
+  assert.equal(loop.needs.length, 1);
+  assert.equal(loop.needs[0].kind, 'ask');
+  assert.deepEqual([loop.needs[0].more, loop.needs[0].same], [3, 2]);   // three others, two of them the same command
+  const solo = buildPanelModel(input({
+    work: { lines: [line({ id: 'a', light: 'amber', status: 'Waiting for you' })], pending: { a: [perms('Run: npm test', '1')] } },
+  }), NOW);
+  assert.deepEqual([solo.needs[0].more, solo.needs[0].same], [0, 0]);   // one request: nothing to group
+  const identified = buildPanelModel(input({                            // no summary: the tool name is the display text
+    work: { lines: [line({ id: 'a', light: 'amber', status: 'Waiting for you' })],
+      pending: { a: [perm({ requestId: '1', toolName: 'Bash' }), perm({ requestId: '2', toolName: 'Bash' })] } },
+  }), NOW);
+  assert.deepEqual([identified.needs[0].more, identified.needs[0].same], [1, 1]);
+});
+
+test('phoneList: sanitised, newest activity first, capped at 12, junk ignored, a label for every state', () => {
+  const filler = Array.from({ length: 9 }, (_, i) => ({ id: 'p' + i, name: 'p' + i, connected: false, lastSeen: NOW - (i + 5) * min }));
+  const m = buildPanelModel(input({
+    phones: 3,
+    phoneList: [
+      { id: 'a', name: 'iphone', connected: true, lastSeen: NOW - min },
+      { id: 'b', name: 'ipad', connected: false, lastSeen: NOW - 90 * 1000 },
+      { id: 'c', name: 'watch', connected: false },                     // never seen anything: sorts last
+      null, 7, 'x', { nope: 1 }, { id: '', name: 'x' },
+      ...filler,
+    ],
+  }), NOW);
+  assert.equal(m.phoneList.length, 12);
+  assert.deepEqual(m.phoneList[0], { id: 'a', name: 'iphone', connected: true, lastSeen: NOW - min, when: 'Connected' });
+  assert.deepEqual(m.phoneList[1], { id: 'b', name: 'ipad', connected: false, lastSeen: NOW - 90 * 1000, when: 'Last seen 1 min' });
+  assert.equal(m.phoneList[2].id, 'p0');
+  assert.equal(m.phoneList[10].id, 'p8');
+  assert.deepEqual(m.phoneList[11], { id: 'c', name: 'watch', connected: false, lastSeen: null, when: 'Never connected' });
+  // more than a dozen known phones: exactly the newest twelve stay
+  const many = buildPanelModel(input({ phoneList: Array.from({ length: 15 }, (_, i) => ({ id: 'd' + i, name: 'd' + i, connected: false, lastSeen: NOW - i * min })) }), NOW);
+  assert.equal(many.phoneList.length, 12);
+  assert.deepEqual(many.phoneList.map(p => p.id), Array.from({ length: 12 }, (_, i) => 'd' + i));
+  assert.deepEqual(buildPanelModel(input({ phoneList: 'nope' }), NOW).phoneList, []);
+  assert.deepEqual(buildPanelModel(input({}), NOW).phoneList, []);
+});
+
+test('usage: sanitised into {today, week} with a formatted label, or null when missing or junk', () => {
+  const ok = buildPanelModel(input({ usage: { today: 172000000, week: 5810000000 } }), NOW);
+  assert.deepEqual(ok.usage, { today: 172000000, week: 5810000000 });
+  assert.equal(ok.usageLabel, 'Today 172M · 7 days 5.8B tokens');
+  const small = buildPanelModel(input({ usage: { today: 1500, week: 999 } }), NOW);
+  assert.equal(small.usageLabel, 'Today 1.5K · 7 days 999 tokens');
+  const round = buildPanelModel(input({ usage: { today: 1234.6, week: 2000000 } }), NOW);
+  assert.deepEqual(round.usage, { today: 1235, week: 2000000 });
+  assert.equal(round.usageLabel, 'Today 1.2K · 7 days 2M tokens');
+  assert.equal(buildPanelModel(input({ usage: null }), NOW).usage, null);
+  assert.equal(buildPanelModel(input({ usage: null }), NOW).usageLabel, null);
+  assert.equal(buildPanelModel(input({ usage: { today: 'x', week: -5 } }), NOW).usage, null);
+  assert.equal(buildPanelModel(input({ usage: { today: 10 } }), NOW).usageLabel, null);   // week missing: no line at all
+  assert.equal(buildPanelModel(input({}), NOW).usageLabel, null);
 });
 
 test('summary titles for every combination, plural and singular', () => {

@@ -21,6 +21,17 @@ function relAge(ms) {
 const str = v => (typeof v === 'string' ? v : '');
 const ageOf = (line, now) => (Number.isFinite(line.at) ? Math.max(0, now - line.at) : NaN);
 
+// 1,500 -> 1.5K, 172,000,000 -> 172M, 5,810,000,000 -> 5.8B: at most one decimal, no trailing .0.
+function fmtTokens(n) {
+  if (n < 1000) return String(n);
+  for (const [suffix, size] of [['B', 1e9], ['M', 1e6], ['K', 1e3]]) {
+    if (n < size) continue;
+    const v = n / size;
+    const s = v >= 100 ? String(Math.round(v)) : v.toFixed(1);
+    return `${s.endsWith('.0') ? s.slice(0, -2) : s}${suffix}`;
+  }
+}
+
 // One "needs you" card from one amber or red line. A waiting conversation with a permission request
 // shows that request (the oldest one: listPending hands them over oldest first); a waiting one with
 // only a question — or nothing we can answer — points at ZCode; a quiet turn may be stuck; a failed
@@ -36,15 +47,20 @@ function needOf(line, pending, now) {
   if (line.light === 'red') return { ...base, kind: 'failed', ask: 'The last attempt failed.', waiting };
   if (line.light !== 'amber') return null;
   if (line.status === 'Waiting for you') {
-    const oldest = (Array.isArray(pending) ? pending : []).find(r => r && r.kind === 'permission');
+    const permissions = (Array.isArray(pending) ? pending : []).filter(r => r && r.kind === 'permission');
+    const oldest = permissions[0];
     if (oldest) {
+      const text = r => str(r.summary) || str(r.toolName) || 'Permission request';
+      const ask = text(oldest);
+      const others = permissions.slice(1);
       return {
         ...base, kind: 'ask',
-        ask: str(oldest.summary) || str(oldest.toolName) || 'Permission request',
-        waiting, requestId: oldest.requestId, risky: oldest.risky === true,
+        ask, waiting, requestId: oldest.requestId, risky: oldest.risky === true,
+        more: others.length,                                    // the loop case: one command asked over and over
+        same: others.filter(r => text(r) === ask).length,
       };
     }
-    return { ...base, kind: 'question', ask: 'Needs an answer in ZCode', waiting };
+    return { ...base, kind: 'question', ask: 'Waiting for an answer. If this task was started by a script, stop it here.', waiting };
   }
   const m = /^Quiet for (\d+) min/.exec(str(line.status));
   const n = m ? m[1] : null;
@@ -145,6 +161,21 @@ export function buildPanelModel(input, now = Date.now()) {
     // order (summarize already sorts each group newest first), and sort is stable, so this suffices.
     needs.sort((a, b) => (a.kind === 'failed' ? 0 : 1) - (b.kind === 'failed' ? 0 : 1));
 
+    // The paired phones, newest activity first, a dozen at most, each with its one-line state.
+    const phoneList = (Array.isArray(s.phoneList) ? s.phoneList : [])
+      .filter(p => p && typeof p === 'object' && str(p.id))
+      .map(p => ({ id: str(p.id), name: str(p.name) || 'Phone', connected: p.connected === true, lastSeen: Number.isFinite(p.lastSeen) && p.lastSeen > 0 ? Math.floor(p.lastSeen) : null }))
+      .sort((a, b) => (b.lastSeen ?? 0) - (a.lastSeen ?? 0))
+      .slice(0, 12)
+      .map(p => ({ ...p, when: p.connected ? 'Connected' : p.lastSeen != null ? `Last seen ${relAge(Math.max(0, t - p.lastSeen))}` : 'Never connected' }));
+
+    // The agent's token usage, already asked for by the app: shown as one muted line, or not at all.
+    const usageRaw = s.usage && typeof s.usage === 'object' ? s.usage : null;
+    const numTokens = v => { const n = Number(v); return Number.isFinite(n) && n >= 0 ? Math.round(n) : null; };
+    const today = numTokens(usageRaw?.today);
+    const week = numTokens(usageRaw?.week);
+    const usageOk = usageRaw != null && today !== null && week !== null;
+
     const n = needs.length;
     const w = working.length;
     const self = s.selfUpdate && typeof s.selfUpdate === 'object' ? s.selfUpdate : {};
@@ -161,6 +192,9 @@ export function buildPanelModel(input, now = Date.now()) {
       done,
       earlier,
       phones: Number.isFinite(s.phones) && s.phones >= 0 ? Math.floor(s.phones) : 0,
+      phoneList,
+      usage: usageOk ? { today, week } : null,
+      usageLabel: usageOk ? `Today ${fmtTokens(today)} · 7 days ${fmtTokens(week)} tokens` : null,
       connected,
       settings: {
         keepAwake: s.keepAwake === true,
@@ -184,6 +218,9 @@ export function buildPanelModel(input, now = Date.now()) {
       banner: null,
       needs: [], working: [], done: [], earlier: [],
       phones: 0,
+      phoneList: [],
+      usage: null,
+      usageLabel: null,
       connected: false,
       settings: {
         keepAwake: false, relayEnabled: false, launchAtLogin: false, foldFinished: false,

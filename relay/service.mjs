@@ -107,6 +107,7 @@ export function createRelay(opts = {}) {
   const stateDir = opts.stateDir || path.join(HOME, '.zode', 'relay');
   const tapDir = opts.tapDir || path.join(HOME, '.zcode-tap');
   const codeTtlMs = opts.codeTtlMs ?? CODE_TTL_MS;
+  const pendingSyncMs = Number.isFinite(opts.pendingSyncMs) ? Math.max(0, opts.pendingSyncMs) : 10_000;   // how often the pending list is reconciled with the wrapper's truth; 0 disables
   const log = opts.log ?? console;
   const stt = opts.stt ?? null;               // the host's speech engine ({transcribe, status, defaultLanguage}); absent -> voice-off
   const sttLimiter = createLimiter();         // per device: one transcribe in flight, at most 20 per minute
@@ -123,7 +124,7 @@ export function createRelay(opts = {}) {
   const pendingReq = new Map();      // `${pid}:${id}` -> {server, id, method, params, at}  (permission / user-input requests waiting for an answer)
   const listeners = new Map();        // event -> Set<fn>
   let relayId = 0, seq = 0;
-  let servers = [], wss = null, syncTimer = null, statusTimer = null;
+  let servers = [], wss = null, syncTimer = null, statusTimer = null, pendingTimer = null;
   let running = false;
 
   // What is really running, from the event stream the servers already send: session/list keeps
@@ -170,13 +171,49 @@ export function createRelay(opts = {}) {
       sock.write(JSON.stringify({ id: sid, method: 'tap/pending', params: {} }) + '\n');
     }
   }
+
+  // Ask one server what it still holds as pending — the same internal round-trip the first sync uses.
+  function requestPending(pid) {
+    const u = upstream.get(pid);
+    if (!u) return;
+    const id = ++relayId;
+    routes.set(id, { internal: true, pid });
+    try { u.sock.write(JSON.stringify({ id, method: 'tap/pending', params: {} }) + '\n'); } catch {}
+  }
+
+  // The wrapper's own pending list is the truth: events go stale when a turn is stopped or cancelled
+  // and its request vanishes without a tap/resolved. Add what the reply lists and the relay does not
+  // know yet, drop what vanished — but only requests old enough that they cannot have arrived while
+  // the question was in flight (5 s) — then tell the running tracker. Never throws; a missing or
+  // garbled reply changes nothing.
+  function reconcilePending(pid, pending) {
+    try {
+      if (!Array.isArray(pending)) return;
+      const now = Date.now();
+      const listed = new Set();
+      for (const p of pending) {
+        if (!p || typeof p !== 'object' || p.id == null) continue;
+        const key = `${pid}:${p.id}`;
+        listed.add(String(p.id));
+        if (!pendingReq.has(key)) pendingReq.set(key, { server: pid, ...p, seenAt: now });
+      }
+      const cutoff = now - 5_000;
+      for (const [key, p] of pendingReq) {
+        if (p.server !== pid || listed.has(String(key.slice(String(pid).length + 1)))) continue;
+        const at = Number.isFinite(p.at) && p.at > 1e12 ? p.at : p.seenAt ?? now;   // when the request really became known
+        if (at < cutoff) pendingReq.delete(key);
+      }
+      syncPending();
+    } catch { /* the next round tries again */ }
+  }
+
   function fromUpstream(pid, line) {
     let m; try { m = JSON.parse(line); } catch { return; }
     live.observe(m);                                                // every line feeds the running tracker; it ignores what is not session traffic
     if (m.id !== undefined && !m.method) {                          // reply
       if (!m.tapReply) return;                                      // copy of a desktop reply
       const r = routes.get(m.id); if (!r) return; routes.delete(m.id);
-      if (r.internal) { for (const p of m.result?.pending ?? []) pendingReq.set(`${r.pid}:${p.id}`, { server: r.pid, ...p }); syncPending(); return; }
+      if (r.internal) { reconcilePending(r.pid, m.result?.pending); return; }
       if (r.internalCall) {
         clearTimeout(r.timer);
         const err = m.error ?? (m.result?.status === 'rejected' ? m.result : m.result?.error);
@@ -193,7 +230,8 @@ export function createRelay(opts = {}) {
     }
     if (m.method === 'startup/storageState' || m.method === 'process/mcpTelemetry' || m.method?.startsWith('v4/telemetry')) return;
     if (m.method && m.id !== undefined && /^interaction\/request(Permission|UserInput)$/.test(m.method)) {
-      pendingReq.set(`${pid}:${m.id}`, { server: pid, id: m.id, method: m.method, params: m.params, at: Date.now() });
+      const now = Date.now();
+      pendingReq.set(`${pid}:${m.id}`, { server: pid, id: m.id, method: m.method, params: m.params, at: now, seenAt: now });
       syncPending();
     }
     if (m.method === 'tap/resolved') { pendingReq.delete(`${pid}:${m.params?.id}`); syncPending(); }
@@ -255,7 +293,11 @@ export function createRelay(opts = {}) {
     const payload = JSON.stringify({ u: first.replace(/^ws/, 'http'), urls, w: first, c: code });
     return { code, expiresAt, publicUrl: first, publicUrls: urls, payload };
   }
-  function listDevices() { return readJson(DEVICES, []).map(({ id, name, pairedAt }) => ({ id, name, pairedAt })); }
+  function listDevices() {
+    const live = new Set();
+    for (const c of clients) if (c.authed && c.device && c.device.id != null) live.add(c.device.id);
+    return readJson(DEVICES, []).map(({ id, name, pairedAt }) => ({ id, name, pairedAt, connected: live.has(id) }));
+  }
   function revokeDevice(id) {
     const devs = readJson(DEVICES, []); const next = devs.filter(d => d.id !== id);
     if (next.length === devs.length) return false;
@@ -432,6 +474,10 @@ export function createRelay(opts = {}) {
       return { host, srv };
     });
     syncTimer = setInterval(syncUpstream, 2000); syncUpstream();
+    if (pendingSyncMs > 0) {                                        // the wrapper's truth, checked regularly
+      pendingTimer = setInterval(() => { for (const pid of [...upstream.keys()]) requestPending(pid); }, pendingSyncMs);
+      pendingTimer.unref?.();
+    }
     return new Promise((resolve, reject) => {
       let failed = false, listening = 0;
       const boom = async err => {                     // the first bind error closes every other listener, as a failed start always did
@@ -454,10 +500,11 @@ export function createRelay(opts = {}) {
   }
 
   async function stop() {
-    const all = servers, w = wss, t = syncTimer;
-    if (!running && all.length === 0 && !w && !t) return;           // safe to call twice
-    running = false; servers = []; wss = null; syncTimer = null;
+    const all = servers, w = wss, t = syncTimer, pt = pendingTimer;
+    if (!running && all.length === 0 && !w && !t && !pt) return;    // safe to call twice
+    running = false; servers = []; wss = null; syncTimer = null; pendingTimer = null;
     if (t) clearInterval(t);
+    if (pt) clearInterval(pt);
     for (const u of upstream.values()) u.sock.destroy();
     upstream.clear();
     routes.clear(); pendingReq.clear(); live.setPending([]);

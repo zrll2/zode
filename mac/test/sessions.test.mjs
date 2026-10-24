@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { readTapServers, listSessions, listPending, describeSession, summarize, summarizeRequest, respondPermission, stopSession, sendToSession, nudgeSession, withLiveStatus, NUDGE_MESSAGE } from '../lib/sessions.mjs';
+import { readTapServers, listSessions, listPending, readUsage, describeSession, summarize, summarizeRequest, respondPermission, stopSession, sendToSession, nudgeSession, withLiveStatus, NUDGE_MESSAGE } from '../lib/sessions.mjs';
 import { createLiveStatus } from '../../relay/live.mjs';
 
 const NOW = 1_700_000_000_000;
@@ -241,6 +241,49 @@ test('nudgeSession: stop first, then the continue message, on the same socket', 
     ['/x', { id: 1, method: 'session/stop', params: { sessionId: 's1' } }],
     ['/x', { id: 1, method: 'session/send', params: { sessionId: 's1', content: NUDGE_MESSAGE } }],
   ]);
+});
+
+test('readUsage: week from the summary, today from the last heatmap day that matches the local date', async () => {
+  const dir = fs.mkdtempSync(path.join('/tmp', 'zode-sessions-'));
+  fs.writeFileSync(path.join(dir, '1.json'), JSON.stringify({ pid: process.pid, sock: '/a', cwd: '/w' }));
+  const now = new Date('2026-10-24T12:00:00');
+  const connect = async (sock, request) => {
+    assert.deepEqual(JSON.parse(request), { id: 1, method: 'usage/stats', params: { range: '7d' } });
+    return [{ tapReply: true, id: 1, result: {
+      summary: { totalTokens: 5810000000 },
+      heatmap: { weeks: [{ days: [{ date: '2026-10-22', totalTokens: 5 }, null, { date: '2026-10-23', totalTokens: 100 }, { date: '2026-10-24', totalTokens: 172000000 }] }] },
+    } }];
+  };
+  assert.deepEqual(await readUsage({ dir, timeoutMs: 50, connect, now }), { today: 172000000, week: 5810000000 });
+
+  // the agent's last day is not the Mac's today (another time zone, or nothing yet today): today is 0
+  const behind = async () => [{ tapReply: true, id: 1, result: {
+    summary: { totalTokens: 42 },
+    heatmap: { weeks: [{ days: [{ date: '2026-10-23', totalTokens: 100 }] }] },
+  } }];
+  assert.deepEqual(await readUsage({ dir, timeoutMs: 50, connect: behind, now }), { today: 0, week: 42 });
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('readUsage: hangs and garble are skipped, the first usable answer wins, nothing at all gives null', async () => {
+  const dir = fs.mkdtempSync(path.join('/tmp', 'zode-sessions-'));
+  for (const [name, sock] of [['1.json', '/a'], ['2.json', '/b'], ['3.json', '/c']]) {
+    fs.writeFileSync(path.join(dir, name), JSON.stringify({ pid: process.pid, sock, cwd: '/w' }));
+  }
+  const now = new Date('2026-10-24T12:00:00');
+  const asked = [];
+  const connect = async (sock) => {
+    asked.push(sock);
+    if (sock === '/a') return new Promise(() => {});                     // never answers: its deadline drops it
+    if (sock === '/b') return [{ tapReply: true, id: 1, result: { nonsense: true } }];
+    return [{ tapReply: true, id: 1, result: { summary: { totalTokens: 7 }, heatmap: { weeks: [{ days: [null, { date: '2026-10-24', totalTokens: 3 }] }] } } }];
+  };
+  assert.deepEqual(await readUsage({ dir, timeoutMs: 30, connect, now }), { today: 3, week: 7 });
+  assert.equal(asked.length, 3);                                         // every server was asked, in parallel
+  const garbage = async () => [{ tapReply: true, id: 1, result: { summary: {} } }];
+  assert.equal(await readUsage({ dir, timeoutMs: 30, connect: garbage, now }), null);
+  assert.equal(await readUsage({ dir: '/tmp/zode-sessions-missing', timeoutMs: 20, connect, now }), null);
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 // ---- the live running status -------------------------------------------------------------------

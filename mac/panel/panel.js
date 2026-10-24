@@ -11,6 +11,7 @@ const once = (label, cls, fn) => { const b = btn(label, cls, () => { b.disabled 
 const MAX_HEIGHT = 560;
 let model = null;
 let sheetOn = false;
+let phonesOpen = false;                     // the paired phones popover above the footer
 let finishedOpen = null;                     // null = follow the foldFinished setting; else the user's choice
 let olderOpen = false;
 let toastTimer = null;
@@ -47,6 +48,8 @@ function render() {
   setSwitch('swLogin', s.launchAtLogin === true);
   renderAddresses(s.addresses ?? [], s.addressId);
   renderVoice(model.voice);
+  renderPhones(model.phoneList ?? []);
+  $('usage').textContent = model.usageLabel ?? '';
   $('version').textContent = s.version ? `Zode ${s.version}` : 'Zode';
 
   reportHeight();
@@ -84,6 +87,10 @@ function needCard(n) {
   }
   card.append(head);
   card.append(n.kind === 'ask' ? el('code', null, n.ask ?? '') : el('p', null, n.ask ?? ''));
+  if (n.kind === 'ask' && n.more > 0) {
+    card.append(el('small', 'moreline', Number(n.same) === Number(n.more) ? `+${n.more} more, the same command` : `+${n.more} more waiting`));
+  }
+  const stopTask = () => once('Stop task', 'btn', () => { act('stop', { sessionId: n.sessionId, sock: n.sock }); toast(`Stopped ${project}.`); });
   const acts = el('div', 'acts');
   if (n.kind === 'ask') {
     acts.append(
@@ -95,10 +102,14 @@ function needCard(n) {
         act('deny', { requestId: n.requestId, sock: n.sock });
         toast(`Denied. ${project} is told to carry on without it.`);
       }),
-      btn('Show in ZCode', 'btn quiet', () => act('show')),
     );
+    if (n.more >= 2) acts.append(stopTask());                     // a repeated-request loop needs a way out
+    acts.append(btn('Show in ZCode', 'btn quiet', () => act('show')));
   } else if (n.kind === 'question') {
-    acts.append(btn('Answer in ZCode', 'btn pri', () => act('show')));
+    acts.append(
+      btn('Answer in ZCode', 'btn pri', () => act('show')),
+      stopTask(),
+    );
   } else if (n.kind === 'stalled') {
     acts.append(
       once('Nudge', 'btn pri', () => { act('nudge', { sessionId: n.sessionId, sock: n.sock }); toast(`Nudged ${project}.`); }),
@@ -196,6 +207,48 @@ function renderAddresses(addresses, addressId) {
   if (addresses.some(a => a.id === addressId)) sel.value = addressId;
 }
 
+// The paired phones popover: one row per phone (live dot, name, last seen), a pair button, and a
+// two-click remove. Only draws; every action goes through act().
+function renderPhones(phones) {
+  const pop = $('phonesPop');
+  pop.textContent = '';
+  const list = el('div');
+  if (!phones.length) list.append(el('div', 'pempty', 'No phone paired yet.'));
+  for (const p of phones) {
+    const row = el('div', 'prow');
+    row.append(el('span', 'dot' + (p.connected === true ? '' : ' off')));
+    const info = el('div', 'pinfo');
+    info.append(el('b', null, p.name ?? ''));
+    info.append(el('small', null, p.when ?? ''));
+    row.append(info);
+    row.append(removeBtn(p));
+    list.append(row);
+  }
+  pop.append(list, btn('Pair a new phone', 'btn pri pairall', () => { setPhones(false); act('phones'); }));
+}
+
+// Two clicks to remove a phone: the first arms the button for 3 s, the second revokes it.
+function removeBtn(p) {
+  const b = el('button', 'premove', 'Remove');
+  let armedUntil = 0;
+  b.addEventListener('click', () => {
+    if (Date.now() >= armedUntil) {
+      armedUntil = Date.now() + 3000;
+      b.textContent = 'Sure?';
+      setTimeout(() => { if (b.isConnected) { b.textContent = 'Remove'; armedUntil = 0; } }, 3000);
+      return;
+    }
+    b.disabled = true;
+    act('removePhone', { id: p.id });
+  });
+  return b;
+}
+
+function setPhones(open) {
+  phonesOpen = open;
+  $('phonesPop').hidden = !open;
+}
+
 // The Voice group in the settings sheet: the language segmented control, the model's state in plain
 // words, and the download button (self-disabled while downloading; replaced by the missing-engine
 // note when the binary is not there). Only draws — the app pushes a fresh model after every action.
@@ -249,6 +302,12 @@ $('refresh').addEventListener('click', () => {
 });
 $('gear').addEventListener('click', () => sheet(!sheetOn));
 $('back').addEventListener('click', () => sheet(false));
+$('phones').addEventListener('click', () => setPhones(!phonesOpen));
+document.addEventListener('click', e => {
+  if (!phonesOpen) return;                                        // a click outside the popover closes it; the chip toggles
+  if ($('phonesPop').contains(e.target) || $('phones').contains(e.target)) return;
+  setPhones(false);
+});
 $('swAwake').addEventListener('click', () => flip('swAwake', 'keepAwake'));
 $('swRelay').addEventListener('click', () => flip('swRelay', 'relayEnabled'));
 $('swLogin').addEventListener('click', () => flip('swLogin', 'launchAtLogin'));
@@ -268,7 +327,8 @@ $('phones').addEventListener('click', () => act('phones'));
 $('openZ').addEventListener('click', () => act('openZcode'));
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
-  if (sheetOn) sheet(false);                 // the sheet steps back first; Escape again closes the panel
+  if (phonesOpen) setPhones(false);          // the popover steps back first
+  else if (sheetOn) sheet(false);            // the sheet steps back first; Escape again closes the panel
   else act('close');
 });
 
