@@ -8,6 +8,7 @@ import type {
 } from "./protocol";
 import { nextDelay } from "./backoff";
 import { reduceApprovals, type ApprovalRequest } from "../approvals";
+import { sanitizeUrlList } from "../pairing";
 
 export type RelayStatus = "connecting" | "ready" | "reconnecting" | "closed";
 
@@ -29,6 +30,11 @@ export type SocketFactory = (url: string) => RelaySocket;
 
 export interface RelayClientOptions {
   url: string;
+  // Every known relay address (url included). The client races them and
+  // keeps whichever delivers ready first.
+  urls?: string[];
+  // Last good address; it gets a head start in every race.
+  preferred?: string;
   token: string;
   createSocket?: SocketFactory;
   rpcTimeoutMs?: number;
@@ -49,6 +55,10 @@ const AUTH_TIMEOUT_MS = 10_000;
 const CONNECT_TIMEOUT_MS = 30_000;
 const RESPOND_TIMEOUT_MS = 10_000;
 const EVENT_BUFFER_LIMIT = 500;
+// The preferred address races alone for this long before the rest join.
+const HEAD_START_MS = 2_500;
+const STAGGER_MS = 300;
+const URLS_CAP = 8;
 
 export class RelayClient {
   status: RelayStatus = "closed";
@@ -61,12 +71,18 @@ export class RelayClient {
   // "reconnecting", else null. retryNow() skips the wait.
   retryAt: number | null = null;
 
-  private readonly url: string;
+  private urlsValue: string[];
+  private preferred: string | null;
   private readonly token: string;
   private readonly createSocket: SocketFactory;
   private readonly rpcTimeoutMs: number;
 
-  private socket: RelaySocket | null = null;
+  private socket: RelaySocket | null = null; // the race winner
+  private racers = new Map<RelaySocket, string>();
+  private raceSettled = true;
+  private raceTimers: ReturnType<typeof setTimeout>[] = [];
+  private roundSize = 0;
+  private launchedCount = 0;
   private lastSeq: number | null = null;
   private attempts = 0;
   private stopped = true;
@@ -77,6 +93,7 @@ export class RelayClient {
   private eventCbs = new Set<(msg: RelayMessage, seq: number) => void>();
   private statusCbs = new Set<(status: RelayStatus) => void>();
   private approvalCbs = new Set<(list: ApprovalRequest[]) => void>();
+  private connectedCbs = new Set<(url: string, addresses: string[] | null) => void>();
   // Approval requests waiting on this phone (Ask first mode). Only emitted
   // when the set of keys actually changes.
   private approvalsValue: ApprovalRequest[] = [];
@@ -84,17 +101,59 @@ export class RelayClient {
 
   private rpcCounter = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  private authTimer: ReturnType<typeof setTimeout> | null = null;
   private connectGuard: ReturnType<typeof setTimeout> | null = null;
   private resolveConnect: (() => void) | null = null;
   private rejectConnect: ((err: Error) => void) | null = null;
 
   constructor(options: RelayClientOptions) {
-    this.url = options.url;
+    const seen = new Set<string>();
+    const urls: string[] = [];
+    for (const entry of options.urls && options.urls.length ? options.urls : [options.url]) {
+      if (typeof entry !== "string" || !entry || seen.has(entry)) continue;
+      seen.add(entry);
+      urls.push(entry);
+      if (urls.length >= URLS_CAP) break;
+    }
+    if (!seen.has(options.url)) urls.unshift(options.url);
+    this.urlsValue = urls;
+    this.preferred =
+      typeof options.preferred === "string" && seen.has(options.preferred)
+        ? options.preferred
+        : null;
     this.token = options.token;
     this.rpcTimeoutMs = options.rpcTimeoutMs ?? 60_000;
     this.createSocket =
       options.createSocket ?? ((url) => new WebSocket(url) as unknown as RelaySocket);
+  }
+
+  get relayProtocol(): number | undefined {
+    return this.relayProtocolValue;
+  }
+
+  get pendingApprovals(): ApprovalRequest[] {
+    return this.approvalsValue;
+  }
+
+  // Current candidate list, preferred first (what the next race will try).
+  get candidateUrls(): string[] {
+    return this.candidateOrder();
+  }
+
+  onApprovals(cb: (list: ApprovalRequest[]) => void): () => void {
+    this.approvalCbs.add(cb);
+    cb(this.approvalsValue);
+    return () => {
+      this.approvalCbs.delete(cb);
+    };
+  }
+
+  // Fires once per ready frame with the winning address and the relay's
+  // address list (null when the relay is too old to send one).
+  onConnected(cb: (url: string, addresses: string[] | null) => void): () => void {
+    this.connectedCbs.add(cb);
+    return () => {
+      this.connectedCbs.delete(cb);
+    };
   }
 
   // Resolves when the first `ready` frame arrives; rejects on 4003 or after
@@ -148,25 +207,10 @@ export class RelayClient {
 
   onStatus(cb: (status: RelayStatus) => void): () => void {
     this.statusCbs.add(cb);
-    cb(this.status);
+    // A fresh client is "closed" before its first connect; don't lead with it.
+    if (this.status !== "closed") cb(this.status);
     return () => {
       this.statusCbs.delete(cb);
-    };
-  }
-
-  get relayProtocol(): number | undefined {
-    return this.relayProtocolValue;
-  }
-
-  get pendingApprovals(): ApprovalRequest[] {
-    return this.approvalsValue;
-  }
-
-  onApprovals(cb: (list: ApprovalRequest[]) => void): () => void {
-    this.approvalCbs.add(cb);
-    cb(this.approvalsValue);
-    return () => {
-      this.approvalCbs.delete(cb);
     };
   }
 
@@ -216,21 +260,27 @@ export class RelayClient {
     this.send({ type: "servers" });
   }
 
-  // User-triggered immediate reconnect: clears the pending timer and opens a
-  // socket now. Attempt counter and backoff schedule stay untouched.
+  // User-triggered immediate reconnect: clears the pending timer and starts
+  // a new race now. A no-op while connected or while a race is in flight.
   retryNow() {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
     this.retryAt = null;
-    if (!this.stopped && !this.socket) this.openSocket();
+    if (this.stopped || this.socket) return;
+    if (!this.raceSettled && this.racers.size > 0) return;
+    this.openSocket();
   }
 
   close(): void {
     this.stopped = true;
     this.relayProtocolValue = undefined;
     this.setApprovals([]);
+    this.raceSettled = true;
+    this.clearRaceTimers();
+    for (const socket of this.racers.keys()) this.closeQuietly(socket);
+    this.racers.clear();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -252,51 +302,103 @@ export class RelayClient {
     this.setStatus("closed");
   }
 
-  private openSocket() {
-    this.setStatus(this.attempts === 0 ? "connecting" : "reconnecting");
-    const socket = this.createSocket(this.url);
-    this.socket = socket;
-    socket.onopen = () => {
-      this.authTimer = setTimeout(() => {
-        try {
-          socket.close(4000, "auth timeout");
-        } catch {}
-      }, AUTH_TIMEOUT_MS);
-      const frame: AuthFrame = { type: "auth", token: this.token };
-      if (this.lastSeq !== null) frame.since = this.lastSeq;
-      this.send(frame);
-    };
-    socket.onmessage = (ev) => this.handleData(ev.data);
-    socket.onerror = () => {
-      // onclose drives reconnection
-    };
-    socket.onclose = (ev) => {
-      if (this.socket !== socket) return;
-      this.handleClose(ev?.code);
-    };
+  private candidateOrder(): string[] {
+    if (!this.preferred || !this.urlsValue.includes(this.preferred)) return [...this.urlsValue];
+    return [this.preferred, ...this.urlsValue.filter((url) => url !== this.preferred)];
   }
 
-  private handleClose(code?: number) {
-    this.socket = null;
-    this.relayProtocolValue = undefined;
-    this.setApprovals([]);
-    if (this.authTimer) {
-      clearTimeout(this.authTimer);
-      this.authTimer = null;
-    }
-    if (this.connectGuard) {
-      clearTimeout(this.connectGuard);
-      this.connectGuard = null;
-    }
-    this.failPending(new Error("relay: disconnected"));
-    if (this.stopped) {
-      this.setStatus("closed");
+  private clearRaceTimers() {
+    for (const timer of this.raceTimers) clearTimeout(timer);
+    this.raceTimers = [];
+  }
+
+  private closeQuietly(socket: RelaySocket) {
+    try {
+      socket.close(1000, "lost race");
+    } catch {}
+  }
+
+  // One connection round: the preferred url races alone with a head start,
+  // then the rest join staggered. The first ready wins.
+  private openSocket() {
+    this.setStatus(this.attempts === 0 ? "connecting" : "reconnecting");
+    this.raceSettled = false;
+    this.racers.clear();
+    this.launchedCount = 0;
+    const order = this.candidateOrder();
+    this.roundSize = order.length;
+
+    const launch = (url: string) => {
+      if (this.raceSettled || this.stopped) return;
+      this.launchedCount += 1;
+      const socket = this.createSocket(url);
+      this.racers.set(socket, url);
+      socket.onopen = () => {
+        this.raceTimers.push(
+          setTimeout(() => {
+            try {
+              socket.close(4000, "auth timeout");
+            } catch {}
+          }, AUTH_TIMEOUT_MS),
+        );
+        const frame: AuthFrame = { type: "auth", token: this.token };
+        if (this.lastSeq !== null) frame.since = this.lastSeq;
+        this.sendOn(socket, frame);
+      };
+      socket.onmessage = (ev) => this.handleData(socket, url, ev.data);
+      socket.onerror = () => {
+        // onclose drives the outcome
+      };
+      socket.onclose = (ev) => this.handleRacerClose(socket, ev?.code);
+    };
+
+    order.forEach((url, index) => {
+      if (index === 0) {
+        launch(url);
+        return;
+      }
+      const delay = HEAD_START_MS + (index - 1) * STAGGER_MS;
+      this.raceTimers.push(
+        setTimeout(() => {
+          launch(url);
+        }, delay),
+      );
+    });
+  }
+
+  private handleRacerClose(socket: RelaySocket, code?: number) {
+    if (socket === this.socket) {
+      // The winner dropped after ready: roll straight into a new race.
+      this.handleClose(code);
       return;
     }
+    if (this.raceSettled) return; // a loser being cleaned up
+    this.racers.delete(socket);
     if (code === 4003) {
+      // A bad token is bad on every address: stop as today.
+      this.raceSettled = true;
+      this.clearRaceTimers();
+      for (const other of this.racers.keys()) this.closeQuietly(other);
+      this.racers.clear();
+      this.failPending(new Error("relay: pairing rejected (bad token)"));
       this.authFailed = true;
       this.stopped = true;
       this.rejectConnect?.(new Error("relay: pairing rejected (bad token)"));
+      this.setStatus("closed");
+      return;
+    }
+    if (this.racers.size === 0 && this.launchedCount >= this.roundSize) {
+      this.handleRoundFailed();
+    }
+  }
+
+  // Every candidate failed without a ready: fall back to the backoff loop.
+  private handleRoundFailed() {
+    if (this.raceSettled) return;
+    this.raceSettled = true;
+    this.clearRaceTimers();
+    this.failPending(new Error("relay: disconnected"));
+    if (this.stopped) {
       this.setStatus("closed");
       return;
     }
@@ -311,7 +413,58 @@ export class RelayClient {
     }, delay);
   }
 
-  private handleData(data: unknown) {
+  private handleClose(code?: number) {
+    this.socket = null;
+    this.racers.clear();
+    this.raceSettled = true;
+    this.clearRaceTimers();
+    this.relayProtocolValue = undefined;
+    this.setApprovals([]);
+    this.failPending(new Error("relay: disconnected"));
+    if (this.stopped) {
+      this.setStatus("closed");
+      return;
+    }
+    if (code === 4003) {
+      this.authFailed = true;
+      this.stopped = true;
+      this.rejectConnect?.(new Error("relay: pairing rejected (bad token)"));
+      this.setStatus("closed");
+      return;
+    }
+    this.openSocket();
+  }
+
+  // The first ready ends the race: the winner stays, every other socket is
+  // closed at once (their later close events are ignored, so the status
+  // never flickers and no reconnect cycle starts).
+  private settleRace(winner: RelaySocket) {
+    this.raceSettled = true;
+    this.clearRaceTimers();
+    this.socket = winner;
+    for (const [socket] of this.racers) {
+      if (socket === winner) continue;
+      this.racers.delete(socket);
+      this.closeQuietly(socket);
+    }
+  }
+
+  // The relay re-announces its addresses: replace the list, keeping the
+  // winner even if the relay no longer lists it.
+  private adoptAddresses(winnerUrl: string, addresses: string[]) {
+    const list: string[] = [];
+    const seen = new Set<string>();
+    const push = (entry: string) => {
+      if (seen.has(entry) || list.length >= URLS_CAP) return;
+      seen.add(entry);
+      list.push(entry);
+    };
+    for (const entry of addresses) push(entry);
+    if (!seen.has(winnerUrl)) push(winnerUrl);
+    this.urlsValue = list;
+  }
+
+  private handleData(socket: RelaySocket, url: string, data: unknown) {
     if (typeof data !== "string") return;
     let frame: RelayFrame;
     try {
@@ -322,23 +475,30 @@ export class RelayClient {
     if (!frame || typeof frame.type !== "string") return;
 
     if (frame.type === "ready") {
-      if (this.authTimer) {
-        clearTimeout(this.authTimer);
-        this.authTimer = null;
-      }
+      if (this.socket !== socket) this.settleRace(socket);
       this.attempts = 0;
       const protocol = (frame as { protocol?: unknown }).protocol;
       this.relayProtocolValue = typeof protocol === "number" ? protocol : undefined;
       this.setApprovals(reduceApprovals(this.approvalsValue, frame, Date.now()));
+      const rawAddresses = (frame as { addresses?: unknown }).addresses;
+      const addresses = sanitizeUrlList(rawAddresses);
+      if (addresses.length) this.adoptAddresses(url, addresses);
+      this.preferred = url;
       if (this.lastSeq === null && typeof frame.seq === "number") this.lastSeq = frame.seq;
       this.servers = Array.isArray(frame.servers) ? frame.servers : [];
+      for (const cb of this.connectedCbs) {
+        cb(url, addresses.length ? [...this.urlsValue] : null);
+      }
       if (this.connectGuard) {
         clearTimeout(this.connectGuard);
         this.connectGuard = null;
       }
       this.resolveConnect?.();
       this.setStatus("ready");
-    } else if (frame.type === "rpc-result") {
+      return;
+    }
+    if (this.socket !== socket) return; // frames from a losing socket
+    if (frame.type === "rpc-result") {
       const pending = this.pending.get(frame.id);
       if (!pending) return;
       this.pending.delete(frame.id);
@@ -368,10 +528,14 @@ export class RelayClient {
     this.pending.clear();
   }
 
-  private send(frame: PhoneFrame) {
+  private sendOn(socket: RelaySocket, frame: PhoneFrame) {
     try {
-      this.socket?.send(JSON.stringify(frame));
+      socket.send(JSON.stringify(frame));
     } catch {}
+  }
+
+  private send(frame: PhoneFrame) {
+    if (this.socket) this.sendOn(this.socket, frame);
   }
 
   private setStatus(status: RelayStatus) {

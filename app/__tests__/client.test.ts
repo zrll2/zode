@@ -1,8 +1,9 @@
-import { RelayClient, type SocketFactory } from "../src/relay/client";
+import { RelayClient, type RelayStatus, type SocketFactory } from "../src/relay/client";
 
 class MockSocket {
   url: string;
   sent: any[] = [];
+  closed: Array<number | undefined> = [];
   onopen: (() => void) | null = null;
   onmessage: ((ev: { data: unknown }) => void) | null = null;
   onclose: ((ev: { code?: number; reason?: string }) => void) | null = null;
@@ -16,8 +17,8 @@ class MockSocket {
     this.sent.push(JSON.parse(data));
   }
 
-  close(_code?: number, _reason?: string) {
-    // local close; tests drive the server side with drop()
+  close(code?: number, _reason?: string) {
+    this.closed.push(code);
   }
 
   open() {
@@ -42,6 +43,24 @@ function makeClient() {
   };
   const client = new RelayClient({ url: "ws://relay.test:8787", token: "tok", createSocket: factory });
   return { client, sockets };
+}
+
+function makeMultiClient(urls: string[], preferred?: string) {
+  const sockets: MockSocket[] = [];
+  const factory: SocketFactory = (url) => {
+    const socket = new MockSocket(url);
+    sockets.push(socket);
+    return socket as any;
+  };
+  const client = new RelayClient({
+    url: urls[0] ?? "ws://relay.test:8787",
+    urls,
+    preferred,
+    token: "tok",
+    createSocket: factory,
+  });
+  const byUrl = (url: string) => sockets.find((socket) => socket.url === url);
+  return { client, sockets, byUrl };
 }
 
 const READY = { type: "ready", device: "mac", servers: [{ pid: 1, cwd: "/tmp/proj" }], seq: 3 };
@@ -104,7 +123,7 @@ it("rejects an rpc after the timeout", async () => {
   client.close();
 });
 
-it("reconnects with backoff and sends since = last seen seq", async () => {
+it("re-races immediately when a live connection drops and resumes with since", async () => {
   jest.useFakeTimers();
   const { client, sockets } = makeClient();
   const connected = client.connect();
@@ -119,8 +138,26 @@ it("reconnects with backoff and sends since = last seen seq", async () => {
     msg: { method: "session/event", params: { type: "turn.started", payload: { input: "hi" } } },
   });
 
+  // a live drop rolls straight into a new race, no backoff wait
   sockets[0].drop(1006);
+  expect(sockets).toHaveLength(2);
+  sockets[1].open();
+  expect(sockets[1].sent[0]).toEqual({ type: "auth", token: "tok", since: 7 });
+
+  sockets[1].receive({ ...READY, seq: 8 });
+  expect(client.status).toBe("ready");
+  client.close();
+});
+
+it("falls back to backoff when a round fails without ready", async () => {
+  jest.useFakeTimers();
+  const { client, sockets } = makeClient();
+  const connected = client.connect();
+  sockets[0].open();
+  sockets[0].drop(1006); // never reached ready
+
   expect(client.status).toBe("reconnecting");
+  expect(sockets).toHaveLength(1);
 
   // first delay is jittered: 850 ms at minimum, 1150 ms at most
   jest.advanceTimersByTime(800);
@@ -129,9 +166,8 @@ it("reconnects with backoff and sends since = last seen seq", async () => {
   expect(sockets).toHaveLength(2);
 
   sockets[1].open();
-  expect(sockets[1].sent[0]).toEqual({ type: "auth", token: "tok", since: 7 });
-
-  sockets[1].receive({ ...READY, seq: 8 });
+  sockets[1].receive(READY);
+  await connected;
   expect(client.status).toBe("ready");
   client.close();
 });
@@ -323,4 +359,133 @@ it("respond times out after 10 s and refuses when not connected", async () => {
   jest.advanceTimersByTime(10_000);
   await assertion;
   client.close();
+});
+
+describe("address racing", () => {
+  it("connects over the preferred address with a head start", async () => {
+    jest.useFakeTimers();
+    const { client, sockets } = makeMultiClient(
+      ["ws://a:1", "ws://b:2", "ws://c:3"],
+      "ws://b:2",
+    );
+    const seen: RelayStatus[] = [];
+    client.onStatus((s) => seen.push(s));
+    const connectedUrls: string[] = [];
+    client.onConnected((url) => connectedUrls.push(url));
+
+    const connected = client.connect();
+    expect(sockets.map((socket) => socket.url)).toEqual(["ws://b:2"]); // head start
+    const winner = sockets[0]!;
+    winner.open();
+    winner.receive({ ...READY, addresses: ["ws://b:2", "ws://a:1"] });
+    await connected;
+
+    expect(client.status).toBe("ready");
+    expect(seen).toEqual(["connecting", "ready"]); // no flicker
+    expect(connectedUrls).toEqual(["ws://b:2"]);
+    jest.advanceTimersByTime(10_000);
+    expect(sockets).toHaveLength(1); // the losers never open
+    client.close();
+  });
+
+  it("moves on to the next address when the preferred one is dead", async () => {
+    jest.useFakeTimers();
+    const { client, sockets, byUrl } = makeMultiClient(["ws://a:1", "ws://b:2"], "ws://a:1");
+    const connected = client.connect();
+
+    const first = byUrl("ws://a:1")!;
+    first.open();
+    first.drop(1006); // dead before the head start ends
+    expect(client.status).toBe("connecting"); // still racing, not backing off
+
+    jest.advanceTimersByTime(2_500);
+    const second = byUrl("ws://b:2")!;
+    second.open();
+    second.receive(READY);
+    await connected;
+    expect(client.status).toBe("ready");
+    client.close();
+  });
+
+  it("closes losing sockets as soon as one address wins", async () => {
+    jest.useFakeTimers();
+    const { client, byUrl } = makeMultiClient(["ws://a:1", "ws://b:2"]);
+    const seen: RelayStatus[] = [];
+    client.onStatus((s) => seen.push(s));
+    const connected = client.connect();
+
+    const a = byUrl("ws://a:1")!;
+    a.open();
+    jest.advanceTimersByTime(2_500);
+    const b = byUrl("ws://b:2")!;
+    b.open();
+
+    a.receive(READY);
+    await connected;
+    expect(b.closed).toEqual([1000]); // closed immediately, "lost race"
+
+    b.drop(1006); // a loser's close event must change nothing
+    expect(client.status).toBe("ready");
+    expect(seen).toEqual(["connecting", "ready"]);
+    client.close();
+  });
+
+  it("backs off only after every candidate has failed", async () => {
+    jest.useFakeTimers();
+    const { client, sockets, byUrl } = makeMultiClient(["ws://a:1", "ws://b:2"]);
+    const connected = client.connect();
+
+    byUrl("ws://a:1")!.drop(1006); // the second candidate is not open yet
+    expect(client.status).toBe("connecting");
+
+    jest.advanceTimersByTime(2_500);
+    byUrl("ws://b:2")!.drop(1006);
+    expect(client.status).toBe("reconnecting");
+
+    jest.advanceTimersByTime(1_200);
+    expect(sockets).toHaveLength(3); // round two starts over the first url
+    sockets[2]!.open();
+    sockets[2]!.receive(READY);
+    await connected;
+    client.close();
+  });
+
+  it("stops on a 4003 from any candidate", async () => {
+    jest.useFakeTimers();
+    const { client, sockets, byUrl } = makeMultiClient(["ws://a:1", "ws://b:2"]);
+    const connected = client.connect();
+    connected.catch(() => {});
+
+    const a = byUrl("ws://a:1")!;
+    a.open();
+    a.drop(4003);
+    expect(client.status).toBe("closed");
+    expect(client.authFailed).toBe(true);
+
+    jest.advanceTimersByTime(60_000);
+    expect(sockets).toHaveLength(1); // the other candidate never launched
+    client.close();
+  });
+
+  it("learns the relay's address list from ready and prefers the winner", async () => {
+    const { client, sockets } = makeMultiClient(["ws://old:1"]);
+    const addressesSeen: (string[] | null)[] = [];
+    client.onConnected((_url, addresses) => addressesSeen.push(addresses));
+
+    const connected = client.connect();
+    sockets[0]!.open();
+    sockets[0]!.receive({ ...READY, addresses: ["ws://n1:1", "ws://n2:2", "junk"] });
+    await connected;
+
+    expect(addressesSeen).toEqual([["ws://n1:1", "ws://n2:2", "ws://old:1"]]);
+    expect(client.candidateUrls).toEqual(["ws://old:1", "ws://n1:1", "ws://n2:2"]);
+
+    sockets[0]!.drop(1006); // the re-race tries the winner first
+    const next = sockets[1]!;
+    expect(next.url).toBe("ws://old:1");
+    next.open();
+    next.receive(READY);
+    expect(client.status).toBe("ready");
+    client.close();
+  });
 });

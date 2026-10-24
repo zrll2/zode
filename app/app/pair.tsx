@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import {
+  Image,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -49,7 +50,12 @@ export default function PairScreen() {
     try {
       const payload = parsePairingPayload(raw);
       const result = await pair(payload, deviceName());
-      connect({ wsUrl: result.wsUrl, token: result.token, deviceId: result.id });
+      connect({
+        wsUrl: result.wsUrl,
+        wsUrls: result.wsUrls,
+        token: result.token,
+        deviceId: result.id,
+      });
       router.replace("/sessions");
     } catch (e: any) {
       setError(friendlyError(e, "pair"));
@@ -75,10 +81,10 @@ export default function PairScreen() {
         style={[styles.flex, { paddingHorizontal: 20, paddingBottom: insets.bottom + 24 }]}
       >
         <View style={styles.center}>
-          <Text style={[styles.mark, { color: t.colors.accent, fontFamily: t.fonts.serif }]}>Z</Text>
+          <Image source={require("../assets/zode-mark.png")} style={styles.mark} accessibilityLabel="Zode" />
           <Text variant="display">Connect to your Mac</Text>
           <Text variant="body" color="subtext" style={styles.paragraph}>
-            On your Mac, click the Z in the menu bar and choose Pair a phone…, then scan the code it shows. Your Mac must be awake, with Zode open, on the same Wi-Fi as this phone.
+            On your Mac, click the Z in the menu bar and choose Pair a phone…, then scan the code it shows. Your Mac must be awake, with Zode open. It connects over Wi-Fi at home and over Tailscale when you are away.
           </Text>
         </View>
         <View style={styles.actions}>
@@ -189,7 +195,7 @@ export default function PairScreen() {
 const styles = StyleSheet.create({
   flex: { flex: 1 },
   center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 8 },
-  mark: { fontSize: 56, lineHeight: 64 },
+  mark: { width: 72, height: 72, marginBottom: 12 },
   paragraph: { textAlign: "center", marginTop: 8, maxWidth: 320 },
   actions: { gap: 12 },
   camera: {
