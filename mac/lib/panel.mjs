@@ -151,7 +151,7 @@ export function buildPanelModel(input, now = Date.now()) {
         const need = needOf(line, pending, t);
         if (need) needs.push(need);
       } else if (!line.done && line.light === 'green') {
-        working.push({ id: line.id, project: str(line.project) || 'Zode', doing: 'Working', t: relAge(ageOf(line, t)) });
+        working.push({ id: line.id, project: str(line.project) || 'Zode', doing: str(line.title), t: relAge(ageOf(line, t)) });
       } else if (line.done) {
         const row = { id: line.id, project: str(line.project) || 'Zode', t: str(line.status) || relAge(ageOf(line, t)) };
         (line.older ? earlier : done).push(row);

@@ -106,7 +106,7 @@ test('busy: every need kind, red before amber, working rows, finished split by a
   assert.equal('more' in m.needs[2], false);
   assert.equal(m.needs[3].ask, 'No activity for 12 min. It may be stuck.');
   assert.equal(m.needs[3].waiting, '12 min');
-  assert.deepEqual(m.working, [{ id: 'w1', project: 'web', doing: 'Working', t: '3 min' }]);
+  assert.deepEqual(m.working, [{ id: 'w1', project: 'web', doing: '', t: '3 min' }]);     // no summary yet: no subtitle
   assert.deepEqual(m.done, [
     { id: 'd1', project: 'web', t: '3 min ago' },
     { id: 'd2', project: 'web', t: '48 min ago' },

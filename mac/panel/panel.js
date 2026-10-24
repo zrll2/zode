@@ -136,7 +136,7 @@ function renderWorking(rows) {
     const row = el('div', 'row');
     row.append(el('span', 'dot run'));
     const p = el('div', 'p', x.project ?? '');
-    p.append(el('small', null, x.doing ?? ''));
+    if (x.doing) p.append(el('small', null, x.doing));       // the conversation summary, when there is one
     row.append(p, el('span', 'w', x.t ?? ''));
     sec.append(row);
   }

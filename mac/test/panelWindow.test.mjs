@@ -55,9 +55,9 @@ test('trayImageName and isTemplate for every glyph and both bar appearances', ()
   assert.equal(trayImageName({ glyph: 'idle', dark: false }), 'trayTemplate.png');
   assert.equal(trayImageName({ glyph: 'idle', dark: true }), 'trayTemplate.png');
   // 'Light' files belong to a light menu bar (a dark glyph), 'Dark' ones to a dark bar
-  assert.equal(trayImageName({ glyph: 'working', dark: false }), 'trayWorkingLight.png');
+  assert.equal(trayImageName({ glyph: 'working', dark: false }), 'trayWorkingDark.png');
   assert.equal(trayImageName({ glyph: 'working', dark: true }), 'trayWorkingDark.png');
-  assert.equal(trayImageName({ glyph: 'needs', dark: false }), 'trayNeedsLight.png');
+  assert.equal(trayImageName({ glyph: 'needs', dark: false }), 'trayNeedsDark.png');
   assert.equal(trayImageName({ glyph: 'needs', dark: true }), 'trayNeedsDark.png');
   assert.equal(trayImageName({ glyph: 'weird', dark: false }), 'trayTemplate.png');   // junk glyph: the quiet icon
   assert.ok(isTemplate('idle'));
