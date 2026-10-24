@@ -21,10 +21,15 @@ interface ComposerProps {
   onAddPress?: () => void;
   modeLabel?: string | null;
   onPermissionPress?: () => void;
+  // Context-usage chip (P5): "42%" or the neutral "Usage" fallback.
+  usageLabel?: string | null;
+  usageTone?: "normal" | "warn" | "danger";
+  onUsagePress?: () => void;
 }
 
-// Sticky composer: "+" (attachments), permission pill, surface field with a
-// 36 px accent send circle (stop while running). Light haptic on send.
+// Sticky composer: "+" (attachments), permission pill, usage chip, surface
+// field with a 36 px accent send circle (stop while running). Light haptic
+// on send.
 export function Composer({
   value,
   onChangeText,
@@ -38,10 +43,20 @@ export function Composer({
   onAddPress,
   modeLabel,
   onPermissionPress,
+  usageLabel,
+  usageTone = "normal",
+  onUsagePress,
 }: ComposerProps) {
   const t = useTheme();
   const insets = useSafeAreaInsets();
   const sendActive = running || (canSend && !sendDisabled);
+  const usagePercent = parseUsagePercent(usageLabel);
+  const toneColor =
+    usageTone === "danger"
+      ? t.colors.danger
+      : usageTone === "warn"
+        ? t.colors.warn
+        : t.colors.subtext;
   return (
     <View
       style={[
@@ -77,6 +92,39 @@ export function Composer({
             >
               {modeLabel}
             </Text>
+          </PressScale>
+        ) : undefined}
+        {usageLabel && onUsagePress ? (
+          <PressScale
+            onPress={onUsagePress}
+            accessibilityRole="button"
+            accessibilityLabel={
+              usageLabel.endsWith("%")
+                ? `Context ${usageLabel.slice(0, -1)} percent used. Opens usage.`
+                : "Open usage"
+            }
+            hitSlop={8}
+            style={[styles.modePill, { backgroundColor: t.colors.muted }]}
+          >
+            <View style={styles.usageRow}>
+              <View style={[styles.usageRing, { borderColor: toneColor }]}>
+                <View
+                  style={[
+                    styles.usageRingFill,
+                    {
+                      backgroundColor: toneColor,
+                      height: Math.max(2, Math.round((11 * usagePercent) / 100)),
+                    },
+                  ]}
+                />
+              </View>
+              <Text
+                numberOfLines={1}
+                style={{ color: toneColor, fontWeight: "600", fontSize: 12 }}
+              >
+                {usageLabel}
+              </Text>
+            </View>
           </PressScale>
         ) : undefined}
       </View>
@@ -146,6 +194,18 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     maxWidth: 110,
   },
+  usageRow: { flexDirection: "row", alignItems: "center", gap: 5 },
+  // 14 px circle outline; the inner bar rises with the used percent.
+  usageRing: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    borderWidth: 1.5,
+    overflow: "hidden",
+    alignItems: "center",
+    justifyContent: "flex-end",
+  },
+  usageRingFill: { width: 11, borderRadius: 1 },
   field: {
     flexDirection: "row",
     alignItems: "flex-end",
@@ -174,3 +234,10 @@ const styles = StyleSheet.create({
     marginBottom: 2,
   },
 });
+
+// "42%" → 42; the neutral "Usage" label → 0 (empty gauge).
+function parseUsagePercent(label: string | null | undefined): number {
+  if (!label || !label.endsWith("%")) return 0;
+  const parsed = Number.parseInt(label, 10);
+  return Number.isFinite(parsed) ? Math.min(100, Math.max(0, parsed)) : 0;
+}

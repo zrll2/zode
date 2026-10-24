@@ -1,6 +1,28 @@
 // Parsing and formatting for usage stats (order 17c). Numbers can be huge;
 // formatTokens shrinks them to K / M / B.
 
+export type UsageTone = "normal" | "warn" | "danger";
+
+// Context-fullness chip for the composer: null when the window is missing,
+// zero or negative; otherwise the rounded percent (clamped to 0..100) with a
+// tone — warn from 70 %, danger from 90 %.
+export function usageChip(
+  contextUsed: unknown,
+  contextWindow: unknown,
+): { label: string; tone: UsageTone; percent: number } | null {
+  if (
+    typeof contextWindow !== "number" ||
+    !Number.isFinite(contextWindow) ||
+    contextWindow <= 0
+  ) {
+    return null;
+  }
+  const used = typeof contextUsed === "number" && Number.isFinite(contextUsed) ? contextUsed : 0;
+  const percent = Math.min(100, Math.max(0, Math.round((used / contextWindow) * 100)));
+  const tone: UsageTone = percent >= 90 ? "danger" : percent >= 70 ? "warn" : "normal";
+  return { label: `${percent}%`, tone, percent };
+}
+
 function scaled(value: number, unit: string, digits: number): string {
   let out = value.toFixed(digits);
   if (out.includes(".")) out = out.replace(/0+$/, "").replace(/\.$/, "");

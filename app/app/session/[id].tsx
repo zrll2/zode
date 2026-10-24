@@ -50,6 +50,7 @@ import {
 } from "../../src/sessionActions";
 import { loadPrefs, savePrefs } from "../../src/storage";
 import { canAttach, describeAttachment, formatBytes, guessMime, MAX_ATTACHMENTS } from "../../src/attachments";
+import { usageChip } from "../../src/usage";
 import {
   isSystemLikeUserText,
   mergeHistoryWithLive,
@@ -573,6 +574,15 @@ export default function SessionScreen() {
     setPermissionVisible(true);
   }, [relayProtocol]);
 
+  // Usage chip (P5): hidden on an old relay; a neutral "Usage" chip when the
+  // window is not known yet so the sheet stays one tap away.
+  const usageSupported = relaySupports(relayProtocol, "usage");
+  const usage = usageSupported
+    ? usageChip(chatSettings.contextUsed, chatSettings.contextWindow)
+    : null;
+  const usageLabel = usage ? usage.label : usageSupported ? "Usage" : null;
+  const usageTone = usage?.tone ?? "normal";
+
   // ---- Ask-first approvals ----
   const approvalsActive = status === "ready" && relaySupports(relayProtocol, "askFirst");
   const approvalRequests = approvalsActive
@@ -891,6 +901,9 @@ export default function SessionScreen() {
           onAddPress={showAddSheet}
           modeLabel={chatSettings.mode ? permissionLabel(chatSettings.mode) : null}
           onPermissionPress={openPermissionSheet}
+          usageLabel={usageLabel}
+          usageTone={usageTone}
+          onUsagePress={() => setUsageSheetVisible(true)}
         />
       </View>
 
