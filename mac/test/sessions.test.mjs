@@ -198,11 +198,52 @@ test('listPending: permissions and questions from every server, oldest first, so
     ['server-2', 'question', '/a', 'sq'],
     ['server-1', 'permission', '/b', 's2'],     // request ids are per wrapper: the same id on two sockets is two requests
   ]);
-  assert.deepEqual(pending[0], { requestId: 'server-1', sessionId: 's1', kind: 'permission', toolName: 'Bash', summary: 'Run: sudo rm -rf /tmp/x', detail: 'Run: sudo rm -rf /tmp/x', risky: true, sock: '/a' });
+  assert.deepEqual(pending[0], { requestId: 'server-1', sessionId: 's1', kind: 'permission', toolName: 'Bash', summary: 'Run: sudo rm -rf /tmp/x', detail: 'Run: sudo rm -rf /tmp/x', risky: true, options: [], command: 'sudo rm -rf /tmp/x', sock: '/a' });
   assert.deepEqual(pending[1], { requestId: 'server-2', sessionId: 'sq', kind: 'question', toolName: '', summary: '', detail: '', risky: false, sock: '/a' });
   assert.equal(pending[2].summary, 'Edit: main.mjs');
   assert.deepEqual(await listPending({ dir: '/tmp/zode-sessions-missing', timeoutMs: 20 }), []);   // no dir, never throws
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('listPending: permission requests carry their answer options and the raw command', async () => {
+  const dir = fs.mkdtempSync(path.join('/tmp', 'zode-sessions-'));
+  fs.writeFileSync(path.join(dir, '1.json'), JSON.stringify({ pid: process.pid, sock: '/a', cwd: '/w' }));
+  const opts = [
+    { optionId: 'allow_once', kind: 'allow_once', name: 'Allow once', response: { decision: 'allow', reason: 'Approved once' } },
+    { optionId: 'allow_project', kind: 'allow_always', name: 'Always allow in this project', description: 'Do not ask again', response: { decision: 'allow', reason: 'Always in project' } },
+    null, 42, 'x', { kind: 'no id' }, { optionId: '' },                    // junk: dropped
+    { optionId: 'o0', kind: 'k0', name: 'n0' }, { optionId: 'o1', kind: 'k1', name: 'n1' },
+    { optionId: 'o2', kind: 'k2', name: 'n2' }, { optionId: 'o3', kind: 'k3', name: 'n3' },
+    { optionId: 'o4', kind: 'k4', name: 'n4' }, { optionId: 'o5', kind: 'k5', name: 'n5' },   // past the cap of 6
+  ];
+  const command = 'npm ' + 'x'.repeat(3000);
+  const connect = async () => [{ tapReply: true, id: 1, result: { pending: [
+    { id: 'p1', method: 'interaction/requestPermission', params: { sessionId: 's1', toolName: 'Bash', input: { command }, riskLevel: 'low', options: opts }, at: 5 },
+  ] } }];
+  const pending = await listPending({ dir, timeoutMs: 50, connect });
+  assert.equal(pending.length, 1);
+  const req = pending[0];
+  assert.equal(req.command.length, 2000);                                  // capped
+  assert.ok(req.command.startsWith('npm '));
+  assert.deepEqual(req.options, [
+    { optionId: 'allow_once', kind: 'allow_once', name: 'Allow once', response: { decision: 'allow', reason: 'Approved once' } },
+    { optionId: 'allow_project', kind: 'allow_always', name: 'Always allow in this project', response: { decision: 'allow', reason: 'Always in project' } },   // extra fields dropped
+    { optionId: 'o0', kind: 'k0', name: 'n0', response: null },
+    { optionId: 'o1', kind: 'k1', name: 'n1', response: null },
+    { optionId: 'o2', kind: 'k2', name: 'n2', response: null },
+    { optionId: 'o3', kind: 'k3', name: 'n3', response: null },            // six at most
+  ]);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('respondPermission sends a response object verbatim when given one', async () => {
+  const seen = [];
+  const connect = async (sock, request) => { seen.push(JSON.parse(request)); return [{ tapReply: true, id: 1, result: { ok: true } }]; };
+  const response = { decision: 'allow', reason: 'Always in project', rule: { project: '/w' } };
+  assert.equal(await respondPermission({ sock: '/a', requestId: 'r1', response, connect }), null);
+  assert.deepEqual(seen, [{ id: 1, method: 'tap/respond', params: { id: 'r1', result: response } }]);
+  assert.equal(await respondPermission({ sock: '/a', requestId: 'r2', decision: 'allow', reason: 'Approved once', connect }), null);
+  assert.deepEqual(seen[1].params.result, { decision: 'allow', reason: 'Approved once' });   // the old shape still works
 });
 
 test('respondPermission: one tap/respond line per decision; a late answer is just the error text', async () => {

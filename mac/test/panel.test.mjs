@@ -192,6 +192,46 @@ test('usage: sanitised into {today, week} with a formatted label, or null when m
   assert.equal(buildPanelModel(input({}), NOW).usageLabel, null);
 });
 
+test('piled-up requests: pile, sameCount and canAlways ride on the ask need', () => {
+  const opts = [
+    { optionId: 'allow_once', kind: 'allow_once', name: 'Allow once', response: { decision: 'allow' } },
+    { optionId: 'allow_project', kind: 'allow_always', name: 'Always allow in this project', response: { decision: 'allow' } },
+  ];
+  const m = buildPanelModel(input({
+    work: { lines: [line({ id: 'a', light: 'amber', status: 'Waiting for you' })], pending: { a: [
+      perm({ requestId: 'r1', summary: 'Run: npm test', options: opts }),
+      perm({ requestId: 'r2', summary: 'Run: npm test' }),
+      perm({ requestId: 'r3', summary: 'Run: npm test', risky: true }),
+      perm({ requestId: 'r4', summary: 'Run: other' }),
+      perm({ requestId: 'q', kind: 'question', summary: '' }),               // questions are not part of the pile
+    ] } },
+  }), NOW);
+  const ask = m.needs[0];
+  assert.equal(ask.kind, 'ask');
+  assert.equal(ask.pile.length, 4);                                          // the shown one included, the question not
+  assert.deepEqual(ask.pile[0], { requestId: 'r1', sock: '/sock', risky: false });
+  assert.deepEqual(ask.pile[2], { requestId: 'r3', sock: '/sock', risky: true });
+  assert.equal(ask.sameCount, 3);                                            // the shown one plus its two identical twins
+  assert.equal(ask.canAlways, true);
+  assert.deepEqual([ask.more, ask.same], [3, 2]);                            // the S2 counts are untouched
+
+  // a single request: the pile is just itself, nothing to group, nothing to always-allow
+  const solo = buildPanelModel(input({
+    work: { lines: [line({ id: 'b', light: 'amber', status: 'Waiting for you' })], pending: { b: [perm({ requestId: 'r9', summary: 'Run: solo' })] } },
+  }), NOW);
+  assert.deepEqual(solo.needs[0].pile, [{ requestId: 'r9', sock: '/sock', risky: false }]);
+  assert.equal(solo.needs[0].sameCount, 1);
+  assert.equal(solo.needs[0].canAlways, false);
+
+  // hundreds of repeats: the pile caps at 500
+  const many = buildPanelModel(input({
+    work: { lines: [line({ id: 'h', light: 'amber', status: 'Waiting for you' })], pending: { h: Array.from({ length: 600 }, (_, i) => perm({ requestId: 'm' + i, summary: 'Run: loop' })) } },
+  }), NOW);
+  assert.equal(many.needs[0].pile.length, 500);
+  assert.equal(many.needs[0].sameCount, 500);
+  assert.equal(many.needs[0].more, 599);
+});
+
 test('summary titles for every combination, plural and singular', () => {
   const one = buildPanelModel(input({ work: { lines: [line({ id: 'a', light: 'amber', status: 'Waiting for you' })] } }), NOW);
   assert.equal(one.summary.title, '1 needs you');

@@ -5,6 +5,7 @@
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 const btn = (label, cls, fn) => { const b = el('button', cls, label); b.addEventListener('click', fn); return b; };
+const txtBtn = (label, fn) => btn(label, 'txtbtn', fn);
 // One click per state: the button disables itself until the next model re-renders the lists.
 const once = (label, cls, fn) => { const b = btn(label, cls, () => { b.disabled = true; fn(); }); return b; };
 
@@ -92,6 +93,45 @@ function needCard(n) {
   }
   const stopTask = () => once('Stop task', 'btn', () => { act('stop', { sessionId: n.sessionId, sock: n.sock }); toast(`Stopped ${project}.`); });
   const acts = el('div', 'acts');
+  const pile = n.kind === 'ask' && Array.isArray(n.pile) ? n.pile : [];
+  if (pile.length > 1) {
+    // A pile of repeated requests: answer it in bulk — the one-by-one buttons hide behind a text one.
+    const all = pile.map(({ requestId, sock }) => ({ requestId, sock }));
+    const rest = pile.filter(p => p.requestId !== n.requestId).map(({ requestId, sock }) => ({ requestId, sock }));
+    const mixed = Number(n.sameCount) < pile.length;
+    acts.append(
+      once(mixed ? `Allow these ${pile.length}` : `Allow all ${pile.length}`, 'btn pri', () => {
+        act('approveMany', { requests: all });
+        toast(`Allowed ${pile.length} requests. ${project} continues.`);
+      }),
+      once(`Deny all ${pile.length}`, 'btn', () => {
+        act('denyMany', { requests: all });
+        toast(`Denied ${pile.length} requests.`);
+      }),
+    );
+    if (mixed && Number(n.sameCount) > 0) {
+      acts.append(txtBtn(`Allow only the same ${n.sameCount}`, () => {
+        act('approveMany', { requests: all, summaryOnly: n.ask });
+        toast(`Allowed ${n.sameCount} requests. ${project} continues.`);
+      }));
+    }
+    acts.append(txtBtn('Just this one', () => {
+      act('approve', { requestId: n.requestId, sock: n.sock, risky: n.risky === true, summary: n.ask });
+      toast(`Allowed. ${project} continues.`);
+    }));
+    if (n.more >= 2) acts.append(stopTask());                     // a repeated-request loop needs a way out
+    acts.append(btn('Show in ZCode', 'btn quiet', () => act('show')));
+    card.append(acts);
+    if (n.canAlways === true) {
+      const under = el('div', 'under');
+      under.append(txtBtn('Always allow this here', () => {
+        act('alwaysAllow', { requestId: n.requestId, sock: n.sock, rest });
+        toast('Allowed here from now on.');
+      }));
+      card.append(under);
+    }
+    return card;
+  }
   if (n.kind === 'ask') {
     acts.append(
       once('Allow once', 'btn pri', () => {

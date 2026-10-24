@@ -126,6 +126,26 @@ async function ask(sock, method, params, timeoutMs = 1500, connect = defaultConn
 const RISKY_BITS = ['rm -rf', 'sudo', 'curl ', 'wget ', 'git push', 'npm publish', 'chmod', 'chown', 'dd ', 'mkfs', '> /dev/'];
 const clip = (str, max = 80) => { const s = String(str); return s.length <= max ? s : s.slice(0, max - 1) + '…'; };
 
+// The answer options the agent offers with a permission request, kept for the panel's bulk answers:
+// only these fields, at most 6, junk ignored. `response` is what ZCode itself sends back when that
+// option is chosen — tap/respond gets it verbatim so ZCode records exactly its own rule.
+const REQUEST_OPTIONS_MAX = 6;
+function permissionOptions(params) {
+  const options = [];
+  for (const o of Array.isArray(params?.options) ? params.options : []) {
+    if (!o || typeof o !== 'object' || Array.isArray(o)) continue;
+    if (typeof o.optionId !== 'string' || !o.optionId) continue;
+    options.push({
+      optionId: o.optionId,
+      kind: typeof o.kind === 'string' ? o.kind : '',
+      name: typeof o.name === 'string' ? o.name : '',
+      response: o.response && typeof o.response === 'object' && !Array.isArray(o.response) ? o.response : null,
+    });
+    if (options.length >= REQUEST_OPTIONS_MAX) break;
+  }
+  return options;
+}
+
 // "Run: <command>" / "Edit: <file name>" — the tool plus its key input, never more than 80 characters,
 // plus whether the confirmation dialog is needed before an allow. `detail` stays untruncated for it.
 export function summarizeRequest(params) {
@@ -173,6 +193,8 @@ export async function listPending({ dir = tapDir(), timeoutMs = 1500, connect = 
             requestId: entry.id, sessionId, kind: 'permission',
             toolName: typeof entry.params?.toolName === 'string' ? entry.params.toolName : '',
             summary: summarized.text, detail: summarized.detail, risky: summarized.risky === true,
+            options: permissionOptions(entry.params),
+            command: typeof entry.params?.input?.command === 'string' ? entry.params.input.command.slice(0, 2000) : '',
             sock: server.sock, at: Number(entry.at) || 0,
           });
         } else if (entry.method === 'interaction/requestUserInput') {          // a question: never allow/deny
@@ -225,8 +247,13 @@ export async function readUsage({ dir = tapDir(), timeoutMs = 4000, connect = de
 
 // Answer a pending permission request. The first answer wins — a late answer comes back as an error
 // and is just as fine — so this resolves to null (any fine outcome) or the server's refusal reason.
-export async function respondPermission({ sock, requestId, decision, reason, timeoutMs = 1500, connect = defaultConnect } = {}) {
-  const reply = await ask(sock, 'tap/respond', { id: requestId, result: { decision, ...(reason ? { reason } : {}) } }, timeoutMs, connect);
+// A `response` object (an option's own response from the request) is sent verbatim, so ZCode records
+// exactly the rule it offered; otherwise the plain {decision, reason} shape goes out.
+export async function respondPermission({ sock, requestId, decision, reason, response, timeoutMs = 1500, connect = defaultConnect } = {}) {
+  const result = response && typeof response === 'object' && !Array.isArray(response)
+    ? response
+    : { decision, ...(reason ? { reason } : {}) };
+  const reply = await ask(sock, 'tap/respond', { id: requestId, result }, timeoutMs, connect);
   return reply?.error ? String(reply.error.message ?? 'refused') : null;
 }
 

@@ -577,6 +577,23 @@ async function start() {
     // The pending request a menu item belonged to, for the log line and the risky-command dialog.
     const findPending = requestId => Object.values(work.pending ?? {}).flat().find(r => r.requestId === requestId) ?? null;
 
+    // What the user sees for a pending request, for grouping a pile of identical ones.
+    const displayOf = r => (typeof r?.summary === 'string' && r.summary) || (typeof r?.toolName === 'string' && r.toolName) || 'Permission request';
+
+    // Answer a whole pile of pending permission requests: four at a time, and one refusal — or a
+    // request that is already gone — never stops the rest. Nothing throws; the caller caps at 600
+    // and logs one line with the count. The commands themselves are never logged.
+    async function answerPile(list, build) {
+      const queue = [...list].slice(0, 600);
+      const worker = async () => {
+        while (queue.length) {
+          const job = queue.shift();
+          try { await respondPermission({ sock: job.sock, requestId: job.requestId, ...build(job) }); } catch { /* gone is fine */ }
+        }
+      };
+      await Promise.all([worker(), worker(), worker(), worker()]);
+    }
+
     let reopenMenu = null;                              // set once the tray exists: pops the menu up again
     const actions = {
       pair: () => showPairWindow(),
@@ -607,6 +624,66 @@ async function start() {
       nudge: (sessionId, sock) => runWorkAction({ what: 'nudged', project: projectOf(sessionId), run: () => nudgeSession({ sock, sessionId }) }),
       stop: (sessionId, sock) => runWorkAction({ what: 'stopped', project: projectOf(sessionId), run: () => stopSession({ sock, sessionId }) }),
       retry: (sessionId, sock) => runWorkAction({ what: 'asked to try again', project: projectOf(sessionId), run: () => sendToSession({ sock, sessionId, content: RETRY_MESSAGE }) }),
+      // A piled-up session, answered in bulk: every request is checked against the last listing
+      // (stale ones drop out), a risky batch gets one confirmation, and the answers go out four at
+      // a time. summaryOnly narrows an approve to the requests that show the very same command.
+      approveMany: (requests, summaryOnly) => {
+        const pile = (Array.isArray(requests) ? requests : [])
+          .map(r => findPending(r?.requestId))
+          .filter(p => p && p.kind === 'permission' && liveSocks().has(p.sock))
+          .filter(p => !summaryOnly || displayOf(p) === summaryOnly)
+          .slice(0, 600);
+        if (!pile.length) return;
+        const risky = pile.filter(p => p.risky === true);
+        runWorkAction({
+          what: `approved ${pile.length} permission request${pile.length === 1 ? '' : 's'}`,
+          project: projectOf(pile[0].requestId),
+          confirm: risky.length ? () => confirmOverPanel({ message: `Allow these ${pile.length} requests?`, detail: String(risky[0].detail || '') }) : null,
+          run: () => answerPile(pile, () => ({ decision: 'allow', reason: 'Approved from the menu bar' })),
+        });
+      },
+      denyMany: requests => {
+        const pile = (Array.isArray(requests) ? requests : [])
+          .map(r => findPending(r?.requestId))
+          .filter(p => p && p.kind === 'permission' && liveSocks().has(p.sock))
+          .slice(0, 600);
+        if (!pile.length) return;
+        runWorkAction({
+          what: `denied ${pile.length} permission request${pile.length === 1 ? '' : 's'}`,
+          project: projectOf(pile[0].requestId),
+          run: () => answerPile(pile, () => ({ decision: 'deny', reason: 'Denied from the menu bar' })),
+        });
+      },
+      // Always allow this here: the shown request gets ZCode's own allow_project response (so the
+      // rule is recorded), the rest of the same-summary pile a plain allow once.
+      alwaysAllow: (requestId, rest) => {
+        const shown = findPending(requestId);
+        if (!shown || shown.kind !== 'permission' || !liveSocks().has(shown.sock)) return;
+        const always = (Array.isArray(shown.options) ? shown.options : []).find(o => o && (o.optionId === 'allow_project' || o.kind === 'allow_always'));
+        const shownAnswer = always?.response && typeof always.response === 'object'
+          ? { response: always.response }
+          : { decision: 'allow', reason: 'Always allow in this project' };
+        const restPile = (Array.isArray(rest) ? rest : [])
+          .filter(r => r && idOk(r.requestId) && r.requestId !== requestId)
+          .map(r => findPending(r.requestId))
+          .filter(p => p && p.kind === 'permission' && p.sessionId === shown.sessionId && displayOf(p) === displayOf(shown))
+          .slice(0, 599);
+        const onceAnswer = p => {
+          const o = (Array.isArray(p?.options) ? p.options : []).find(o => o && (o.optionId === 'allow_once' || o.kind === 'allow_once'));
+          return o?.response && typeof o.response === 'object' ? { response: o.response } : { decision: 'allow', reason: 'Approved once' };
+        };
+        const jobs = [
+          { requestId: shown.requestId, sock: shown.sock, build: shownAnswer, risky: shown.risky === true, detail: String(shown.detail || '') },
+          ...restPile.map(p => ({ requestId: p.requestId, sock: p.sock, build: onceAnswer(p), risky: p.risky === true, detail: String(p.detail || '') })),
+        ].slice(0, 600);
+        const risky = jobs.filter(j => j.risky);
+        runWorkAction({
+          what: `always allowed here and approved ${jobs.length} permission request${jobs.length === 1 ? '' : 's'}`,
+          project: projectOf(requestId),
+          confirm: risky.length ? () => confirmOverPanel({ message: `Allow these ${jobs.length} requests?`, detail: risky[0].detail }) : null,
+          run: () => answerPile(jobs, j => j.build),
+        });
+      },
       toggleFoldFinished: () => { settings.foldFinished = !settings.foldFinished; save(); pushPanel(); },
       toggleLaunchAtLogin: () => { settings.launchAtLogin = !settings.launchAtLogin; save(); app.setLoginItemSettings({ openAtLogin: settings.launchAtLogin }); refresh(); },
       toggleKeepAwake: () => { settings.keepAwake = !(settings.keepAwake === true); save(); updatePowerBlocker(); refresh(); },
@@ -831,6 +908,14 @@ async function start() {
       } else if (name === 'deny') {
         if (!idOk(p.requestId) || !liveSocks().has(p.sock)) return;
         actions.deny(p.requestId, p.sock);
+      } else if (name === 'approveMany' || name === 'denyMany') {
+        const list = Array.isArray(p.requests) ? p.requests.filter(r => r && idOk(r.requestId) && typeof r.sock === 'string' && liveSocks().has(r.sock)) : [];
+        if (!list.length) return;
+        if (name === 'approveMany') actions.approveMany(list, typeof p.summaryOnly === 'string' ? p.summaryOnly : '');
+        else actions.denyMany(list);
+      } else if (name === 'alwaysAllow') {
+        if (!idOk(p.requestId) || !liveSocks().has(p.sock)) return;
+        actions.alwaysAllow(p.requestId, Array.isArray(p.rest) ? p.rest : []);
       } else if (name === 'nudge' || name === 'stop' || name === 'retry') {
         if (!idOk(p.sessionId) || !liveSocks().has(p.sock)) return;
         actions[name](p.sessionId, p.sock);
