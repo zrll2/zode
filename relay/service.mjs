@@ -418,6 +418,7 @@ export function createRelay(opts = {}) {
     wss.on('error', () => {});                    // a client socket error must never become an uncaught throw
     wss.on('connection', (ws, req) => {
       const ip = req.socket.remoteAddress; const c = { ws, authed: false, device: null };
+      log.log(`connection from ${ip} to ${req.socket.localAddress}`);        // which way in a phone used (Wi-Fi or Tailscale)
       const authTimer = setTimeout(() => ws.close(4001, 'auth timeout'), 10_000);
       ws.on('close', () => { if (clients.delete(c)) emitStatus(); clearTimeout(authTimer); });
       ws.on('message', raw => {
@@ -427,6 +428,7 @@ export function createRelay(opts = {}) {
           const d = findDevice(m.token);
           if (!d) { fail(ip); return ws.close(4003, 'bad token'); }
           c.authed = true; c.device = d; clients.add(c); clearTimeout(authTimer); emitStatus();
+          log.log(`device ${d.id} connected from ${ip}`);
           send(c, { type: 'ready', protocol: PROTOCOL, device: d.id, servers: [...upstream.values()].map(u => ({ pid: u.meta.pid, cwd: u.meta.cwd })), seq, pending: [...pendingReq.values()], features: { stt: !!stt }, addresses: [...publicUrls] });
           if (typeof m.since === 'number') for (const e of replay) if (e.seq > m.since) send(c, { type: 'event', ...e });
           return;

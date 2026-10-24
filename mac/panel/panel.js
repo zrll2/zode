@@ -333,3 +333,7 @@ document.addEventListener('keydown', e => {
 });
 
 load();
+
+// The focus ring is for keyboard use only (see panel.css).
+document.addEventListener('keydown', e => { if (e.key === 'Tab') document.body.classList.add('kb'); });
+document.addEventListener('mousedown', () => document.body.classList.remove('kb'));
