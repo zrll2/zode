@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import WebSocket from 'ws';
@@ -128,6 +129,61 @@ test('start / status / stop; stop twice is safe; busy port rejects with EADDRINU
   } finally { rm(state, tap, busyState); }
 });
 
+// Two listeners on one port: a LAN IPv4 plus IPv6 loopback (loopback IPv4 is dropped when there is
+// more than one host, and a laptop rarely has two LAN addresses). Skips with no LAN address.
+const lanHost = Object.values(os.networkInterfaces()).flat().find((i) => i && i.family === 'IPv4' && !i.internal)?.address;
+const multi = lanHost ? test : test.skip;
+
+multi('two hosts: both listeners answer, the payload carries every url, ready lists them, stop closes all', async () => {
+  const state = tmp(), tap = tmp();
+  try {
+    const port = await freePort();
+    const urls = [`ws://${lanHost}:${port}`, `ws://[::1]:${port}`];
+    const relay = createRelay({ hosts: [lanHost, '::1'], publicUrls: urls, port, stateDir: state, tapDir: tap, log: silent });
+    assert.deepEqual(await relay.start(), { host: lanHost, port });
+    const st = relay.status();
+    assert.deepEqual(st.hosts, [lanHost, '::1']);
+    assert.deepEqual(st.publicUrls, urls);
+
+    const p = relay.createPairing();
+    const payload = JSON.parse(p.payload);
+    assert.equal(payload.u, urls[0].replace('ws:', 'http:'));
+    assert.deepEqual(payload.urls, urls);
+    assert.equal(payload.c, p.code);
+    assert.deepEqual(p.publicUrls, urls);
+
+    const { token } = await (await fetch(`http://${lanHost}:${port}/pair`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: p.code, name: 'phone' }) })).json();
+    const { ws, ready } = await authed(urls[1], token);                     // a live socket on the second listener
+    assert.deepEqual(ready.addresses, urls);
+    const p2 = relay.createPairing();
+    const second = await fetch(`http://[::1]:${port}/pair`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: p2.code, name: 'second' }) });
+    assert.equal(second.status, 200);                                       // /pair answers on the second listener too
+    ws.close();
+
+    await relay.stop();
+    for (const base of [`http://${lanHost}:${port}`, `http://[::1]:${port}`]) {
+      await assert.rejects(fetch(`${base}/health`));                        // both listeners are gone
+    }
+  } finally { rm(state, tap); }
+});
+
+multi('a bind failure on the second host closes the first listener and rejects', async () => {
+  const state = tmp(), tap = tmp();
+  try {
+    const port = await freePort();
+    const holder = net.createServer();                                      // occupies [::1]:<port>
+    await new Promise((r, j) => { holder.once('error', j); holder.listen(port, '::1', r); });
+    holder.unref();
+    const relay = createRelay({ hosts: [lanHost, '::1'], port, stateDir: state, tapDir: tap, log: silent });
+    await assert.rejects(relay.start(), (e) => e.code === 'EADDRINUSE');
+    assert.equal(relay.status().running, false);
+    // the first listener was closed with the second's failure: the LAN address is free again
+    await new Promise((r, j) => { const s = net.createServer(); s.once('error', j); s.listen(port, lanHost, () => s.close(r)); });
+    await relay.stop();                                                     // safe after a failed start
+    await new Promise((r) => holder.close(r));
+  } finally { rm(state, tap); }
+});
+
 test('pairing: POST /pair returns a token; a code is one-time and expires', async () => {
   const state = tmp(), tap = tmp();
   try {
@@ -136,7 +192,7 @@ test('pairing: POST /pair returns a token; a code is one-time and expires', asyn
     await relay.start();
 
     const p = relay.createPairing();
-    assert.equal(p.payload, JSON.stringify({ u: `http://127.0.0.1:${port}`, w: `ws://127.0.0.1:${port}`, c: p.code }));
+    assert.equal(p.payload, JSON.stringify({ u: `http://127.0.0.1:${port}`, urls: [`ws://127.0.0.1:${port}`], w: `ws://127.0.0.1:${port}`, c: p.code }));
     assert.ok(p.expiresAt > Date.now() && p.expiresAt - Date.now() <= 200);
 
     const res = await pair(port, p.code, 'iphone');

@@ -13,14 +13,16 @@ You need: your Mac awake, Zode open on it (a **Z** in the menu bar), and the pho
 1. On the Mac, click the **Z in the menu bar** and choose **Pair a phone…**. A window shows a QR code.
 2. In Zode on the phone, tap **Scan QR code** and point it at the window (or paste the pairing text under "Paste pairing text"). The phone gets its own key.
 
-The same menu shows whether the relay is running, which address it is reachable on, and the paired phones (`Revoke …` removes one). `Relay on` turns it off and on.
+The same menu shows whether the relay is running, which addresses it is reachable on, and the paired phones (`Revoke …` removes one). `Relay on` turns it off and on.
+
+**Reachable from** is `Automatic` by default: the relay listens on the Wi-Fi and the Tailscale address at the same time, the QR code carries all of them, and a paired phone is told the current list every time it connects. Leaving one network does not cut the other off. Picking a specific address instead restricts the relay to it.
 
 ### If the phone says it can't reach your Mac
 Check these in order:
 1. The Mac is awake (not asleep, lid open or a display attached) and Zode is open.
 2. The phone and the Mac are on the same Wi-Fi. Guest or "isolated" Wi-Fi networks block this.
 3. A VPN on the phone or Mac is off, or both use Tailscale.
-4. In the menu bar, **Reachable from** shows the address the phone should use. If it changed (new Wi-Fi), pair again.
+4. The network changed while the Mac was asleep? Open the menu bar panel once (or restart Zode from the menu bar); the relay follows the network within 10 seconds and logs the change.
 
 If a code stops working it has probably expired: choose **Pair a phone…** again for a new one.
 
@@ -28,9 +30,12 @@ If a code stops working it has probably expired: choose **Pair a phone…** agai
 
 The relay has **no TLS** by design. Do not put it on the open internet. Do not forward the port on your router.
 
-- **Tailscale** is the safe choice away from home: encrypted, and only your devices are in the network. Install it on the Mac and the phone, then pick `Tailscale (100.x.y.z)` under **Reachable from** in the menu.
+- `Automatic` (the default) listens on the Wi-Fi and the Tailscale address at once: Wi-Fi at home, Tailscale anywhere. **Wi-Fi is not encrypted; Tailscale is.**
+- **Tailscale** is the safe choice away from home: encrypted, and only your devices are in the network. Install it on the Mac and the phone; Automatic picks it up as soon as it is on.
 - **Wi-Fi / local network** works at home but is **unencrypted**. Use it only on a network you trust.
 - `This Mac only` (`127.0.0.1`) is for the iOS simulator on the same Mac.
+
+If you would rather restrict the relay to one address — Tailscale only, say — pick it under **Reachable from**; the explicit choice is honoured until you change it back.
 
 ## Run the app
 
@@ -63,7 +68,7 @@ You can run the same relay without the app window, for example over SSH:
 | `RELAY_PUBLIC_URL` | `ws://HOST:PORT` | The address the phone uses (put in the QR code). |
 | `RELAY_STATE_DIR` | `~/.zode/relay` | Where paired devices are stored (tokens are hashed). |
 
-The app and the terminal relay share `~/.zode/relay`, so a phone paired with one works with the other. Run only one of them at a time (they would fight over the port).
+The app and the terminal relay share `~/.zode/relay`, so a phone paired with one works with the other. Run only one of them at a time (they would fight over the port). `RELAY_HOST` here is a single address; the Mac app runs the same relay with `Automatic`, which listens on the Wi-Fi and the Tailscale address at the same time.
 
 ## What the phone can do
 

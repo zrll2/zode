@@ -93,9 +93,17 @@ export function checkPolicy(method, params) {
 export const PROTOCOL = 2;
 
 export function createRelay(opts = {}) {
-  const host = opts.host || '127.0.0.1';
   const port = Number(opts.port || 8787);
-  const publicUrl = opts.publicUrl || `ws://${host}:${port}`;
+  // One relay, every way in: one http listener per host, all on the same port. `host` still works as
+  // a one-element `hosts`. The wildcard is never bound; loopback only when it is the only host left.
+  const raw = (Array.isArray(opts.hosts) && opts.hosts.length ? opts.hosts : [opts.host || '127.0.0.1']).filter(h => typeof h === 'string' && h !== '');
+  let hosts = [...new Set(raw.filter(h => h !== '0.0.0.0'))];
+  if (hosts.length > 1) hosts = hosts.filter(h => h !== '127.0.0.1');
+  if (hosts.length === 0) hosts = ['127.0.0.1'];
+  const givenUrls = Array.isArray(opts.publicUrls) ? opts.publicUrls.filter(u => typeof u === 'string' && u) : [];
+  const publicUrls = givenUrls.length ? givenUrls
+    : (typeof opts.publicUrl === 'string' && opts.publicUrl ? [opts.publicUrl] : hosts.map(h => `ws://${h}:${port}`));
+  const publicUrl = publicUrls[0];
   const stateDir = opts.stateDir || path.join(HOME, '.zode', 'relay');
   const tapDir = opts.tapDir || path.join(HOME, '.zcode-tap');
   const codeTtlMs = opts.codeTtlMs ?? CODE_TTL_MS;
@@ -115,7 +123,7 @@ export function createRelay(opts = {}) {
   const pendingReq = new Map();      // `${pid}:${id}` -> {server, id, method, params, at}  (permission / user-input requests waiting for an answer)
   const listeners = new Map();        // event -> Set<fn>
   let relayId = 0, seq = 0;
-  let srv = null, wss = null, syncTimer = null, statusTimer = null;
+  let servers = [], wss = null, syncTimer = null, statusTimer = null;
   let running = false;
 
   // What is really running, from the event stream the servers already send: session/list keeps
@@ -125,7 +133,7 @@ export function createRelay(opts = {}) {
   const syncPending = () => live.setPending([...pendingReq.values()].map(p => ({ sessionId: p.params?.sessionId, method: p.method })));
 
   function status() {
-    return { running, host, port, publicUrl, upstreams: upstream.size, clients: clients.size, devices: readJson(DEVICES, []).length };
+    return { running, host: hosts[0], hosts: [...hosts], port, publicUrl, publicUrls: [...publicUrls], upstreams: upstream.size, clients: clients.size, devices: readJson(DEVICES, []).length };
   }
   function emitStatus() {             // at most one 'status' per STATUS_DEBOUNCE_MS
     if (statusTimer) return;
@@ -240,10 +248,12 @@ export function createRelay(opts = {}) {
   const findDevice = token => readJson(DEVICES, []).find(d => eq(d.tokenHash, sha(String(token))));
 
   function createPairing(over = {}) {
-    const url = over.publicUrl || publicUrl;
+    const first = typeof over.publicUrl === 'string' && over.publicUrl ? over.publicUrl : publicUrl;
+    const urls = over.publicUrl ? [first, ...publicUrls.filter(u => u !== first)] : [...publicUrls];
     const { code, expiresAt } = newPairCode();
-    const payload = JSON.stringify({ u: url.replace(/^ws/, 'http'), w: url, c: code });
-    return { code, expiresAt, publicUrl: url, payload };
+    // Old phones read u (the http form of the first address) and w; newer ones read every ws url.
+    const payload = JSON.stringify({ u: first.replace(/^ws/, 'http'), urls, w: first, c: code });
+    return { code, expiresAt, publicUrl: first, publicUrls: urls, payload };
   }
   function listDevices() { return readJson(DEVICES, []).map(({ id, name, pairedAt }) => ({ id, name, pairedAt })); }
   function revokeDevice(id) {
@@ -339,11 +349,11 @@ export function createRelay(opts = {}) {
 
   // ---- server --------------------------------------------------------------------
   function start() {
-    if (running) return Promise.resolve({ host, port });
+    if (running) return Promise.resolve({ host: hosts[0], port });
     const failures = new Map();                                     // ip -> {n, until}
     const throttled = ip => (failures.get(ip)?.until ?? 0) > Date.now();
     const fail = ip => { const f = failures.get(ip) ?? { n: 0 }; f.n++; if (f.n >= 5) { f.until = Date.now() + 60_000; f.n = 0; } failures.set(ip, f); };
-    srv = http.createServer((req, res) => {
+    const handle = (req, res) => {
       const ip = req.socket.remoteAddress;
       if (req.method === 'GET' && req.url === '/health') { res.end(JSON.stringify({ ok: true, servers: upstream.size })); return; }
       if (req.method === 'POST' && req.url === '/pair') {
@@ -359,9 +369,11 @@ export function createRelay(opts = {}) {
         return;
       }
       res.writeHead(404).end();
-    });
-    wss = new WebSocketServer({ server: srv, maxPayload: 14 * 1024 * 1024 });   // an 8 MiB upload is ~10.7 MiB as base64; MAX_FRAME still caps frames to phones
-    wss.on('error', () => {});                    // ws re-emits srv's 'error' on wss; without a listener it throws uncaught and aborts the srv emit before srv.once below runs
+    };
+    // One shared WebSocketServer and one shared /pair handler behind every listener: each server hands
+    // its upgrades to the same wss, so phones get identical service on every address.
+    wss = new WebSocketServer({ noServer: true, maxPayload: 14 * 1024 * 1024 });   // an 8 MiB upload is ~10.7 MiB as base64; MAX_FRAME still caps frames to phones
+    wss.on('error', () => {});                    // a client socket error must never become an uncaught throw
     wss.on('connection', (ws, req) => {
       const ip = req.socket.remoteAddress; const c = { ws, authed: false, device: null };
       const authTimer = setTimeout(() => ws.close(4001, 'auth timeout'), 10_000);
@@ -373,7 +385,7 @@ export function createRelay(opts = {}) {
           const d = findDevice(m.token);
           if (!d) { fail(ip); return ws.close(4003, 'bad token'); }
           c.authed = true; c.device = d; clients.add(c); clearTimeout(authTimer); emitStatus();
-          send(c, { type: 'ready', protocol: PROTOCOL, device: d.id, servers: [...upstream.values()].map(u => ({ pid: u.meta.pid, cwd: u.meta.cwd })), seq, pending: [...pendingReq.values()], features: { stt: !!stt } });
+          send(c, { type: 'ready', protocol: PROTOCOL, device: d.id, servers: [...upstream.values()].map(u => ({ pid: u.meta.pid, cwd: u.meta.cwd })), seq, pending: [...pendingReq.values()], features: { stt: !!stt }, addresses: [...publicUrls] });
           if (typeof m.since === 'number') for (const e of replay) if (e.seq > m.since) send(c, { type: 'event', ...e });
           return;
         }
@@ -414,23 +426,37 @@ export function createRelay(opts = {}) {
         }
       });
     });
+    servers = hosts.map(host => {
+      const srv = http.createServer(handle);
+      srv.on('upgrade', (req, sock, head) => { try { wss.handleUpgrade(req, sock, head, ws => wss.emit('connection', ws, req)); } catch { /* the client retries */ } });
+      return { host, srv };
+    });
     syncTimer = setInterval(syncUpstream, 2000); syncUpstream();
     return new Promise((resolve, reject) => {
-      srv.once('error', async err => { await stop().catch(() => {}); reject(err); });
-      srv.listen(port, host, () => {
-        running = true;
-        log.log(`zcode-relay listening ws://${host}:${port}  (upstream servers: ${upstream.size})`);
-        if (host === '0.0.0.0') log.warn('WARNING: bound to all interfaces without TLS. Prefer a Tailscale/WireGuard address.');
-        emitStatus();
-        resolve({ host, port });
-      });
+      let failed = false, listening = 0;
+      const boom = async err => {                     // the first bind error closes every other listener, as a failed start always did
+        if (failed) return;
+        failed = true;
+        await stop().catch(() => {});
+        reject(err);
+      };
+      for (const { host, srv } of servers) {
+        srv.once('error', err => boom(err));
+        srv.listen(port, host, () => {
+          if (failed || ++listening < servers.length) return;         // resolved only when every address answers
+          running = true;
+          log.log(`zcode-relay listening ${hosts.map(h => `ws://${h}:${port}`).join(' and ')}  (upstream servers: ${upstream.size})`);
+          emitStatus();
+          resolve({ host: hosts[0], port });
+        });
+      }
     });
   }
 
   async function stop() {
-    const s = srv, w = wss, t = syncTimer;
-    if (!running && !s && !w && !t) return;                         // safe to call twice
-    running = false; srv = null; wss = null; syncTimer = null;
+    const all = servers, w = wss, t = syncTimer;
+    if (!running && all.length === 0 && !w && !t) return;           // safe to call twice
+    running = false; servers = []; wss = null; syncTimer = null;
     if (t) clearInterval(t);
     for (const u of upstream.values()) u.sock.destroy();
     upstream.clear();
@@ -438,7 +464,9 @@ export function createRelay(opts = {}) {
     for (const c of [...clients]) { try { c.ws.close(1001, 'relay stopping'); } catch {} }
     clients.clear();
     if (w) { try { await new Promise(r => w.close(r)); } catch {} }
-    if (s) { try { s.closeIdleConnections?.(); await new Promise(r => s.close(() => r())); } catch {} }
+    for (const { srv } of all) {
+      try { srv.closeIdleConnections?.(); await new Promise(r => srv.close(() => r())); } catch {}
+    }
     emitStatus();
   }
 

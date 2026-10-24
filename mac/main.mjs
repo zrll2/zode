@@ -10,7 +10,7 @@ import updaterPkg from 'electron-updater';
 const { autoUpdater } = updaterPkg;
 import QRCode from 'qrcode';
 import { createRelay } from '../relay/service.mjs';
-import { detectAddresses, defaultAddress } from './lib/addresses.mjs';
+import { detectAddresses, defaultAddress, autoAddresses } from './lib/addresses.mjs';
 import { loadSettings, saveSettings } from './lib/settings.mjs';
 import { buildMenuTemplate } from './lib/menu.mjs';
 import { buildPanelModel } from './lib/panel.mjs';
@@ -36,6 +36,7 @@ const RELEASE_CHECK_MS = 6 * 60 * 60 * 1000;
 const WORK_TIMEOUT_MS = 1500;                         // per tap socket, and the cap on the tray-click wait
 const WORK_POLL_MS = 30 * 1000;                       // background refresh while a ZCode server is live
 const WORK_POLL_ACTIVE_MS = 10 * 1000;                // the same, while a conversation is running: follow the turn
+const ADDRESS_POLL_MS = 10 * 1000;                    // how often the network is re-checked (Wi-Fi joins, Tailscale starts)
 const WORK_SETTLE_MS = 1000;                          // after a menu action, before the refresh + reopen
 const PANEL_WIDTH = 340;                              // the panel that opens under the menu bar icon
 const PANEL_REOPEN_MS = 250;                          // a tray click this soon after a blur-hide is the click that closed it
@@ -88,6 +89,7 @@ async function start() {
     let settings = loadSettings(SETTINGS_FILE);
     let addresses = detectAddresses();
     let relay = null, tray = null, pairWindow = null, currentPairing = null, pairedCount = 0;
+    let relayHostSig = '';                             // the addresses the running relay listens on, its ips comma-joined
     let error = null;
     let quitting = false;
     let enginePath = null;
@@ -111,8 +113,17 @@ async function start() {
     let panelHidingAt = 0;                             // when the panel last hid on blur, to skip the closing click
     let panelHoldBlur = false;                         // a dialog is anchored to the panel: keep it up
 
-    const chosen = () => addresses.find(a => a.id === settings.addressId) ?? defaultAddress(addresses);
-    const publicUrlFor = a => `ws://${a.ip}:${settings.port}`;
+    const chosen = (list = addresses) => (Array.isArray(list) ? list : []).find(a => a.id === settings.addressId) ?? defaultAddress(list);
+    // The ips the relay should listen on for the chosen mode: every real way in when automatic,
+    // exactly the pinned address otherwise (an explicit restriction — Tailscale only, say — is
+    // honoured), loopback alone when nothing else exists.
+    const hostIps = (list = addresses) => {
+      const a = chosen(list);
+      const pick = a && a.id === 'auto' ? autoAddresses(list) : [a];
+      const ips = (Array.isArray(pick) ? pick : []).filter(x => x && typeof x.ip === 'string' && x.ip).map(x => x.ip);
+      return ips.length ? ips : ['127.0.0.1'];
+    };
+    const publicUrlsFor = (list = addresses) => hostIps(list).map(ip => `ws://${ip}:${settings.port}`);
     const save = () => { settings = saveSettings(SETTINGS_FILE, settings); };
     const relayLog = {
       log: (...a) => appendLog('relay: ' + a.join(' ')),
@@ -216,8 +227,9 @@ async function start() {
       if (relay) { await relay.stop().catch(() => {}); relay = null; }
       currentPairing = null;
       if (settings.relayEnabled) {
-        const a = chosen();                                       // never 0.0.0.0: one concrete address
-        relay = createRelay({ host: a.ip, port: settings.port, publicUrl: publicUrlFor(a), log: relayLog, stt: sttAdapter });
+        const ips = hostIps();                                    // concrete addresses only, never 0.0.0.0
+        relayHostSig = ips.join(',');
+        relay = createRelay({ hosts: ips, port: settings.port, publicUrls: publicUrlsFor(), log: relayLog, stt: sttAdapter });
         relay.on('status', refresh);
         try { await relay.start(); } catch (err) { error = startError(err); }
       }
@@ -373,6 +385,27 @@ async function start() {
       tick();
     }
 
+    // Wi-Fi joins and Tailscale starts come and go: re-detect every 10 s and restart the relay only
+    // when the addresses it listens on really changed. Devices live on disk, so nothing is lost; a
+    // phone just reconnects once.
+    let addressPoll = null;
+    async function pollAddressesOnce() {
+      const next = detectAddresses();
+      const sig = hostIps(next).join(',');
+      const changed = sig !== relayHostSig;
+      addresses = next;
+      if (!changed) return;
+      relayHostSig = sig;
+      if (!settings.relayEnabled) { refresh(); return; }          // nothing is listening; the labels follow
+      appendLog(`zode: addresses changed to ${sig}; restarting the phone relay`);
+      await applyRelay();                                         // refreshes and re-applies the power blocker too
+    }
+    function pollAddresses() {
+      if (addressPoll) return;
+      addressPoll = setInterval(() => { pollAddressesOnce().catch(err => appendLog(`zode: address check: ${err?.stack || err}`)); }, ADDRESS_POLL_MS);
+      addressPoll.unref?.();
+    }
+
     function menuState() {
       const devices = relay ? relay.listDevices() : [];
       return {
@@ -398,7 +431,8 @@ async function start() {
 
     function pingPairWindow() {
       if (!pairWindow || pairWindow.isDestroyed()) return;
-      pairWindow.webContents.send('zode:status', { running: !!(relay?.status().running), error, publicUrl: publicUrlFor(chosen()) });
+      const urls = publicUrlsFor();
+      pairWindow.webContents.send('zode:status', { running: !!(relay?.status().running), error, publicUrl: urls[0], publicUrls: urls, reachable: hostIps() });
     }
 
     // State changed: tell the pairing window. The tray menu itself is built when the icon is clicked (see below).
@@ -594,19 +628,20 @@ async function start() {
     };
 
     async function pairingView() {
-      const publicUrl = publicUrlFor(chosen());
+      const urls = publicUrlsFor();
+      const base = { publicUrl: urls[0], publicUrls: urls, reachable: hostIps() };
       if (error || !relay?.status().running) {
         currentPairing = null;
-        return { running: false, error, publicUrl, qrSvg: null, code: null, expiresAt: null, payload: null };
+        return { running: false, error, ...base, qrSvg: null, code: null, expiresAt: null, payload: null };
       }
       try {
         if (!currentPairing || currentPairing.expiresAt < Date.now()) currentPairing = relay.createPairing();
         const qrSvg = await QRCode.toString(currentPairing.payload, { type: 'svg', margin: 1 });
-        return { running: true, error: null, publicUrl, qrSvg, code: currentPairing.code, expiresAt: currentPairing.expiresAt, payload: currentPairing.payload };
+        return { running: true, error: null, ...base, qrSvg, code: currentPairing.code, expiresAt: currentPairing.expiresAt, payload: currentPairing.payload };
       } catch (err) {                                               // a failed QR never rejects out of the IPC handler
         appendLog(`zode: pairing view: ${err?.stack || err}`);
         currentPairing = null;
-        return { running: false, error: err?.message ?? String(err), publicUrl, qrSvg: null, code: null, expiresAt: null, payload: null };
+        return { running: false, error: err?.message ?? String(err), ...base, qrSvg: null, code: null, expiresAt: null, payload: null };
       }
     }
 
@@ -1062,6 +1097,7 @@ async function start() {
     setInterval(checkReleaseOnce, RELEASE_CHECK_MS);
     refreshSessions();
     pollSessions();
+    pollAddresses();
     refreshVoice();                                   // the panel should show the real model state, not the assumption
     selfUpdater.start();
 

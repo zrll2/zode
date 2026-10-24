@@ -41,6 +41,21 @@ test('quiet: idle glyph, All quiet, no banner, empty lists, settings pass throug
   assert.deepEqual(JSON.parse(JSON.stringify(m)), m);                 // JSON-safe: no undefined, no functions
 });
 
+test('the automatic address choice is a mode without an ip and passes through first', () => {
+  const m = buildPanelModel(input({
+    addresses: [
+      { id: 'auto', label: 'Automatic: Wi-Fi and Tailscale' },
+      { id: 'tailscale', label: 'Tailscale (100.64.0.9)', ip: '100.64.0.9' },
+      { id: 'lan', label: 'Wi-Fi / local network (192.168.1.5)', ip: '192.168.1.5' },
+      { id: 'local', label: 'This Mac only', ip: '127.0.0.1' },
+    ],
+    addressId: 'auto',
+  }), NOW);
+  assert.equal(m.settings.addressId, 'auto');
+  assert.deepEqual(m.settings.addresses[0], { id: 'auto', label: 'Automatic: Wi-Fi and Tailscale' });
+  assert.deepEqual(m.settings.addresses.slice(1).map(a => a.id), ['tailscale', 'lan', 'local']);
+});
+
 test('the summary sub follows the ZCode connection and the keep-awake setting', () => {
   assert.equal(buildPanelModel(input({ tapAlive: false }), NOW).summary.sub, 'ZCode is not connected yet');
   assert.equal(buildPanelModel(input({ keepAwake: false }), NOW).summary.sub, 'ZCode connected');
