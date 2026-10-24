@@ -2,10 +2,44 @@ import * as SecureStore from "expo-secure-store";
 
 const KEY = "zcode.relay.credentials.v1";
 
+const WS_URLS_CAP = 8;
+
 export interface Credentials {
   wsUrl: string;
+  // Every address the pairing offered (and later learned from ready). The
+  // phone races them and connects over whichever works.
+  wsUrls: string[];
+  // The address that last delivered a ready frame; tried first.
+  lastGood?: string;
   token: string;
   deviceId: string;
+}
+
+// Old records hold only wsUrl; new ones gain wsUrls/lastGood. wsUrl is
+// always kept and always present in wsUrls.
+function normalizeCredentials(parsed: any): Credentials | null {
+  if (
+    !parsed ||
+    typeof parsed.wsUrl !== "string" ||
+    !parsed.wsUrl ||
+    typeof parsed.token !== "string" ||
+    typeof parsed.deviceId !== "string"
+  ) {
+    return null;
+  }
+  const seen = new Set<string>([parsed.wsUrl]);
+  const wsUrls = [parsed.wsUrl];
+  if (Array.isArray(parsed.wsUrls)) {
+    for (const entry of parsed.wsUrls) {
+      if (typeof entry !== "string" || !entry || seen.has(entry)) continue;
+      seen.add(entry);
+      wsUrls.push(entry);
+      if (wsUrls.length >= WS_URLS_CAP) break;
+    }
+  }
+  const lastGood =
+    typeof parsed.lastGood === "string" && seen.has(parsed.lastGood) ? parsed.lastGood : undefined;
+  return { wsUrl: parsed.wsUrl, wsUrls, lastGood, token: parsed.token, deviceId: parsed.deviceId };
 }
 
 export async function saveCredentials(credentials: Credentials): Promise<void> {
@@ -18,16 +52,7 @@ export async function loadCredentials(): Promise<Credentials | null> {
   try {
     const raw = await SecureStore.getItemAsync(KEY);
     if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (
-      parsed &&
-      typeof parsed.wsUrl === "string" &&
-      typeof parsed.token === "string" &&
-      typeof parsed.deviceId === "string"
-    ) {
-      return parsed as Credentials;
-    }
-    return null;
+    return normalizeCredentials(JSON.parse(raw));
   } catch {
     return null;
   }

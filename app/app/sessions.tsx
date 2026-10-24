@@ -18,6 +18,7 @@ import * as Linking from "expo-linking";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRelay } from "../src/useRelay";
 import { useTheme } from "../src/theme";
+import { describeAddress } from "../src/pairing";
 import { isOutdated, outdatedMessage, relaySupports } from "../src/compat";
 import { respondFailureText, type ApprovalRequest } from "../src/approvals";
 import { buildHomeList, projectsOf, withAlpha, type HomeItem } from "../src/homeList";
@@ -90,6 +91,7 @@ export default function SessionsScreen() {
     authFailed,
     relayProtocol,
     pendingApprovals,
+    connectedUrl,
     rpc,
     unpair,
     demo,
@@ -106,6 +108,8 @@ export default function SessionsScreen() {
   const [project, setProject] = useState("All");
   const [olderOpen, setOlderOpen] = useState(false);
   const [outdatedDismissed, setOutdatedDismissed] = useState(false);
+  // Tapping the Mac chip toggles the diagnostics line (how we are connected).
+  const [showConnectionLine, setShowConnectionLine] = useState(false);
   const [toast, setToast] = useState<ToastState | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [prefs, setPrefs] = useState<Prefs>({
@@ -437,9 +441,14 @@ export default function SessionsScreen() {
 
       <View style={styles.top}>
         <Text style={[styles.brand, { color: t.colors.text }]}>Zode</Text>
-        <View
+        <PressScale
+          onPress={() => setShowConnectionLine((value) => !value)}
+          accessibilityRole="button"
+          accessibilityLabel={`Connection status: ${statusLabel[status]}. ${describeAddress(
+            connectedUrl ?? "",
+          )}`}
+          hitSlop={8}
           style={[styles.macChip, { backgroundColor: t.colors.muted }]}
-          accessibilityLabel={`Connection status: ${statusLabel[status]}`}
         >
           <Dot
             color={status === "ready" ? t.colors.ok : t.colors.danger}
@@ -449,7 +458,7 @@ export default function SessionsScreen() {
           <Text style={[styles.macText, { color: t.colors.subtext }]}>
             {status === "ready" ? "Mac" : "Offline"}
           </Text>
-        </View>
+        </PressScale>
         <View style={styles.spacer} />
         <IconButton
           icon="search"
@@ -480,6 +489,12 @@ export default function SessionsScreen() {
       ) : undefined}
 
       <FilterChips projects={projects} selected={project} onSelect={setProject} />
+
+      {showConnectionLine ? (
+        <Text variant="caption" color="subtext" style={styles.connectionLine}>
+          {status === "ready" ? describeAddress(connectedUrl ?? "") : statusLabel[status]}
+        </Text>
+      ) : undefined}
 
       <ScrollView
         contentContainerStyle={{
@@ -748,8 +763,10 @@ const styles = StyleSheet.create({
     paddingRight: 10,
     paddingVertical: 4,
     marginLeft: 4,
+    minHeight: 28,
   },
   macText: { fontSize: 12, lineHeight: 16 },
+  connectionLine: { paddingHorizontal: 16, paddingTop: 2 },
   spacer: { flex: 1 },
   iconButton: {
     width: 36,

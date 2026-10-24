@@ -36,6 +36,14 @@ text `{"u":…,"w":…,"c":…}` into the text box. Pairing codes work once and 
 5 minutes. `./zode devices` lists paired phones, `./zode revoke <id>`
 removes one.
 
+A pairing carries every address the Mac relay listens on (`urls`: the Wi-Fi/LAN
+address and the Tailscale address). The phone stores them all and connects over
+whichever answers first — at home that is Wi-Fi, away it rolls over to Tailscale
+by itself, and back again when the Wi-Fi returns. Each `ready` frame re-announces
+the relay's current addresses (`addresses`), so the stored list stays fresh. Tap
+the Mac chip on the home screen to see how you are connected ("Connected over
+Wi-Fi" / "Connected over Tailscale").
+
 The device token is stored in the iOS Keychain / Android Keystore via
 `expo-secure-store`. It is only ever sent inside the first WebSocket `auth` frame —
 never logged, never put in a URL.

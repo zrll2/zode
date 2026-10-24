@@ -7,6 +7,7 @@ import React, {
   useRef,
   useState,
 } from "react";
+import { AppState } from "react-native";
 import { friendlyError } from "./friendlyError";
 import * as Linking from "expo-linking";
 import { RelayClient, type RelayStatus, type RespondResult } from "./relay/client";
@@ -37,6 +38,8 @@ interface RelayContextValue {
   relayProtocol: number | undefined;
   // Ask-first permission requests waiting right now (see src/approvals.ts).
   pendingApprovals: ApprovalRequest[];
+  // The address the current connection actually uses, for diagnostics.
+  connectedUrl: string | null;
   connect(credentials: Credentials): void;
   startDemo(): void;
   exitDemo(): Promise<void>;
@@ -61,7 +64,19 @@ export function RelayProvider({ children }: { children: React.ReactNode }) {
   const [reconnectAttempts, setReconnectAttempts] = useState(0);
   const [relayProtocol, setRelayProtocol] = useState<number | undefined>(undefined);
   const [pendingApprovals, setPendingApprovals] = useState<ApprovalRequest[]>([]);
+  const [connectedUrl, setConnectedUrl] = useState<string | null>(null);
   const clientRef = useRef<RelayClientLike | null>(null);
+  // Mirrors credentials so the address-merge callback never reads stale state.
+  const credsRef = useRef<Credentials | null>(null);
+
+  // Returning to the foreground re-races the addresses right away when the
+  // connection is down; a live connection is left alone (no hunting).
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") clientRef.current?.retryNow();
+    });
+    return () => subscription.remove();
+  }, []);
 
   // While reconnecting, mirror the client's next-try time and count how many
   // attempts in a row failed (the banner offers "Retry now" from the third).
@@ -94,7 +109,13 @@ export function RelayProvider({ children }: { children: React.ReactNode }) {
 
   const attachReal = useCallback((creds: Credentials) => {
     clientRef.current?.close();
-    const next = new RelayClient({ url: creds.wsUrl, token: creds.token });
+    const next = new RelayClient({
+      url: creds.wsUrl,
+      urls: creds.wsUrls,
+      preferred: creds.lastGood,
+      token: creds.token,
+    });
+    credsRef.current = creds;
     clientRef.current = next;
     next.onStatus((s) => {
       setStatus(s);
@@ -102,9 +123,24 @@ export function RelayProvider({ children }: { children: React.ReactNode }) {
       setRelayProtocol(next.relayProtocol);
     });
     next.onApprovals((list) => setPendingApprovals(list));
+    // Learn from every ready: remember the winner and, when the relay
+    // re-announces its addresses, replace the stored list.
+    next.onConnected((url, addresses) => {
+      if (clientRef.current !== next) return;
+      setConnectedUrl(url);
+      const base = credsRef.current;
+      if (!base) return;
+      const wsUrls = addresses ?? base.wsUrls;
+      if (base.lastGood === url && wsUrls.join("|") === base.wsUrls.join("|")) return;
+      const merged: Credentials = { ...base, wsUrls, lastGood: url };
+      credsRef.current = merged;
+      setCredentials(merged);
+      void saveCredentials(merged);
+    });
     setAuthFailed(false);
     setLastError(null);
     setDemo(false);
+    setConnectedUrl(null);
     setClient(next);
     next.connect().catch((e: any) => {
       setLastError(friendlyError(e));
@@ -163,6 +199,7 @@ export function RelayProvider({ children }: { children: React.ReactNode }) {
 
   const connect = useCallback(
     (creds: Credentials) => {
+      credsRef.current = creds;
       setCredentials(creds);
       void saveCredentials(creds);
       attachReal(creds);
@@ -179,11 +216,13 @@ export function RelayProvider({ children }: { children: React.ReactNode }) {
     setServers([]);
     setRelayProtocol(undefined);
     setPendingApprovals([]);
+    setConnectedUrl(null);
   }, []);
 
   const unpair = useCallback(async () => {
     clientRef.current?.close();
     clientRef.current = null;
+    credsRef.current = null;
     setClient(null);
     await clearCredentials();
     setCredentials(null);
@@ -194,6 +233,7 @@ export function RelayProvider({ children }: { children: React.ReactNode }) {
     setLastError(null);
     setRelayProtocol(undefined);
     setPendingApprovals([]);
+    setConnectedUrl(null);
   }, []);
 
   const rpc = useCallback(
@@ -233,6 +273,7 @@ export function RelayProvider({ children }: { children: React.ReactNode }) {
       reconnectAttempts,
       relayProtocol,
       pendingApprovals,
+      connectedUrl,
       connect,
       startDemo,
       exitDemo,
@@ -254,6 +295,7 @@ export function RelayProvider({ children }: { children: React.ReactNode }) {
       reconnectAttempts,
       relayProtocol,
       pendingApprovals,
+      connectedUrl,
       connect,
       startDemo,
       exitDemo,
