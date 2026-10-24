@@ -235,3 +235,15 @@ test('junk pending entries on a real waiting line still produce one fallback ask
   assert.equal(m.needs[0].risky, false);
   assert.equal(m.banner, null);
 });
+
+test('voice: quiet defaults on no or junk input; real values pass through', () => {
+  const quiet = { language: 'en', engine: false, model: { id: 'small', state: 'missing', bytes: 0 }, download: { state: 'idle', received: 0, total: 0, error: '' } };
+  assert.deepEqual(buildPanelModel(input(), NOW).voice, quiet);
+  assert.deepEqual(buildPanelModel(null, NOW).voice, quiet);
+  assert.deepEqual(buildPanelModel(input({ voice: { language: 'fr', engine: 'yes', model: { state: 'weird', bytes: -5, id: 9 }, download: { state: 'nope', received: 'x', total: NaN, error: 7 } } }), NOW).voice,
+    { language: 'en', engine: false, model: { id: 'small', state: 'missing', bytes: 0 }, download: { state: 'idle', received: 0, total: 0, error: '' } });
+  assert.deepEqual(buildPanelModel(input({
+    voice: { language: 'zh', engine: true, model: { id: 'small', state: 'ready', bytes: 487601967 }, download: { state: 'downloading', received: 122, total: 488, error: '' } },
+  }), NOW).voice,
+  { language: 'zh', engine: true, model: { id: 'small', state: 'ready', bytes: 487601967 }, download: { state: 'downloading', received: 122, total: 488, error: '' } });
+});

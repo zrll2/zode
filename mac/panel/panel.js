@@ -46,6 +46,7 @@ function render() {
   setSwitch('swRelay', s.relayEnabled === true);
   setSwitch('swLogin', s.launchAtLogin === true);
   renderAddresses(s.addresses ?? [], s.addressId);
+  renderVoice(model.voice);
   $('version').textContent = s.version ? `Zode ${s.version}` : 'Zode';
 
   reportHeight();
@@ -195,6 +196,31 @@ function renderAddresses(addresses, addressId) {
   if (addresses.some(a => a.id === addressId)) sel.value = addressId;
 }
 
+// The Voice group in the settings sheet: the language segmented control, the model's state in plain
+// words, and the download button (self-disabled while downloading; replaced by the missing-engine
+// note when the binary is not there). Only draws — the app pushes a fresh model after every action.
+function renderVoice(v) {
+  const voice = v && typeof v === 'object' ? v : {};
+  for (const b of document.querySelectorAll('#voiceLang .segopt')) b.setAttribute('aria-checked', b.dataset.lang === voice.language ? 'true' : 'false');
+  const state = $('voiceState');
+  const slot = $('voiceAction');
+  slot.textContent = '';
+  if (voice.engine !== true) { state.textContent = 'Voice engine missing'; return; }
+  const download = voice.download && typeof voice.download === 'object' ? voice.download : {};
+  const mb = voice.model?.bytes > 0 ? ` (${Math.floor(voice.model.bytes / 1e6)} MB)` : '';
+  if (voice.model?.state === 'ready') { state.textContent = 'Ready'; return; }
+  if (download.state === 'downloading') {
+    const pct = download.total > 0 ? Math.min(100, Math.floor((download.received / download.total) * 100)) : 0;
+    state.textContent = `Downloading ${pct}%`;
+    const b = el('button', 'btn', `Downloading ${pct}%`);
+    b.disabled = true;
+    slot.append(b);
+    return;
+  }
+  state.textContent = download.state === 'failed' ? 'Failed. Try again' : 'Not downloaded';
+  slot.append(btn(`Download${mb}`, 'btn', () => act('downloadVoiceModel')));
+}
+
 // The panel's height follows its content up to MAX_HEIGHT; past that, .mid scrolls. The app sizes
 // the window from this number (W2), so measure the natural content height, not the clipped one.
 function reportHeight() {
@@ -227,6 +253,13 @@ $('swAwake').addEventListener('click', () => flip('swAwake', 'keepAwake'));
 $('swRelay').addEventListener('click', () => flip('swRelay', 'relayEnabled'));
 $('swLogin').addEventListener('click', () => flip('swLogin', 'launchAtLogin'));
 $('addr').addEventListener('change', e => act('setAddress', { id: e.target.value }));
+$('voiceLang').addEventListener('click', e => {
+  const b = e.target.closest('.segopt');
+  if (!b || b.getAttribute('aria-checked') === 'true') return;   // already chosen; the next push confirms
+  for (const x of document.querySelectorAll('#voiceLang .segopt')) x.setAttribute('aria-checked', 'false');
+  b.setAttribute('aria-checked', 'true');
+  act('setVoiceLanguage', { language: b.dataset.lang });
+});
 $('pairBtn').addEventListener('click', () => act('pair'));
 $('updatesBtn').addEventListener('click', () => act('checkUpdates'));
 $('setupBtn').addEventListener('click', () => act('setup'));
