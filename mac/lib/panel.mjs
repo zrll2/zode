@@ -2,7 +2,8 @@
 // the panel window draws. Nothing here touches Electron, sockets or the disk, so it is fully
 // testable; nothing here throws — missing or broken input yields the quiet empty model.
 //
-// input is menuState() plus what the panel adds on top: `version` (the app's own version), and on
+// input is menuState() plus what the app adds on top: `version` (the app's own version), `voice`
+// (speech to text: the language, engine presence, model state and download progress), and on
 // every work line `at` (ms since the epoch, the session's last activity) so the panel can show ages
 // relative to `now`. work.pending stays keyed by sessionId, oldest request first, exactly as
 // refreshSessions() builds it.
@@ -100,6 +101,21 @@ function bannerOf(s) {
   return null;
 }
 
+// The voice group: the user's language, whether the engine binary exists, the model's state and its
+// size, and the download the panel shows. Junk input quiets down to the fresh-install shape.
+function voiceOf(s) {
+  const v = s && typeof s === 'object' && s.voice && typeof s.voice === 'object' ? s.voice : {};
+  const model = v.model && typeof v.model === 'object' ? v.model : {};
+  const download = v.download && typeof v.download === 'object' ? v.download : {};
+  const num = x => (Number.isFinite(x) && x >= 0 ? Math.floor(x) : 0);
+  return {
+    language: v.language === 'zh' ? 'zh' : 'en',
+    engine: v.engine === true,
+    model: { id: str(model.id) || 'small', state: ['missing', 'partial', 'ready'].includes(model.state) ? model.state : 'missing', bytes: num(model.bytes) },
+    download: { state: ['idle', 'downloading', 'failed'].includes(download.state) ? download.state : 'idle', received: num(download.received), total: num(download.total), error: str(download.error) },
+  };
+}
+
 export function buildPanelModel(input, now = Date.now()) {
   try {
     const s = input && typeof input === 'object' ? input : {};
@@ -158,6 +174,7 @@ export function buildPanelModel(input, now = Date.now()) {
         version: str(s.version),
         selfUpdate: self.phase === 'ready' ? 'ready' : self.phase === 'downloading' ? 'downloading' : 'idle',
       },
+      voice: voiceOf(s),
     };
   } catch {
     // The quiet empty panel: what a fresh, disconnected, do-nothing Zode looks like.
@@ -172,6 +189,7 @@ export function buildPanelModel(input, now = Date.now()) {
         keepAwake: false, relayEnabled: false, launchAtLogin: false, foldFinished: false,
         addressId: '', addresses: [], version: '', selfUpdate: 'idle',
       },
+      voice: voiceOf(null),
     };
   }
 }

@@ -20,6 +20,9 @@ import { isRunning, quitApp, tapAlive, findOriginal, findEngine, findOldIntegrat
 import { readVersion, compareVersions, checkRelease, engineRebuildScript } from './lib/updates.mjs';
 import { listSessions, listPending, readTapServers, summarize, withLiveStatus, respondPermission, stopSession, sendToSession, nudgeSession, RETRY_MESSAGE } from './lib/sessions.mjs';
 import { createSelfUpdater } from './lib/selfupdate.mjs';
+import { createStt } from './lib/stt.mjs';
+import { buildPrompt } from './lib/vocab.mjs';
+import { voiceHint } from './lib/voiceHint.mjs';
 
 const HOME = os.homedir();
 const SETTINGS_FILE = path.join(HOME, '.zode', 'settings.json');
@@ -121,6 +124,76 @@ async function start() {
       : (err?.message ?? String(err));
     const say = opts => { try { dialog.showMessageBox(opts).catch(() => {}); } catch { /* never */ } };
 
+    // The voice language is picked once, from the macOS system language; the panel changes it later.
+    if (settings.voiceLanguage !== 'en' && settings.voiceLanguage !== 'zh') {
+      settings.voiceLanguage = (app.getLocale() || '').toLowerCase().startsWith('zh') ? 'zh' : 'en';
+      save();
+    }
+
+    // ---- voice (speech to text) -----------------------------------------------------------------
+    // One engine for the whole app; the relay gets a small adapter that adds the user's language and
+    // the live vocabulary hint (open projects, recent titles — what the user tends to say). The
+    // packaged binary sits in Resources/bin; in development build-whisper.sh leaves it in mac/vendor.
+    const sttBinary = app.isPackaged
+      ? path.join(process.resourcesPath, 'bin', 'whisper-cli')
+      : path.join(devRoot() ?? path.join(import.meta.dirname, '..'), 'mac', 'vendor', 'whisper-cli');
+    const stt = createStt({
+      binary: sttBinary,
+      modelDir: path.join(HOME, '.zode', 'models'),
+      tmpDir: path.join(os.tmpdir(), 'zode-voice'),
+      spawn, fs,
+      fetch: globalThis.fetch,
+      log: (m) => appendLog(m),
+    });
+    let voiceStatus = { engine: false, modelState: 'missing', modelBytes: 0 };    // cached: the panel model is built synchronously
+    let voiceDownload = { state: 'idle', received: 0, total: 0, error: null };
+    async function refreshVoice() {
+      try {
+        const s = await stt.status();
+        const small = s?.models?.small ?? { state: 'missing', bytes: 0 };
+        voiceStatus = { engine: s.engine === true, modelState: small.state ?? 'missing', modelBytes: Number(small.bytes) || 0 };
+        pushPanel();
+      } catch (err) { appendLog(`zode: voice status: ${err?.stack || err}`); }
+    }
+    const sttAdapter = {
+      transcribe: async (req) => {
+        const language = req?.language === 'zh' || req?.language === 'en' ? req.language : settings.voiceLanguage;
+        const hint = voiceHint({ lines: work.lines, now: Date.now() });
+        const prompt = buildPrompt({ language, projects: hint.projects, titles: hint.titles });
+        return stt.transcribe({ audio: req?.audio, format: req?.format, language, model: settings.voiceModel, prompt });
+      },
+      status: async () => ({ ...(await stt.status()), language: settings.voiceLanguage, model: settings.voiceModel }),
+      defaultLanguage: () => settings.voiceLanguage,
+    };
+    // Plain words for the panel; the engine's own error text never shows to the user.
+    const shortVoiceError = (err) => (String(err ?? '').match(/abort/i) ? 'Stopped. Try again when you like.' : 'The download did not finish. Try again.');
+    function startVoiceDownload() {
+      if (voiceDownload.state === 'downloading') return;                  // one download at a time
+      voiceDownload = { state: 'downloading', received: 0, total: 0, error: null };
+      pushPanel();
+      let lastPercent = -1;
+      stt.ensureModel(settings.voiceModel, ({ received, total }) => {
+        voiceDownload.received = received;
+        voiceDownload.total = total;
+        const percent = total > 0 ? Math.floor((received / total) * 100) : 0;
+        if (percent !== lastPercent) { lastPercent = percent; pushPanel(); }        // every 1 % step
+      }).then((res) => {
+        if (res?.ok) {
+          voiceDownload = { state: 'idle', received: res.bytes ?? voiceDownload.received, total: res.bytes ?? voiceDownload.total, error: null };
+          appendLog(`zode: voice model ${settings.voiceModel} is ready`);
+          refreshVoice().then(() => stt.warm().catch(() => {})).catch(() => {});
+        } else {
+          voiceDownload = { state: 'failed', received: voiceDownload.received, total: voiceDownload.total, error: shortVoiceError(res?.error) };
+          appendLog(`zode: voice model download failed: ${res?.error ?? 'unknown'}`);
+        }
+        pushPanel();
+      }).catch((err) => {
+        voiceDownload = { state: 'failed', received: voiceDownload.received, total: voiceDownload.total, error: shortVoiceError(err) };
+        appendLog(`zode: voice model download failed: ${err?.stack || err}`);
+        pushPanel();
+      });
+    }
+
     // Zode updating itself from GitHub Releases: packaged builds only, a development run skips it.
     const selfUpdater = createSelfUpdater({
       updater: autoUpdater,
@@ -144,7 +217,7 @@ async function start() {
       currentPairing = null;
       if (settings.relayEnabled) {
         const a = chosen();                                       // never 0.0.0.0: one concrete address
-        relay = createRelay({ host: a.ip, port: settings.port, publicUrl: publicUrlFor(a), log: relayLog });
+        relay = createRelay({ host: a.ip, port: settings.port, publicUrl: publicUrlFor(a), log: relayLog, stt: sttAdapter });
         relay.on('status', refresh);
         try { await relay.start(); } catch (err) { error = startError(err); }
       }
@@ -259,9 +332,11 @@ async function start() {
           // bumped activity times) feed the summary and the panel ages alike.
           const sessions = withLiveStatus(listed, relay ? relay.liveStatus : null);
           const summary = summarize(sessions, Date.now());
-          // The panel shows ages since the last activity; summarize drops the timestamps, so keep them.
+          // The panel shows ages since the last activity, and the voice hint wants the titles;
+          // summarize drops both, so re-join them from the listing.
           const at = new Map(sessions.map(s => [s?.sessionId, Number(s?.updatedAt) || 0]));
-          summary.lines = summary.lines.map(l => (at.has(l.id) ? { ...l, at: at.get(l.id) } : l));
+          const title = new Map(sessions.map(s => [s?.sessionId, typeof s?.title === 'string' ? s.title : '']));
+          summary.lines = summary.lines.map(l => ({ ...l, at: at.get(l.id) ?? 0, title: title.get(l.id) ?? '' }));
           const pending = {};
           if (summary.counts.waiting > 0) {            // only waiting conversations can have something pending
             for (const request of await listPending({ timeoutMs: WORK_TIMEOUT_MS })) {
@@ -587,6 +662,12 @@ async function start() {
           work,
           selfUpdate: selfUpdater.getState(),
           version: app.getVersion(),
+          voice: {
+            language: settings.voiceLanguage,
+            engine: voiceStatus.engine,
+            model: { id: settings.voiceModel, state: voiceStatus.modelState, bytes: voiceStatus.modelBytes },
+            download: { ...voiceDownload },
+          },
         });
       } catch (err) {
         appendLog(`zode: panel model: ${err?.stack || err}`);
@@ -713,6 +794,13 @@ async function start() {
         else if (p.key === 'launchAtLogin') actions.toggleLaunchAtLogin();
       } else if (name === 'foldFinished') {
         actions.toggleFoldFinished();
+      } else if (name === 'setVoiceLanguage') {
+        if (p.language !== 'en' && p.language !== 'zh') return;
+        settings.voiceLanguage = p.language;
+        save();
+        pushPanel();
+      } else if (name === 'downloadVoiceModel') {
+        startVoiceDownload();
       } else if (name === 'setAddress') {
         if (typeof p.id !== 'string' || !addresses.some(a => a && a.id === p.id)) return;
         actions.selectAddress(p.id);
@@ -974,7 +1062,21 @@ async function start() {
     setInterval(checkReleaseOnce, RELEASE_CHECK_MS);
     refreshSessions();
     pollSessions();
+    refreshVoice();                                   // the panel should show the real model state, not the assumption
     selfUpdater.start();
+
+    // Pay the GPU warm-up once, 20 s in, so the first dictation is not the slow one. Never blocks
+    // startup: without the model or the engine this quietly does nothing.
+    setTimeout(() => {
+      (async () => {
+        await refreshVoice();
+        if (voiceStatus.engine && voiceStatus.modelState === 'ready') {
+          const t0 = Date.now();
+          const r = await stt.warm().catch(() => null);
+          appendLog(`zode: voice warm ${r?.ok === true ? 'done' : 'skipped'} in ${Date.now() - t0} ms`);
+        }
+      })().catch((err) => appendLog(`zode: voice warm: ${err?.stack || err}`));
+    }, 20_000).unref?.();
 
     // First run, or the Engine is gone: walk through setup.
     // Someone who already uses Zode (engine built, ZCode connected, a phone paired, e.g. coming from the old app)
