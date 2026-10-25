@@ -474,21 +474,6 @@ async function start() {
       } catch (err) { appendLog(`zode: notification: ${err?.stack || err}`); }
     }
 
-    // Fresh lines every 30 s while a ZCode server is live, every 10 s while one of its conversations
-    // is running so the panel follows a turn closely. A tick with no live server is one local readdir
-    // that touches no sockets, so nothing runs (and no server is asked) while ZCode is closed.
-    function pollSessions() {
-      if (workPoll) return;
-      const tick = () => {
-        workPoll = setTimeout(() => {
-          if (readTapServers().length > 0) refreshSessions();
-          tick();
-        }, work.counts.working > 0 ? WORK_POLL_ACTIVE_MS : WORK_POLL_MS);
-        workPoll.unref?.();
-      };
-      tick();
-    }
-
     // Wi-Fi joins and Tailscale starts come and go: re-detect every 10 s and restart the relay only
     // when the addresses it listens on really changed. Devices live on disk, so nothing is lost; a
     // phone just reconnects once.
