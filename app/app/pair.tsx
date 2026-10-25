@@ -84,7 +84,7 @@ export default function PairScreen() {
           <Image source={require("../assets/zode-mark.png")} style={styles.mark} accessibilityLabel="Zode" />
           <Text variant="display">Connect to your Mac</Text>
           <Text variant="body" color="subtext" style={styles.paragraph}>
-            On your Mac, click the Z in the menu bar and choose Pair a phone…, then scan the code it shows. Your Mac must be awake, with Zode open. It connects over Wi-Fi at home and over Tailscale when you are away.
+            Scan the code on your Mac.
           </Text>
         </View>
         <View style={styles.actions}>
@@ -135,9 +135,6 @@ export default function PairScreen() {
               Try the demo
             </Text>
           </Pressable>
-          <Text variant="caption" color="subtext" style={styles.hint}>
-            No Mac handy? Try the demo to look around.
-          </Text>
           {showPaste ? (
             <View style={styles.pasteBox}>
               <TextInput
@@ -216,6 +213,5 @@ const styles = StyleSheet.create({
     textAlignVertical: "top",
   },
   error: { textAlign: "center" },
-  hint: { textAlign: "center" },
   privacyLink: { alignSelf: "center", marginTop: 8, padding: 8 },
 });

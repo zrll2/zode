@@ -1,7 +1,12 @@
-import { buildWatchSnapshot } from "../src/watchBridge";
+import {
+  buildWatchSnapshot,
+  nextPushDelayMs,
+  shouldFetch,
+} from "../src/watchBridge";
 
 // Nothing native may load: the bridge imports react-native-watch-connectivity
 // lazily, but mock it anyway so an accidental eager import stays harmless.
+// expo-file-system is mocked because the bridge reads received clips with it.
 jest.mock("react-native-watch-connectivity", () => ({
   watchEvents: {
     addListener: jest.fn(() => jest.fn()),
@@ -10,6 +15,10 @@ jest.mock("react-native-watch-connectivity", () => ({
   updateApplicationContext: jest.fn(),
   getIsPaired: async () => false,
   getReachability: async () => false,
+}));
+
+jest.mock("expo-file-system", () => ({
+  File: class {},
 }));
 
 function row(overrides: Record<string, unknown>): Record<string, unknown> {
@@ -82,6 +91,7 @@ describe("buildWatchSnapshot", () => {
       status: "reconnecting",
       servers: 3,
       sessions: [],
+      defaultSessionId: null,
     });
     expect(buildWatchSnapshot({ sessions: [], status: "ready", servers: 0 }).servers).toBe(0);
     expect(
@@ -93,6 +103,29 @@ describe("buildWatchSnapshot", () => {
     expect(
       buildWatchSnapshot({ sessions: null, status: "ready", servers: 1 }).sessions,
     ).toEqual([]);
+  });
+
+  it("preselects the first needs-you row, else the most recent", () => {
+    const withNeeds = buildWatchSnapshot({
+      sessions: [
+        row({ id: "idle-1", status: "idle", updatedAt: 800 }),
+        row({ id: "needs", status: "waiting", updatedAt: 100 }),
+        row({ id: "idle-2", status: "idle", updatedAt: 900 }),
+      ],
+      status: "ready",
+      servers: 1,
+    });
+    expect(withNeeds.defaultSessionId).toBe("needs");
+
+    const calm = buildWatchSnapshot({
+      sessions: [
+        row({ id: "idle-1", status: "idle", updatedAt: 800 }),
+        row({ id: "idle-2", status: "idle", updatedAt: 900 }),
+      ],
+      status: "ready",
+      servers: 1,
+    });
+    expect(calm.defaultSessionId).toBe("idle-2");
   });
 
   it("falls back to the project name for empty titles and maps states", () => {
@@ -110,5 +143,83 @@ describe("buildWatchSnapshot", () => {
     expect(snapshot.sessions[0]).toMatchObject({ id: "b", state: "needs" });
     expect(snapshot.sessions[1]).toMatchObject({ id: "c", state: "working" });
     expect(snapshot.sessions[2]).toMatchObject({ id: "a", project: "web-app", title: "web-app" });
+  });
+});
+
+// W4 regression: the demo sequence is connecting -> ready with the rpc
+// resolving late and re-renders in between. The fetch and push decisions
+// must never drop the snapshot: a fetch always ends in a push, the push is
+// throttled from the last ACTUAL push (not from a skipped request), and an
+// empty list retries sooner than the throttle window.
+describe("fetch/push decisions (W4)", () => {
+  const throttle = 2_000;
+
+  it("never fetches while not ready, even when forced", () => {
+    expect(
+      shouldFetch({ status: "closed", hasRows: false, force: true, lastFetchMs: 0, nowMs: 60_000, throttleMs: throttle }),
+    ).toBe(false);
+    expect(
+      shouldFetch({ status: "connecting", hasRows: false, force: true, lastFetchMs: 0, nowMs: 60_000, throttleMs: throttle }),
+    ).toBe(false);
+  });
+
+  it("fetches on ready with force, whatever the throttle says", () => {
+    expect(
+      shouldFetch({ status: "ready", hasRows: true, force: true, lastFetchMs: 60_000, nowMs: 60_500, throttleMs: throttle }),
+    ).toBe(true);
+  });
+
+  it("retries an empty list sooner than the throttle window", () => {
+    expect(
+      shouldFetch({ status: "ready", hasRows: false, force: false, lastFetchMs: 59_500, nowMs: 60_000, throttleMs: throttle }),
+    ).toBe(true);
+    expect(
+      shouldFetch({ status: "ready", hasRows: true, force: false, lastFetchMs: 59_500, nowMs: 60_000, throttleMs: throttle }),
+    ).toBe(false);
+  });
+
+  it("fetches once the throttle window has passed", () => {
+    expect(
+      shouldFetch({ status: "ready", hasRows: true, force: false, lastFetchMs: 57_000, nowMs: 60_000, throttleMs: throttle }),
+    ).toBe(true);
+  });
+
+  it("throttles pushes from the last actual push", () => {
+    expect(nextPushDelayMs(0, 1_000, throttle)).toBe(0); // nothing pushed yet
+    expect(nextPushDelayMs(1_000, 61_000, throttle)).toBe(0); // long past
+    expect(nextPushDelayMs(60_000, 60_500, throttle)).toBe(1_500); // just pushed
+    expect(nextPushDelayMs(60_000, 62_000, throttle)).toBe(0); // window over
+  });
+
+  it("walks the demo sequence: connecting (no fetch) -> ready (fetch) -> rows land -> push", () => {
+    let now = 10_000;
+    const step = (ms: number) => {
+      now += ms;
+    };
+
+    // closed/connecting: no fetch, no push of rows
+    expect(
+      shouldFetch({ status: "connecting", hasRows: false, force: true, lastFetchMs: 0, nowMs: now, throttleMs: throttle }),
+    ).toBe(false);
+
+    // ready: forced fetch starts
+    step(200);
+    expect(
+      shouldFetch({ status: "ready", hasRows: false, force: true, lastFetchMs: 0, nowMs: now, throttleMs: throttle }),
+    ).toBe(true);
+
+    // the rpc resolves late (after re-renders): rows land, push is due
+    step(900);
+    const delayAfterRows = nextPushDelayMs(0, now, throttle);
+    expect(delayAfterRows).toBe(0);
+
+    // an unrelated re-render asking again within 2 s is throttled (rows exist)
+    step(100);
+    expect(
+      shouldFetch({ status: "ready", hasRows: true, force: false, lastFetchMs: 10_200, nowMs: now, throttleMs: throttle }),
+    ).toBe(false);
+
+    // but the status change itself still pushes, after the throttle wait
+    expect(nextPushDelayMs(now - 100, now, throttle)).toBe(1_900);
   });
 });

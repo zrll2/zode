@@ -306,23 +306,19 @@ export default function SessionsScreen() {
   }, [unpair, router]);
 
   const confirmExitDemo = useCallback(() => {
-    Alert.alert(
-      "Exit demo?",
-      "The sample sessions disappear. Pair with your Mac to use Zode for real.",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Exit demo",
-          style: "destructive",
-          onPress: () => {
-            void (async () => {
-              await exitDemo();
-              router.replace("/pair");
-            })();
-          },
+    Alert.alert("Leave the demo?", undefined, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Exit demo",
+        style: "destructive",
+        onPress: () => {
+          void (async () => {
+            await exitDemo();
+            router.replace("/pair");
+          })();
         },
-      ],
-    );
+      },
+    ]);
   }, [exitDemo, router]);
 
   const showMenu = useCallback(() => {

@@ -20,11 +20,6 @@ import { Screen } from "../src/ui/Screen";
 import { SectionHeader } from "../src/ui/SectionHeader";
 import { Text } from "../src/ui/Text";
 
-const MODE_DESCRIPTIONS: Record<SessionMode, string> = {
-  plan: "Looks and suggests, changes nothing",
-  edit: "Can change files",
-};
-
 const MODE_LABELS: Record<SessionMode, string> = {
   plan: "Read only",
   edit: "Edit files",
@@ -106,7 +101,6 @@ export default function NewSessionScreen() {
             <Row
               key={option}
               title={MODE_LABELS[option]}
-              subtitle={MODE_DESCRIPTIONS[option]}
               onPress={() => setMode(option)}
               accessibilityLabel={`Mode ${MODE_LABELS[option]}`}
               right={

@@ -8,4 +8,5 @@ module.exports = {
   deploymentTarget: "10.0",
   appleTeamId: "JLB545UV6D",
   frameworks: ["WatchConnectivity"],
+  icon: "../../assets/icon.png",
 };

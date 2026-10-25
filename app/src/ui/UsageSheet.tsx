@@ -93,7 +93,7 @@ export function UsageSheet({
           ),
           caption: `${formatTokens(context.contextUsed ?? 0)} of ${formatTokens(
             context.contextWindow,
-          )} context`,
+          )}`,
         }
       : null;
 

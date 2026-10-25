@@ -8,14 +8,10 @@ import { Sheet } from "./Sheet";
 import { Text } from "./Text";
 export type PhoneMode = "plan" | "edit" | "guarded";
 
-const OPTIONS: { mode: PhoneMode; title: string; note: string }[] = [
-  { mode: "plan", title: "Read only", note: "Looks and suggests, changes nothing" },
-  { mode: "edit", title: "Edit files", note: "Can change files" },
-  {
-    mode: "guarded",
-    title: "Ask first",
-    note: "Asks before each change. Answer on your Mac for now.",
-  },
+const OPTIONS: { mode: PhoneMode; title: string }[] = [
+  { mode: "plan", title: "Read only" },
+  { mode: "edit", title: "Edit files" },
+  { mode: "guarded", title: "Ask first" },
 ];
 
 interface PermissionSheetProps {
@@ -26,11 +22,9 @@ interface PermissionSheetProps {
   onPick: (mode: PhoneMode) => void;
 }
 
-// Permission level sheet: the three phone-selectable modes; build/yolo/auto
-// only show the "Full access" caption (lowering only).
+// Permission level sheet: the three phone-selectable modes.
 export function PermissionSheet({ visible, onClose, running, mode, onPick }: PermissionSheetProps) {
   const t = useTheme();
-  const fullAccess = mode === "build" || mode === "yolo" || mode === "auto";
 
   function pick(picked: PhoneMode) {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -44,13 +38,7 @@ export function PermissionSheet({ visible, onClose, running, mode, onPick }: Per
       </Text>
       {running ? (
         <Text variant="caption" color="warn">
-          Stop the conversation to change this
-        </Text>
-      ) : undefined}
-      {fullAccess ? (
-        <Text variant="caption" color="subtext">
-          This conversation has full access. Pick a level to lower it. You cannot raise it from
-          the phone.
+          Stop to change
         </Text>
       ) : undefined}
       <View style={styles.group}>
@@ -62,15 +50,12 @@ export function PermissionSheet({ visible, onClose, running, mode, onPick }: Per
               disabled={running}
               onPress={() => pick(option.mode)}
               accessibilityRole="button"
-              accessibilityLabel={`${option.title}. ${option.note}${current ? ", current" : ""}`}
+              accessibilityLabel={`${option.title}${current ? ", current" : ""}`}
               style={[styles.row, { backgroundColor: t.colors.muted }]}
             >
               <View style={styles.flex}>
                 <Text numberOfLines={1} style={styles.rowTitle}>
                   {option.title}
-                </Text>
-                <Text variant="caption" color="subtext" numberOfLines={2}>
-                  {option.note}
                 </Text>
               </View>
               {current ? (

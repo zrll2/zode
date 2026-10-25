@@ -66,7 +66,6 @@ export function HomeRow({ item, running = false, last = false, onOpen, onArchive
   }, [item.id, translate]);
 
   const stateWord = running ? `working ${item.time}` : `finished ${item.time}`;
-  const secondLine = running ? `${item.project} · Working` : item.project;
 
   return (
     <View
@@ -112,7 +111,7 @@ export function HomeRow({ item, running = false, last = false, onOpen, onArchive
               {item.title}
             </Text>
             <Text numberOfLines={1} style={[styles.sub, { color: t.colors.subtext }]}>
-              {secondLine}
+              {item.project}
             </Text>
           </View>
           <Text style={[styles.time, { color: t.colors.subtext }]}>{item.time}</Text>

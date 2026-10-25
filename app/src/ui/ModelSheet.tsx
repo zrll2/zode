@@ -56,7 +56,7 @@ export function ModelSheet({
       </Text>
       {running ? (
         <Text variant="caption" color="warn">
-          Stop the conversation to change the model
+          Stop to change
         </Text>
       ) : undefined}
       <View style={styles.group}>
