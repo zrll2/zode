@@ -41,15 +41,36 @@ Every option is optional: `hosts` `['127.0.0.1']` (one http listener per host on
 
 | Direction | Frame |
 |---|---|
-| phone to relay (HTTP) | `POST /pair {code, name}` returns `{id, token}` — every listener answers it |
+| phone to relay (HTTP) | `POST /pair {code, name}` returns `{id, token, pushKey}` — every listener answers it |
 | phone to relay | `{type:"auth", token, since?}` must be the first frame (10 s limit) |
-| relay to phone | `{type:"ready", device, servers:[{pid,cwd}], seq, pending, features:{stt}, addresses:[<every ws url>]}` — a paired phone learns all addresses on each connection |
+| relay to phone | `{type:"ready", device, servers:[{pid,cwd}], seq, pending, features:{stt, push}, addresses:[<every ws url>]}` — a paired phone learns all addresses on each connection |
 | phone to relay | `{type:"rpc", id, method, params, server?}` |
 | relay to phone | `{type:"rpc-result", id, result|error}` |
 | relay to phone | `{type:"event", seq, server, msg}` (ring buffer of 5000; reconnect with `since`) |
 | phone to relay | `{type:"servers"}`, `{type:"resume", since}` |
 
 The pairing payload (the QR text) is `{u, urls, w, c}`: `u` is the http form of the first address and `w` its ws form (what old phones read), `urls` lists every ws address (what newer phones read).
+
+## Push notifications (`push/register`, `push/unregister`)
+
+Every pairing creates a **push key** for the phone: 32 bytes, base64url, in the `POST /pair` answer (`pushKey`) and in the device record (`devices.json`, mode 0600; `listDevices()` never exposes it, like the token hash). The key seals notifications for that phone. Devices paired before push existed have no key: they get no pushes until they re-pair.
+
+Two relay-answered rpc methods over the authed connection (never forwarded upstream):
+
+- `push/register` `{ pushId (20..2000, base64url), secret (20..200, base64url), env: 'production'|'sandbox' }` → `{ ok: true }`; stored on the device record as `push`. A phone without a push key gets the rpc error `-32021 no-push-key`.
+- `push/unregister` `{}` → `{ ok: true }`.
+
+The Mac seals each notification with the phone's push key and the relay forwards it through the push service (`push-service/`): `POST {ZODE_PUSH_URL|https://zode-push.vercel.app}/api/push` with `{ pushId, auth: secret, kind, sealed, collapseId }`. A phone that talked to this relay in the last 30 s is skipped for quiet kinds (finished, stuck) — asks, questions and failures always go out. A pending permission or question pushes about 1.5 s after it arrives, only if it is still pending then. A `gone` answer from the service clears the registration until the phone re-registers.
+
+**Sealing format** (the phone ports `openSealed` from `relay/push.mjs`): `sealed` = base64url(`iv(12) | ciphertext | tag(16)`) of AES-256-GCM over the UTF-8 JSON `{ v: 1, kind, title, body, session?, project?, req?: { server, id }, at }`, with the kind string as AAD. The fixed test vector (the key and iv are test constants, never a real key):
+
+- key: `AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA` (base64url of 32 zero bytes)
+- iv: `[0,1,2,3,4,5,6,7,8,9,10,11]`
+- kind (also the AAD): `ask`
+- plaintext: `{"v":1,"kind":"ask","title":"zode-live-wt","body":"Run: npm test","req":{"server":42,"id":"req-9"},"at":1750000000000}`
+- sealed: build with `crypto.createCipheriv('aes-256-gcm', key, iv, { authTagLength: 16 })`, `setAAD(kind)`, output `iv | ciphertext | tag` as base64url. `relay/test/push.test.mjs` constructs exactly this vector, and `openSealed` must return the plaintext object.
+
+`ZODE_PUSH_URL` overrides the push service URL (`https://zode-push.vercel.app` by default; set it when you deploy your own `push-service/`).
 
 ## Rules the relay enforces
 

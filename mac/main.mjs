@@ -471,6 +471,13 @@ async function start() {
         n.on('click', () => { try { showPanel(); } catch { /* the panel comes with the next click */ } });
         n.show();
         appendLog(`zode: notification ${note.kind}`);
+        // The same news goes to the paired phones, sealed per phone by the relay. Kinds map 1:1;
+        // a burst becomes one 'done' carrying the update count.
+        const kind = { finished: 'done', failed: 'failed', stalled: 'stuck', many: 'done' }[note.kind];
+        if (kind) {
+          const text = note.kind === 'many' ? `${Math.max(0, Math.floor(Number(note.count) || 0))} updates` : body;
+          try { relay?.notifyDevices?.({ kind, title, body: text, project: note.project }); } catch { /* pushes are best effort */ }
+        }
       } catch (err) { appendLog(`zode: notification: ${err?.stack || err}`); }
     }
 

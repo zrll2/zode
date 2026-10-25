@@ -549,6 +549,131 @@ test('askRisky keeps the destructive ones waiting while auto-allow handles the r
   }
 });
 
+test('push: pairing hands out a key, the phone registers, and notifyDevices follows the rules', async () => {
+  const sent = [];
+  const pusher = {
+    activeWindowMs: 30000,
+    send: async (device, note) => { sent.push({ device, note }); return { ok: true }; },
+  };
+  const port = await freePort();
+  const up = fakeUpstream();
+  const relay = createRelay({ port, stateDir: path.join(up.home, 'state'), tapDir: up.tapDir, log: silent, push: pusher, pushDelayMs: 30 });
+  await relay.start();
+  let ws = null;
+  try {
+    await waitFor(() => relay.status().upstreams === 1);
+    const p = relay.createPairing();
+    const paired = await (await pair(port, p.code, 'phone')).json();
+    assert.match(paired.pushKey, /^[A-Za-z0-9_-]{43}$/);                // 32 bytes, base64url
+    const devs = relay.listDevices();
+    assert.equal('pushKey' in devs[0], false);                          // the key never leaves the record
+    assert.equal('push' in devs[0], false);
+    const conn = await authed(`ws://127.0.0.1:${port}`, paired.token);
+    ws = conn.ws;
+    assert.deepEqual(conn.ready.features, { stt: false, push: true });
+
+    ws.send(JSON.stringify({ type: 'rpc', id: 200, method: 'push/register', params: { pushId: 'P'.repeat(30), secret: 'S'.repeat(30), env: 'production' } }));
+    assert.deepEqual((await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === 200)).result, { ok: true });
+
+    // the phone is authed and just talked: a done is skipped, an ask always goes out
+    assert.deepEqual(await relay.notifyDevices({ kind: 'done', title: 'p', body: 'Done' }), { sent: 0, skipped: 1, gone: 0 });
+    assert.deepEqual(await relay.notifyDevices({ kind: 'ask', title: 'p', body: 'Run: npm test', session: 'sess1', req: { server: 1, id: 2 } }),
+      { sent: 1, skipped: 0, gone: 0 });
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].device.pushKey, paired.pushKey);
+    assert.deepEqual([sent[0].note.kind, sent[0].note.req], ['ask', { server: 1, id: 2 }]);
+
+    // a pending permission from upstream pushes once, after the delay, with the shared summary
+    up.send({ id: 'req-77', method: 'interaction/requestPermission', params: { sessionId: 'sess_a', toolName: 'Bash', input: { command: 'npm test' } } });
+    await waitFor(() => sent.length === 2);
+    await sleep(100);
+    assert.equal(sent.length, 2);                                       // exactly once
+    assert.deepEqual([sent[1].note.kind, sent[1].note.body], ['ask', 'Run: npm test']);
+    assert.equal(sent[1].note.title, 'fake-workspace');                 // the project: the upstream folder's basename
+    assert.deepEqual(sent[1].note.req, { server: process.pid, id: 'req-77' });
+    assert.equal(sent[1].note.session, 'sess_a');
+  } finally {
+    try { ws?.close(); } catch {}
+    await relay.stop();
+    await up.close();
+  }
+});
+
+test('push: a phone without a key gets no-push-key; unregister stops the pushes; answered first never pushes', async () => {
+  const sent = [];
+  const pusher = { activeWindowMs: 30000, send: async (device, note) => { sent.push({ device, note }); return { ok: true }; } };
+  const port = await freePort();
+  const up = fakeUpstream();
+  const stateDir = path.join(up.home, 'state');
+  const legacyToken = 'legacy-token';
+  const relay = createRelay({ port, stateDir, tapDir: up.tapDir, log: silent, push: pusher, pushDelayMs: 40 });
+  await relay.start();
+  let ws = null;
+  try {
+    // a device paired before push existed: no key in its record
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(path.join(stateDir, 'devices.json'), JSON.stringify([
+      { id: 'legacy', name: 'old phone', tokenHash: crypto.createHash('sha256').update(legacyToken).digest('hex'), pairedAt: 1 },
+    ]));
+    await waitFor(() => relay.status().upstreams === 1);
+    ({ ws } = await authed(`ws://127.0.0.1:${port}`, legacyToken));
+    ws.send(JSON.stringify({ type: 'rpc', id: 210, method: 'push/register', params: { pushId: 'P'.repeat(30), secret: 'S'.repeat(30), env: 'production' } }));
+    const refused = await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === 210);
+    assert.equal(refused.error.code, -32021);
+    assert.match(refused.error.message, /no-push-key/);
+
+    // a phone with a key registers, then unregisters: the pushes stop
+    const p = relay.createPairing();
+    const paired = await (await pair(port, p.code, 'new phone')).json();
+    const second = await authed(`ws://127.0.0.1:${port}`, paired.token);
+    ws = second.ws;
+    ws.send(JSON.stringify({ type: 'rpc', id: 211, method: 'push/register', params: { pushId: 'P'.repeat(30), secret: 'S'.repeat(30), env: 'sandbox' } }));
+    assert.deepEqual((await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === 211)).result, { ok: true });
+    assert.deepEqual(await relay.notifyDevices({ kind: 'ask', title: 'p', body: 'x' }), { sent: 1, skipped: 0, gone: 0 });
+    ws.send(JSON.stringify({ type: 'rpc', id: 212, method: 'push/unregister', params: {} }));
+    assert.deepEqual((await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === 212)).result, { ok: true });
+    assert.deepEqual(await relay.notifyDevices({ kind: 'ask', title: 'p', body: 'x' }), { sent: 0, skipped: 0, gone: 0 });
+
+    // a permission that is answered (or auto-allowed) inside the delay window never pushes
+    up.send({ id: 'req-88', method: 'interaction/requestPermission', params: { sessionId: 'sess_a', toolName: 'Bash', input: { command: 'npm run build' } } });
+    await sleep(10);                                                    // the push is scheduled but has not fired
+    up.send({ method: 'tap/resolved', params: { id: 'req-88' } });
+    await sleep(150);                                                   // well past pushDelayMs
+    assert.equal(sent.length, 1);                                       // only the pre-unregister ask
+  } finally {
+    try { ws?.close(); } catch {}
+    await relay.stop();
+    await up.close();
+  }
+});
+
+test('push: a gone answer clears the registration until the phone re-registers', async () => {
+  let answer = { gone: true };
+  const pusher = { activeWindowMs: 30000, send: async () => answer };
+  const port = await freePort();
+  const up = fakeUpstream();
+  const relay = createRelay({ port, stateDir: path.join(up.home, 'state'), tapDir: up.tapDir, log: silent, push: pusher, pushDelayMs: 30 });
+  await relay.start();
+  let ws = null;
+  try {
+    await waitFor(() => relay.status().upstreams === 1);
+    const paired = await (await pair(port, relay.createPairing().code, 'phone')).json();
+    ({ ws } = await authed(`ws://127.0.0.1:${port}`, paired.token));
+    ws.send(JSON.stringify({ type: 'rpc', id: 220, method: 'push/register', params: { pushId: 'P'.repeat(30), secret: 'S'.repeat(30), env: 'production' } }));
+    await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === 220);
+    assert.deepEqual(await relay.notifyDevices({ kind: 'failed', title: 'p', body: 'x' }), { sent: 0, skipped: 0, gone: 1 });
+    assert.deepEqual(await relay.notifyDevices({ kind: 'failed', title: 'p', body: 'x' }), { sent: 0, skipped: 0, gone: 0 });   // nothing left to try
+    answer = { ok: true };                                              // the phone re-registered after reopening the app
+    ws.send(JSON.stringify({ type: 'rpc', id: 221, method: 'push/register', params: { pushId: 'Q'.repeat(30), secret: 'S'.repeat(30), env: 'production' } }));
+    await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === 221);
+    assert.deepEqual(await relay.notifyDevices({ kind: 'failed', title: 'p', body: 'x' }), { sent: 1, skipped: 0, gone: 0 });
+  } finally {
+    try { ws?.close(); } catch {}
+    await relay.stop();
+    await up.close();
+  }
+});
+
 test('checkPolicy: rename/upload session ids, upload file rules, send attachments, usage ranges, no raw commands', () => {
   const id100 = 'sess_' + 'x'.repeat(95);                              // exactly 100 characters
   const png = { fileName: 'a.png', mime: 'image/png', dataBase64: Buffer.from('hello').toString('base64') };
@@ -834,7 +959,7 @@ test('stt/transcribe: the relay answers itself, the host gets the exact bytes, n
     await waitFor(() => relay.status().upstreams === 1);
     const { id: device, token } = await (await pair(port, relay.createPairing().code, 'phone')).json();
     const { ws, ready } = await authed(`ws://127.0.0.1:${port}`, token);
-    assert.deepEqual(ready.features, { stt: true });
+    assert.deepEqual(ready.features, { stt: true, push: true });
 
     const raw = Buffer.from('watch aac bytes \u00e9\u4e2d', 'utf8');
     const long = 'x'.repeat(100);
@@ -898,7 +1023,7 @@ test('stt without a host engine: features.stt is false and both methods answer v
   try {
     const { token } = await (await pair(port, relay.createPairing().code, 'phone')).json();
     const { ws, ready } = await authed(`ws://127.0.0.1:${port}`, token);
-    assert.deepEqual(ready.features, { stt: false });
+    assert.deepEqual(ready.features, { stt: false, push: true });
     ws.send(JSON.stringify({ type: 'rpc', id: 71, method: 'stt/transcribe', params: { audio: goodAudio, format: 'wav' } }));
     const res = await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === 71);
     assert.equal(res.error.code, -32020);

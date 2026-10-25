@@ -5,6 +5,8 @@
 import { withRealActivity } from './activity.mjs';
 import { createLiveStatus } from './live.mjs';
 import { isRiskyRequest } from './risk.mjs';
+import { summarizeRequest } from './summary.mjs';
+import { createPusher } from './push.mjs';
 import { validateTranscribe, createLimiter } from './stt.mjs';
 import net from 'node:net';
 import fs from 'node:fs';
@@ -32,7 +34,10 @@ const ALLOWED = new Set(['session/list', 'session/create', 'session/resume', 'se
   'session/usage', 'session/goal', 'session/compact', 'session/rename', 'usage/stats', 'attachment/upload',
   // stt/* are answered by the relay itself (never forwarded); the handler validates their params and
   // answers failures with its own -32020 codes, so checkPolicy has nothing more to say about them.
-  'stt/transcribe', 'stt/status']);
+  'stt/transcribe', 'stt/status',
+  // push/* are answered by the relay itself too: the phone stores its push endpoint on its own
+  // device record. Validated in checkPolicy; a phone without a pairing key gets -32021.
+  'push/register', 'push/unregister']);
 const SAFE_MODES = new Set(['plan', 'edit', 'guarded']);       // never yolo / build from a phone
 const DECISIONS = new Set(['allow', 'deny']);   // a phone may only allow or deny; never modify, escalate or add rules
 // session/rename and session/send (with attachments) are the phone methods that become agent commands: the relay builds
@@ -86,6 +91,14 @@ export function checkPolicy(method, params) {
     if (typeof params.content !== 'string') return 'content must be a string when attachments are sent';
   }
   if (method === 'usage/stats' && !['all', '7d', '30d'].includes(params?.range)) return "range must be 'all', '7d' or '30d'";
+  if (method === 'push/register') {
+    const b64 = (v, min, max) => typeof v === 'string' && v.length >= min && v.length <= max && /^[A-Za-z0-9_-]+$/.test(v);
+    if (!b64(params?.pushId, 20, 2000)) return 'pushId must be 20-2000 base64url characters';
+    if (!b64(params?.secret, 20, 200)) return 'secret must be 20-200 base64url characters';
+    if (params?.env !== 'production' && params?.env !== 'sandbox') return "env must be 'production' or 'sandbox'";
+    return null;
+  }
+  if (method === 'push/unregister') return null;
   return null;
 }
 
@@ -111,6 +124,11 @@ export function createRelay(opts = {}) {
   const pendingSyncMs = Number.isFinite(opts.pendingSyncMs) ? Math.max(0, opts.pendingSyncMs) : 10_000;   // how often the pending list is reconciled with the wrapper's truth; 0 disables
   const autoAllow = typeof opts.autoAllow === 'function' ? opts.autoAllow : () => false;   // the host decides; the relay on its own never answers
   const askRisky = typeof opts.askRisky === 'function' ? opts.askRisky : () => false;      // true: risky commands wait for a human even with auto-allow on
+  // Push: a pusher (relay/push.mjs) forwarded to the host, `push: false` to switch pushes off, or
+  // the default real pusher on the global fetch. pushDelayMs is how long a pending request waits
+  // before its push goes out — a desktop answer or an auto-allow inside that window cancels it.
+  const pusher = opts.push === false ? null : (opts.push || createPusher({ log: (...a) => log.log(...a), now: Date.now }));
+  const pushDelayMs = Number.isFinite(opts.pushDelayMs) ? Math.max(0, opts.pushDelayMs) : 1500;
   const log = opts.log ?? console;
   const stt = opts.stt ?? null;               // the host's speech engine ({transcribe, status, defaultLanguage}); absent -> voice-off
   const sttLimiter = createLimiter();         // per device: one transcribe in flight, at most 20 per minute
@@ -136,6 +154,8 @@ export function createRelay(opts = {}) {
   const live = createLiveStatus();
   const syncPending = () => live.setPending([...pendingReq.values()].map(p => ({ sessionId: p.params?.sessionId, method: p.method })));
   const autoAnswered = new Set();     // `${pid}:${id}` this relay already answered itself: never twice, never re-added
+  const pendingPushSeen = new Set();  // `${pid}:${id}` requests that already scheduled their push: once per request id
+  const pendingPushTimers = new Map();
 
   function status() {
     return { running, host: hosts[0], hosts: [...hosts], port, publicUrl, publicUrls: [...publicUrls], upstreams: upstream.size, clients: clients.size, devices: readJson(DEVICES, []).length };
@@ -168,6 +188,8 @@ export function createRelay(opts = {}) {
         upstream.delete(pid); emitStatus();
         for (const k of pendingReq.keys()) if (k.startsWith(pid + ':')) pendingReq.delete(k);
         for (const k of autoAnswered) if (k.startsWith(pid + ':')) autoAnswered.delete(k);
+        for (const k of [...pendingPushSeen]) if (k.startsWith(pid + ':')) pendingPushSeen.delete(k);
+        for (const [k, t] of pendingPushTimers) if (k.startsWith(pid + ':')) { clearTimeout(t); pendingPushTimers.delete(k); }
         syncPending();
         for (const [rid, r] of routes) if (r.internalCall && r.pid === pid) { routes.delete(rid); clearTimeout(r.timer); r.reject(new Error('upstream closed')); }
       });
@@ -265,10 +287,17 @@ export function createRelay(opts = {}) {
       if (!autoAnswered.has(`${pid}:${m.id}`)) {                        // an already-answered repeat stays out
         pendingReq.set(`${pid}:${m.id}`, { server: pid, id: m.id, method: m.method, params: m.params, at: now, seenAt: now });
         autoAllowRequest(pid, m);                                       // may answer and remove it again
+        if (pendingReq.has(`${pid}:${m.id}`)) schedulePendingPush(pid, m);   // still pending: the phone hears about it
       }
       syncPending();
     }
-    if (m.method === 'tap/resolved') { pendingReq.delete(`${pid}:${m.params?.id}`); syncPending(); }
+    if (m.method === 'tap/resolved') {
+      const key = `${pid}:${m.params?.id}`;
+      pendingPushSeen.delete(key);                                      // answered: the scheduled push cancels itself
+      const timer = pendingPushTimers.get(key);
+      if (timer) { clearTimeout(timer); pendingPushTimers.delete(key); }
+      pendingReq.delete(key); syncPending();
+    }
     const e = { seq: ++seq, server: pid, msg: m };
     replay.push(e); if (replay.length > REPLAY_MAX) replay.shift();
     for (const c of clients) if (c.authed) send(c, JSON.stringify(e).length > MAX_FRAME ? { type: 'event', seq: e.seq, server: pid, msg: { method: m.method, params: { sessionId: m.params?.sessionId, type: m.params?.type, truncated: true } } } : { type: 'event', ...e });
@@ -313,9 +342,10 @@ export function createRelay(opts = {}) {
     const exp = all[k]; if (!exp || exp < Date.now()) return null;
     delete all[k]; writeJson(CODES, all);                           // one-time
     const token = crypto.randomBytes(32).toString('base64url'); const id = crypto.randomBytes(4).toString('hex');
-    const devs = readJson(DEVICES, []); devs.push({ id, name: String(name || 'phone').slice(0, 60), tokenHash: sha(token), pairedAt: Date.now() });
+    const pushKey = crypto.randomBytes(32).toString('base64url');    // seals notifications for this phone; rotated by re-pairing
+    const devs = readJson(DEVICES, []); devs.push({ id, name: String(name || 'phone').slice(0, 60), tokenHash: sha(token), pairedAt: Date.now(), pushKey });
     writeJson(DEVICES, devs); emitStatus();
-    return { id, token };
+    return { id, token, pushKey };
   }
   const findDevice = token => readJson(DEVICES, []).find(d => eq(d.tokenHash, sha(String(token))));
 
@@ -423,6 +453,86 @@ export function createRelay(opts = {}) {
     }
   }
 
+  // push/register and push/unregister: the phone stores (or clears) its push-service endpoint on its
+  // own device record. A phone paired before push existed has no key: it re-pairs to get one.
+  function handlePushRpc(c, m) {
+    const fail = (message) => send(c, { type: 'rpc-result', id: m.id, error: { code: -32021, message } });
+    const devs = readJson(DEVICES, []);
+    const at = devs.findIndex((d) => d.id === c.device?.id);
+    if (at < 0 || !c.device?.pushKey) return fail('no-push-key: pair again to get one');
+    if (m.method === 'push/register') {
+      devs[at].push = { pushId: m.params.pushId, secret: m.params.secret, env: m.params.env, at: Date.now() };
+    } else {
+      delete devs[at].push;
+    }
+    writeJson(DEVICES, devs);
+    c.device = devs[at];
+    send(c, { type: 'rpc-result', id: m.id, result: { ok: true } });
+  }
+
+  const projectNameOf = (pid) => {
+    const cwd = upstream.get(pid)?.meta?.cwd;                          // the server's folder is the project name
+    const parts = typeof cwd === 'string' ? cwd.split('/').filter(Boolean) : [];
+    return parts[parts.length - 1] || 'Zode';
+  };
+
+  // A pending permission or question pushes to the phone shortly after it arrives — but only if it
+  // is still pending when the moment comes (a quick desktop answer or auto-allow cancels it), and
+  // only once per request id. The title is the project, the body the same summary the Mac shows.
+  function schedulePendingPush(pid, entry) {
+    if (!pusher) return;
+    const key = `${pid}:${entry.id}`;
+    if (pendingPushSeen.has(key)) return;
+    pendingPushSeen.add(key);
+    const timer = setTimeout(() => {
+      pendingPushTimers.delete(key);
+      try {
+        const still = pendingReq.get(key);
+        if (!still) return;
+        const question = still.method === 'interaction/requestUserInput';
+        notifyDevices({
+          kind: question ? 'question' : 'ask',
+          title: projectNameOf(pid),
+          body: question ? 'Needs an answer' : summarizeRequest(still.params).text,
+          session: still.params?.sessionId,
+          req: { server: pid, id: still.id },
+        });
+      } catch { /* never throws */ }
+    }, pushDelayMs);
+    timer.unref?.();
+    pendingPushTimers.set(key, timer);
+  }
+
+  // Push to every paired phone that registered a push endpoint and has a key. A phone that talked to
+  // this relay recently is looking at its screen already — skipped, unless the news is one of the
+  // kinds that always go out (ask, question, failed). A gone answer clears the registration; the
+  // phone re-registers the next time it is opened. Never throws.
+  async function notifyDevices({ kind, title, body, session, project, req } = {}) {
+    const summary = { sent: 0, skipped: 0, gone: 0 };
+    if (!pusher) return summary;
+    try {
+      const windowMs = pusher.activeWindowMs ?? 30000;
+      const now = Date.now();
+      const always = kind === 'ask' || kind === 'question' || kind === 'failed';
+      for (const device of readJson(DEVICES, [])) {
+        try {
+          if (!device.push || !device.pushKey) continue;               // never paired for push: quiet
+          const active = [...clients].some((c) => c.authed && c.device?.id === device.id && c.lastSeenAt && now - c.lastSeenAt < windowMs);
+          if (active && !always) { summary.skipped += 1; continue; }
+          const out = await pusher.send(device, { kind, title, body, session, project, req });
+          if (out?.gone) {
+            const devs = readJson(DEVICES, []);
+            const at = devs.findIndex((d) => d.id === device.id);
+            if (at >= 0) { delete devs[at].push; writeJson(DEVICES, devs); }
+            summary.gone += 1;
+          } else if (out?.ok) summary.sent += 1;
+          else summary.skipped += 1;
+        } catch { /* one bad device never stops the rest */ }
+      }
+    } catch { /* never throws */ }
+    return summary;
+  }
+
   // ---- server --------------------------------------------------------------------
   function start() {
     if (running) return Promise.resolve({ host: hosts[0], port });
@@ -456,6 +566,7 @@ export function createRelay(opts = {}) {
       const authTimer = setTimeout(() => ws.close(4001, 'auth timeout'), 10_000);
       ws.on('close', () => { if (clients.delete(c)) emitStatus(); clearTimeout(authTimer); });
       ws.on('message', raw => {
+        c.lastSeenAt = Date.now();                                    // any frame counts as activity (the phone is awake)
         let m; try { m = JSON.parse(String(raw)); } catch { return; }
         if (!c.authed) {
           if (m.type !== 'auth' || throttled(ip)) return ws.close(4003, 'auth required');
@@ -463,7 +574,7 @@ export function createRelay(opts = {}) {
           if (!d) { fail(ip); return ws.close(4003, 'bad token'); }
           c.authed = true; c.device = d; clients.add(c); clearTimeout(authTimer); emitStatus();
           log.log(`device ${d.id} connected from ${ip}`);
-          send(c, { type: 'ready', protocol: PROTOCOL, device: d.id, servers: [...upstream.values()].map(u => ({ pid: u.meta.pid, cwd: u.meta.cwd })), seq, pending: [...pendingReq.values()], features: { stt: !!stt }, addresses: [...publicUrls] });
+          send(c, { type: 'ready', protocol: PROTOCOL, device: d.id, servers: [...upstream.values()].map(u => ({ pid: u.meta.pid, cwd: u.meta.cwd })), seq, pending: [...pendingReq.values()], features: { stt: !!stt, push: true }, addresses: [...publicUrls] });
           if (typeof m.since === 'number') for (const e of replay) if (e.seq > m.since) send(c, { type: 'event', ...e });
           return;
         }
@@ -486,6 +597,7 @@ export function createRelay(opts = {}) {
           const bad = checkPolicy(m.method, m.params);
           if (bad) return send(c, { type: 'rpc-result', id: m.id, error: { code: -32001, message: bad } });
           if (m.method === 'stt/transcribe' || m.method === 'stt/status') return handleStt(c, m);   // relay-answered: no upstream needed, never forwarded
+          if (m.method === 'push/register' || m.method === 'push/unregister') return handlePushRpc(c, m);   // relay-answered too
           const u = (m.server && upstream.get(m.server)) || [...upstream.values()].find(x => x.meta.cwd === m.params?.workspace?.workspacePath) || [...upstream.values()][0];
           if (!u) return send(c, { type: 'rpc-result', id: m.id, error: { code: -32002, message: 'no ZCode server (is Zode.app running?)' } });
           if (m.method === 'attachment/upload') return uploadAttachment(c, m, u);        // multi-step: resume, begin, chunks, commit
@@ -554,5 +666,5 @@ export function createRelay(opts = {}) {
     emitStatus();
   }
 
-  return { start, stop, status, createPairing, listDevices, revokeDevice, on, off, liveStatus: live };
+  return { start, stop, status, createPairing, listDevices, revokeDevice, on, off, liveStatus: live, notifyDevices };
 }

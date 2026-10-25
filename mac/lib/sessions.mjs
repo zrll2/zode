@@ -6,7 +6,7 @@ import net from 'node:net';
 import path from 'node:path';
 import os from 'node:os';
 import { withRealActivity } from '../../relay/activity.mjs';
-import { isRiskyRequest } from '../../relay/risk.mjs';
+import { summarizeRequest } from '../../relay/summary.mjs';
 
 const MIN = 60 * 1000;
 const tapDir = () => path.join(os.homedir(), '.zcode-tap');
@@ -122,9 +122,8 @@ async function ask(sock, method, params, timeoutMs = 1500, connect = defaultConn
   return null;
 }
 
-// Whether a request needs a second look before an allow from the menu bar: the shared risky-command
-// classifier (relay/risk.mjs — the same rules the relay and the phone use) decides.
-const clip = (str, max = 80) => { const s = String(str); return s.length <= max ? s : s.slice(0, max - 1) + '…'; };
+// Whether a request needs a second look before an allow from the menu bar: the shared classifier
+// lives in relay/summary.mjs together with the summariser, imported below.
 
 // The answer options the agent offers with a permission request, kept for the panel's bulk answers:
 // only these fields, at most 6, junk ignored. `response` is what ZCode itself sends back when that
@@ -146,23 +145,10 @@ function permissionOptions(params) {
   return options;
 }
 
-// "Run: <command>" / "Edit: <file name>" — the tool plus its key input, never more than 80 characters,
-// plus the shared risky verdict. `detail` stays untruncated for the confirmation dialog.
-export function summarizeRequest(params) {
-  const input = params?.input && typeof params.input === 'object' ? params.input : {};
-  const command = typeof input.command === 'string' ? input.command : '';
-  const filePath = typeof input.file_path === 'string' ? input.file_path : '';
-  const toolName = typeof params?.toolName === 'string' && params.toolName ? params.toolName : '';
-  let detail;
-  if (command) detail = `Run: ${command}`;
-  else if (filePath) detail = `Edit: ${filePath.split('/').filter(Boolean).pop() || filePath}`;
-  else detail = toolName || 'Permission request';
-  return {
-    text: clip(detail),
-    detail,
-    risky: isRiskyRequest(params),
-  };
-}
+// "Run: <command>" / "Edit: <file name>" — the tool plus its key input, plus the shared risky
+// verdict. The implementation is shared with the relay (relay/summary.mjs); `detail` stays
+// untruncated for the confirmation dialog.
+export { summarizeRequest } from '../../relay/summary.mjs';
 
 // Every live server asked for its pending permission / user-input requests: oldest first, each
 // remembering which socket it came from. Never throws.
