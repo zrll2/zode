@@ -1,5 +1,10 @@
 # Zode for Mac
 
+## 1.3.1
+- **Notifications.** A macOS notification when a conversation finishes, fails, needs an answer or looks stuck. One switch in Settings (on by default), short bursts are grouped, and nothing about your commands or files is shown.
+- **Cleaner text.** Settings, banners, toasts and the setup and pairing windows lost their explanatory sentences; the layout does the explaining.
+- Fixed a rare break in the app's main file that is now covered by a test.
+
 ## 1.2.0
 - **ZCode never waits for you (new default).** Zode now allows ZCode's permission requests automatically, the moment they appear. Questions that need a human answer are never answered for you. Turn it off in Settings: **Allow ZCode requests automatically**.
 - **Keep asking for risky commands.** A second switch (off by default): even with automatic approval on, commands like `rm -rf`, `sudo`, `git push` and `curl` wait for you. The Mac and the phone now share one list of what counts as risky.
