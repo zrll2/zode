@@ -65,7 +65,7 @@ function needOf(line, pending, now) {
           .some(o => o && (o.optionId === 'allow_project' || o.kind === 'allow_always')),
       };
     }
-    return { ...base, kind: 'question', ask: 'Waiting for an answer. If this task was started by a script, stop it here.', waiting };
+    return { ...base, kind: 'question', ask: 'Waiting for an answer', waiting };
   }
   const m = /^Quiet for (\d+) min/.exec(str(line.status));
   const n = m ? m[1] : null;

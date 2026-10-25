@@ -101,7 +101,7 @@ test('busy: every need kind, red before amber, working rows, finished split by a
   assert.equal(ask.sock, '/sock');
   assert.deepEqual([ask.more, ask.same], [1, 0]);     // one other permission, none with the same command (the question does not count)
   assert.equal(m.needs[2].kind, 'question');          // the question behind the permissions wins nothing
-  assert.equal(m.needs[2].ask, 'Waiting for an answer. If this task was started by a script, stop it here.');
+  assert.equal(m.needs[2].ask, 'Waiting for an answer');
   assert.equal('requestId' in m.needs[2], false);
   assert.equal('more' in m.needs[2], false);
   assert.equal(m.needs[3].ask, 'No activity for 12 min. It may be stuck.');
@@ -122,7 +122,7 @@ test('a waiting session with only a question — or nothing pending — still as
     work: { lines: [line({ id: 'a', light: 'amber', status: 'Waiting for you', at: NOW - min })], pending: { a: [perm({ kind: 'question', summary: '' })] } },
   }), NOW);
   assert.equal(withQuestion.needs[0].kind, 'question');
-  assert.equal(withQuestion.needs[0].ask, 'Waiting for an answer. If this task was started by a script, stop it here.');
+  assert.equal(withQuestion.needs[0].ask, 'Waiting for an answer');
   const withNothing = buildPanelModel(input({
     work: { lines: [line({ id: 'b', light: 'amber', status: 'Waiting for you', at: NOW - min })] },
   }), NOW);
