@@ -67,7 +67,7 @@ function renderBody(id, s) {
 }
 
 function renderFind(body) {
-  body.append(el('p', null, 'Zode works with the ZCode app. Install ZCode first.'));
+  body.append(el('p', null, 'Install ZCode first.'));
   const row = el('div', 'row');
   row.append(btn('Get ZCode', () => { window.zode.setupOpenDownload(); }, true));
   row.append(btn('Check again', () => load()));
@@ -105,12 +105,12 @@ function renderPrepare(body, s) {
     }, true));
     return;
   }
-  body.append(el('p', null, 'Zode makes its own copy of ZCode so your phone can talk to it. Your original ZCode is not changed.'));
+  body.append(el('p', null, 'Zode makes its own copy of ZCode.'));
   body.append(btn('Set up', () => { window.zode.setupStartBuild().catch(() => {}); }, true));
 }
 
 function renderLogin(body, s) {
-  body.append(el('p', null, 'Open ZCode, sign in with your Z.AI account, and open any project folder.'));
+  body.append(el('p', null, 'Sign in to ZCode and open any project.'));
   body.append(btn('Open ZCode', () => { window.zode.setupOpenEngine(); }, true));
   body.append(el('p', s.tapAlive ? 'status-ok' : 'status-wait', s.tapAlive ? 'ZCode is connected' : 'Waiting for ZCode…'));
 }
@@ -120,8 +120,8 @@ async function renderPhone(body, s) {
     try { knownDevices = new Set((await window.zode.listDevices()).map(d => d.id)); } catch { knownDevices = new Set(); }
   }
   if (justPaired) {                                  // the scan worked: say so, drop the QR code
-    body.append(el('p', 'status-ok', `✓ ${justPaired} is paired.`));
-    body.append(el('p', null, 'You can now follow your ZCode work from your phone. Zode stays in the menu bar.'));
+    body.append(el('p', 'status-ok', `✓ ${justPaired} is paired`));
+    body.append(el('p', null, 'You can now follow your ZCode work from your phone.'));
     body.append(btn('Done', async () => { try { await window.zode.setupDone(); } catch {} }, true));
     return;
   }
@@ -147,8 +147,6 @@ async function renderPhone(body, s) {
   });
   row.append(copy);
   body.append(msg, card, codeRow, row);
-  body.append(el('p', 'muted', 'Your phone and this Mac must be on the same Wi-Fi.'));
-  body.append(el('p', 'muted', 'Away from home? Install Tailscale on both (free); Zode will show the right address.'));
   if (s.oldApp?.exists) {
     const note = el('p', 'muted', 'The old Zode.app is no longer needed.');
     const trash = btn('Move it to the Trash', async () => {

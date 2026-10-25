@@ -9,11 +9,6 @@ const fmt = (ms) => {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 };
 
-// "Reachable at 192.168.86.46 and 100.86.6.90" — every address the relay listens on, or '' when none.
-const reachLine = (where) => where.length === 0 ? ''
-  : where.length === 1 ? `Reachable at ${where[0]}`
-  : `Reachable at ${where.slice(0, -1).join(', ')} and ${where[where.length - 1]}`;
-
 function stopTicker() {
   if (ticker) { clearInterval(ticker); ticker = null; }
 }
@@ -32,9 +27,6 @@ function tick() {
 
 function render(p) {
   payload = p.payload;
-  const where = Array.isArray(p.reachable) ? p.reachable.filter(x => typeof x === 'string' && x) : [];
-  $('relayLine').textContent = reachLine(where);
-  $('relayLine').classList.toggle('hidden', !where.length);
   const ok = !!(p.running && p.qrSvg);
   $('relayMessage').classList.toggle('hidden', ok);
   $('qrCard').classList.toggle('hidden', !ok);

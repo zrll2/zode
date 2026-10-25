@@ -1,5 +1,4 @@
 // The menu bar (tray) menu as plain template objects, so it can be built and tested without Electron.
-const HINT = 'Not encrypted. Use Tailscale away from home.';
 
 // Menus cannot right-align a second piece of text, so each line is padded with spaces until the whole line has
 // the same width: the status then ends at one right edge. Widths are measured in the real font by the app
@@ -163,10 +162,7 @@ export function buildMenuTemplate(state, actions) {
     { label: 'Relay on', type: 'checkbox', checked: !!state.running, click: () => actions.toggleRelay() },
     {
       label: 'Reachable from',
-      submenu: [
-        ...addresses.map(a => ({ label: a.label, type: 'radio', checked: a.id === state.addressId, click: () => actions.selectAddress(a.id) })),
-        ...(state.addressId === 'lan' ? [{ label: HINT, enabled: false }] : []),
-      ],
+      submenu: addresses.map(a => ({ label: a.label, type: 'radio', checked: a.id === state.addressId, click: () => actions.selectAddress(a.id) })),
     },
     { label: 'Start Zode when you log in', type: 'checkbox', checked: !!state.launchAtLogin, click: () => actions.toggleLaunchAtLogin() },
     { label: 'Keep my Mac awake while Zode is on', type: 'checkbox', checked: !!state.keepAwake, click: () => actions.toggleKeepAwake() },

@@ -71,7 +71,7 @@ function needOf(line, pending, now) {
   const n = m ? m[1] : null;
   return {
     ...base, kind: 'stalled',
-    ask: n ? `No activity for ${n} min. It may be stuck.` : 'No activity. It may be stuck.',
+    ask: n ? `Quiet for ${n} min` : 'Quiet',
     waiting: n ? `${n} min` : waiting,
   };
 }
@@ -86,38 +86,19 @@ function bannerOf(s) {
   const engineMissing = !!engine && !str(engine.path);
   const setupUndone = s.tapAlive === false && s.setupDone === false;
   if (engineMissing || setupUndone) {
-    return {
-      kind: 'setup', title: 'Finish setting up',
-      detail: 'Zode needs its own copy of ZCode before your phone can connect.',
-      button: 'Set up',
-    };
+    return { kind: 'setup', title: 'Finish setting up', button: 'Set up' };
   }
   const self = s.selfUpdate;
   if (self && self.phase === 'ready') {
-    return {
-      kind: 'update',
-      title: str(self.version) ? `Zode ${self.version} is ready` : 'A Zode update is ready',
-      detail: 'Restart to finish updating. Your work is not interrupted.',
-      button: 'Restart',
-    };
+    return { kind: 'update', title: str(self.version) ? `Zode ${self.version} is ready` : 'A Zode update is ready', button: 'Restart' };
   }
   const release = s.release;
   if (release && release.available === true) {
-    return {
-      kind: 'zcode',
-      title: str(release.latest) ? `ZCode ${release.latest} is available` : 'A new ZCode is available',
-      detail: 'Zode updates ZCode and rebuilds the Engine.',
-      button: 'Update ZCode',
-    };
+    return { kind: 'zcode', title: str(release.latest) ? `ZCode ${release.latest} is available` : 'A new ZCode is available', button: 'Update ZCode' };
   }
   const update = s.update;
   if (update && update.available === true) {
-    return {
-      kind: 'zcode',
-      title: str(update.originalVersion) ? `ZCode ${update.originalVersion} is installed` : 'A newer ZCode is installed',
-      detail: 'The Engine is older. Rebuild it from this ZCode.',
-      button: 'Rebuild the engine',
-    };
+    return { kind: 'zcode', title: str(update.originalVersion) ? `ZCode ${update.originalVersion} is installed` : 'A newer ZCode is installed', button: 'Rebuild the engine' };
   }
   return null;
 }

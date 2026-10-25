@@ -104,7 +104,7 @@ test('busy: every need kind, red before amber, working rows, finished split by a
   assert.equal(m.needs[2].ask, 'Waiting for an answer');
   assert.equal('requestId' in m.needs[2], false);
   assert.equal('more' in m.needs[2], false);
-  assert.equal(m.needs[3].ask, 'No activity for 12 min. It may be stuck.');
+  assert.equal(m.needs[3].ask, 'Quiet for 12 min');
   assert.equal(m.needs[3].waiting, '12 min');
   assert.deepEqual(m.working, [{ id: 'w1', project: 'web', doing: '', t: '3 min' }]);     // no summary yet: no subtitle
   assert.deepEqual(m.done, [
@@ -285,6 +285,7 @@ test('banner: the engine rebuild, when the original ZCode is newer on disk', () 
   assert.equal(m.banner.kind, 'zcode');
   assert.equal(m.banner.title, 'ZCode 3.16.2 is installed');
   assert.equal(m.banner.button, 'Rebuild the engine');
+  assert.equal('detail' in m.banner, false);                        // titles and buttons carry it; no descriptions
 });
 
 test('banner: a release online beats the plain rebuild', () => {
@@ -295,6 +296,7 @@ test('banner: a release online beats the plain rebuild', () => {
   assert.equal(m.banner.kind, 'zcode');
   assert.equal(m.banner.title, 'ZCode 3.16.3 is available');
   assert.equal(m.banner.button, 'Update ZCode');
+  assert.equal('detail' in m.banner, false);
 });
 
 test('banner: a release with no version falls back to a generic title', () => {

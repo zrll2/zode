@@ -32,7 +32,6 @@ button {
 button:hover { border-color: var(--muted); }
 button.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
 button.primary:hover { opacity: 0.9; }
-.relay-line { text-align: center; margin: 12px 0 0; font: 12px ui-monospace, 'SF Mono', Menlo, monospace; }
 #devices { list-style: none; margin: 0; padding: 0; }
 #devices li { display: flex; align-items: center; gap: 8px; padding: 7px 0; border-bottom: 1px solid var(--line); }
 #devices li span:first-child { flex: 1; }

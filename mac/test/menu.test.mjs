@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { alignedLabels, textWidth, buildMenuTemplate } from '../lib/menu.mjs';
 
-const HINT = 'Not encrypted. Use Tailscale away from home.';
+// Menu tests build the template with a stubbed actions object; no Electron involved.
 const ENGINE = '/Applications/ZCode Engine.app';
 const calls = [];
 const actions = {
@@ -343,7 +343,7 @@ test('pair item, paired phones submenu, relay checkbox', () => {
   assert.deepEqual(empty.submenu, []);
 });
 
-test('reachable-from radios; the hint appears only for lan', () => {
+test('reachable-from radios, nothing else', () => {
   const reach = (t) => byLabel(t, 'Reachable from').submenu;
   const t = buildMenuTemplate(state({ addressId: 'tailscale' }), actions);
   assert.deepEqual(reach(t).map(i => i.label), addresses.map(a => a.label));
@@ -351,13 +351,10 @@ test('reachable-from radios; the hint appears only for lan', () => {
   assert.equal(reach(t)[0].checked, true);
   reach(t)[1].click();
   assert.ok(calls.includes('select:lan'));
-  assert.equal(reach(t).some(i => i.label === HINT), false);
 
   const lan = buildMenuTemplate(state({ addressId: 'lan' }), actions);
   assert.equal(reach(lan)[1].checked, true);
-  const hint = reach(lan).find(i => i.label === HINT);
-  assert.ok(hint);
-  assert.equal(hint.enabled, false);
+  assert.deepEqual(reach(lan).map(i => i.label), addresses.map(a => a.label));   // no descriptions, just the addresses
 });
 
 test('login and keep-awake checkboxes follow their settings', () => {

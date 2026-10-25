@@ -66,7 +66,8 @@ function renderBanner(banner) {
   if (!banner) return;
   const box = el('div', 'banner');
   const text = el('div');
-  text.append(el('b', null, banner.title ?? ''), el('span', null, banner.detail ?? ''));
+  text.append(el('b', null, banner.title ?? ''));
+  if (banner.detail) text.append(el('span', null, banner.detail));
   box.append(text, btn(banner.button ?? 'OK', 'btn pri', () => act('banner', { kind: banner.kind })));
   root.append(box);
 }
@@ -87,15 +88,15 @@ function needCard(n) {
   const head = el('div', 't');
   head.append(el('b', null, project));
   if (n.waiting) {
-    const prefix = n.kind === 'stalled' ? 'quiet ' : n.kind === 'failed' ? '' : 'waiting ';
-    head.append(el('span', null, `${prefix}${n.waiting}`));
+    const prefix = n.kind === 'stalled' ? '' : n.kind === 'failed' ? '' : 'waiting ';   // stalled says it in the card line
+    if (prefix) head.append(el('span', null, `${prefix}${n.waiting}`));
   }
   card.append(head);
   card.append(n.kind === 'ask' ? el('code', null, n.ask ?? '') : el('p', null, n.ask ?? ''));
   if (n.kind === 'ask' && n.more > 0) {
     card.append(el('small', 'moreline', Number(n.same) === Number(n.more) ? `+${n.more} more, the same command` : `+${n.more} more waiting`));
   }
-  const stopTask = () => once('Stop task', 'btn', () => { act('stop', { sessionId: n.sessionId, sock: n.sock }); toast(`Stopped ${project}.`); });
+  const stopTask = () => once('Stop task', 'btn', () => { act('stop', { sessionId: n.sessionId, sock: n.sock }); toast(`Stopped ${project}`); });
   const acts = el('div', 'acts');
   const pile = n.kind === 'ask' && Array.isArray(n.pile) ? n.pile : [];
   if (pile.length > 1) {
@@ -106,27 +107,27 @@ function needCard(n) {
     acts.append(
       once(mixed ? `Allow these ${pile.length}` : `Allow all ${pile.length}`, 'btn pri', () => {
         act('approveMany', { requests: all });
-        toast(`Allowed ${pile.length} requests. ${project} continues.`);
+        toast(`Allowed ${pile.length}`);
       }),
       once(`Deny all ${pile.length}`, 'btn', () => {
         act('denyMany', { requests: all });
-        toast(`Denied ${pile.length} requests.`);
+        toast(`Denied ${pile.length}`);
       }),
     );
     if (mixed && Number(n.sameCount) > 0) {
       acts.append(txtBtn(`Allow only the same ${n.sameCount}`, () => {
         act('approveMany', { requests: all, summaryOnly: n.ask });
-        toast(`Allowed ${n.sameCount} requests. ${project} continues.`);
+        toast(`Allowed ${n.sameCount}`);
       }));
     }
     acts.append(txtBtn('Just this one', () => {
       act('approve', { requestId: n.requestId, sock: n.sock, risky: n.risky === true, summary: n.ask });
-      toast(`Allowed. ${project} continues.`);
+      toast('Allowed');
     }));
     if (n.canAlways === true) {                                   // ZCode's own "always allow in this project" rule
       acts.append(once('Always allow', 'btn', () => {
         act('alwaysAllow', { requestId: n.requestId, sock: n.sock, rest });
-        toast('Allowed here from now on.');
+        toast('Always allowed');
       }));
     }
     if (n.more >= 2) acts.append(stopTask());                     // a repeated-request loop needs a way out
@@ -138,11 +139,11 @@ function needCard(n) {
     acts.append(
       once('Allow once', 'btn pri', () => {
         act('approve', { requestId: n.requestId, sock: n.sock, risky: n.risky === true, summary: n.ask });
-        toast(`Allowed. ${project} continues.`);
+        toast('Allowed');
       }),
       once('Deny', 'btn', () => {
         act('deny', { requestId: n.requestId, sock: n.sock });
-        toast(`Denied. ${project} is told to carry on without it.`);
+        toast('Denied');
       }),
     );
     if (n.more >= 2) acts.append(stopTask());                     // a repeated-request loop needs a way out
@@ -154,13 +155,13 @@ function needCard(n) {
     );
   } else if (n.kind === 'stalled') {
     acts.append(
-      once('Nudge', 'btn pri', () => { act('nudge', { sessionId: n.sessionId, sock: n.sock }); toast(`Nudged ${project}.`); }),
-      once('Stop', 'btn', () => { act('stop', { sessionId: n.sessionId, sock: n.sock }); toast(`Stopped ${project}.`); }),
+      once('Nudge', 'btn pri', () => { act('nudge', { sessionId: n.sessionId, sock: n.sock }); toast(`Nudged ${project}`); }),
+      once('Stop', 'btn', () => { act('stop', { sessionId: n.sessionId, sock: n.sock }); toast(`Stopped ${project}`); }),
       btn('Show in ZCode', 'btn quiet', () => act('show')),
     );
   } else {
     acts.append(
-      once('Try again', 'btn pri', () => { act('retry', { sessionId: n.sessionId, sock: n.sock }); toast(`Asked ${project} to try again.`); }),
+      once('Try again', 'btn pri', () => { act('retry', { sessionId: n.sessionId, sock: n.sock }); toast(`Retrying ${project}`); }),
       btn('Show in ZCode', 'btn quiet', () => act('show')),
     );
   }
