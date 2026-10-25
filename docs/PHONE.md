@@ -82,4 +82,4 @@ What it cannot do: `yolo` or `build` modes, change settings, or call anything ou
 
 ## Known limit
 
-In Guarded mode ZCode asks before each change, and that question can only be answered in the ZCode window on the Mac for now. The phone shows the conversation as needing you; answering from the phone is not built yet. Use Edit mode if you want to work only from the phone.
+In Guarded mode ZCode asks before each change. Permission requests can be answered on the phone (Allow once / Deny, with a confirmation for risky commands). A question that needs a typed answer can still only be answered in the ZCode window on the Mac; the phone shows that conversation as needing you.

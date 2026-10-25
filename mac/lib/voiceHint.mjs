@@ -1,5 +1,5 @@
 // The live half of the vocabulary hint: from the panel's current work lines, the project names the
-// user works in and the most recent conversation titles — what they tend to say to the watch. Pure:
+// user works in and the most recent conversation titles — what they tend to say out loud. Pure:
 // lines in, { projects, titles } out; junk in, empty lists out; never throws.
 //
 // A line flagged `order: true` is automated work (a work order, not something anyone says out loud),

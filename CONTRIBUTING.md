@@ -25,6 +25,8 @@ Try the app without a Mac connection: `cd app && npx expo start`, then tap **Try
 - **Protocol changes** update [`docs/PROTOCOL.md`](docs/PROTOCOL.md) in the same pull request. ZCode's protocol is undocumented and can change; say which ZCode version you tested.
 - **Keep the relay's allow list short.** A new phone-callable method needs a reason and a test.
 - Write short, plain comments only where the code is not obvious.
+- Release versions: the Mac app reads `mac/package.json`; the phone reads `app/app.json` (`version` plus the build numbers). The other `package.json` files are internal.
+- Known structure and refactor plan: [`docs/CODE_HEALTH.md`](docs/CODE_HEALTH.md).
 
 ## Working the way Zode does
 

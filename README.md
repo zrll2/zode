@@ -51,7 +51,7 @@ You need: a Mac (Apple silicon), the [ZCode](https://zcode.z.ai) app (logged in 
 
 1. **Download Zode for Mac** from the [latest release](https://github.com/zrll2/zode/releases/latest), open the DMG and drag **Zode** to Applications.
 2. Open Zode. A **Z** appears in the menu bar and a short setup window walks you through it: Zode makes its own copy of ZCode (your original is never changed), you sign in once, and then you scan a QR code with Zode on your phone. No terminal needed.
-3. Keep the Mac awake and on the same Wi-Fi as your phone (or use [Tailscale](https://tailscale.com) away from home). Zode can keep the Mac awake for you.
+3. Keep the Mac awake. The Mac listens on your Wi-Fi and Tailscale at once, and the phone uses whichever works (use [Tailscale](https://tailscale.com) away from home). Zode can keep the Mac awake for you.
 
 Zode updates itself, and tells you when a new ZCode is available and updates that too.
 
@@ -94,6 +94,8 @@ flowchart LR
 |---|---|
 | [`bridge/`](bridge) | The MCP server and command line tools that drive ZCode. |
 | [`skill/`](skill) | The `delegate-to-zcode` skill: the whole workflow, learned the hard way. |
+| [`mac/`](mac) | **Zode for Mac**: the Electron menu bar app that runs the relay, pairing and setup. |
+| [`macapp/`](macapp) | The older patched-ZCode integration; the builder still uses it for the Engine copy. |
 | [`relay/`](relay) | A small WebSocket gateway so your phone can reach your Mac safely. |
 | [`app/`](app) | The mobile app (Expo, React Native) for iOS and Android. |
 | [`docs/`](docs) | Setup, architecture, protocol and security notes. |
@@ -112,7 +114,7 @@ flowchart LR
 - **Chat:** read the agent like a document: Markdown, and tool calls and thinking collapsed to one line.
 - **Controls:** rename a chat, switch model and thinking level, and see usage (this chat's context and your account's tokens).
 - **Attach:** send photos, camera shots and documents (up to 8 MB each) with the **+** button.
-- **Permission level:** switch between Plan, Edit and Guarded from the chat. In Guarded, approvals are answered on the Mac for now.
+- **Permission level:** switch between Plan, Edit and Guarded from the chat. In Guarded, permission requests can be answered right on the phone; questions that need a typed answer are answered on the Mac.
 - Light and dark, black and white, nothing loud.
 
 ## Safe by default
@@ -121,7 +123,7 @@ flowchart LR
 - ZCode **writes files only**. Claude Code runs every command.
 - The phone can use `plan`, `edit` and `guarded` modes only. `yolo` and `build` are blocked in the relay.
 - Phones pair with a one-time code and get their own revocable token.
-- The relay listens on `127.0.0.1` unless you choose a private network address (we suggest Tailscale).
+- The terminal relay listens on `127.0.0.1` by default; the Mac app's Automatic mode listens on your Wi-Fi and Tailscale addresses, never `0.0.0.0` (we suggest Tailscale away from home).
 - Zode never reads or copies your ZCode credentials.
 
 Read [docs/SECURITY.md](docs/SECURITY.md) before you expose the relay beyond your own machine.

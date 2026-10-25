@@ -44,7 +44,7 @@ Zode 把两者连起来，让它们各做自己最擅长的事：
 
 1. 从[最新发布页](https://github.com/zrll2/zode/releases/latest)**下载 Zode for Mac**，打开 DMG，把 **Zode** 拖进"应用程序"。
 2. 打开 Zode。菜单栏会出现一个 **Z**，并弹出简短的设置窗口，带你一步步完成：Zode 会做一份自己的 ZCode 副本（你原来的 ZCode 不会被改动），你登录一次，然后用手机上的 Zode 扫描二维码。不需要终端。
-3. 让 Mac 保持唤醒，并和手机在同一个 Wi-Fi（出门在外用 [Tailscale](https://tailscale.com)）。Zode 可以替你让 Mac 保持唤醒。
+3. 让 Mac 保持唤醒。Mac 会同时监听 Wi-Fi 和 Tailscale 地址，手机用连得上的那个（出门在外推荐 [Tailscale](https://tailscale.com)）。Zode 可以替你让 Mac 保持唤醒。
 
 Zode 会自动更新自己，也会在 ZCode 有新版本时提醒你并帮你更新。
 
@@ -87,6 +87,8 @@ flowchart LR
 |---|---|
 | [`bridge/`](bridge) | 驱动 ZCode 的 MCP 服务和命令行工具。 |
 | [`skill/`](skill) | `delegate-to-zcode` 技能：整个工作流，都是踩坑换来的。 |
+| [`mac/`](mac) | **Zode for Mac**：运行中继、配对和设置的 Electron 菜单栏应用。 |
+| [`macapp/`](macapp) | 旧的"修补 ZCode"集成；构建脚本仍用它来构建 Engine 副本。 |
 | [`relay/`](relay) | 小型 WebSocket 网关，让手机安全地连到你的 Mac。 |
 | [`app/`](app) | 手机应用（Expo、React Native），iOS 和 Android。 |
 | [`docs/`](docs) | 安装、架构、协议和安全说明。 |
@@ -97,7 +99,7 @@ flowchart LR
 - **聊天：** 像读文档一样读 agent：Markdown，工具调用和思考折叠成一行。
 - **控制：** 重命名会话、切换模型和思考强度、查看用量（本会话上下文与账号 token）。
 - **附件：** 用 **+** 按钮发送照片、拍照和文档（每个最大 8 MB）。
-- **权限级别：** 在聊天里切换 Plan、Edit、Guarded。Guarded 模式下的批准目前仍要在 Mac 上操作。
+- **权限级别：** 在聊天里切换 Plan、Edit、Guarded。Guarded 模式下的权限请求可以直接在手机上批准或拒绝；需要输入回答的提问仍在 Mac 上处理。
 
 ## 默认安全
 
@@ -105,7 +107,7 @@ flowchart LR
 - ZCode **只写文件**，所有命令由 Claude Code 运行。
 - 手机只能用 `plan`、`edit` 和 `guarded` 模式，中继会拦截 `yolo` 和 `build`。
 - 手机用一次性配对码配对，各自拥有可撤销的令牌。
-- 中继默认只监听 `127.0.0.1`，除非你选择私有网络地址（推荐 Tailscale）。
+- 终端方式的中继默认只监听 `127.0.0.1`；Mac 应用的"自动"模式同时监听 Wi-Fi 和 Tailscale 地址，从不绑定 `0.0.0.0`（出门在外推荐 Tailscale）。
 - Zode 从不读取或复制你的 ZCode 凭据。
 
 把中继暴露到本机之外之前，请先读 [docs/SECURITY.md](docs/SECURITY.md)。

@@ -8,7 +8,7 @@ Zode lets a process (and a phone) start and steer a coding agent on your Mac. Tr
 |---|---|---|
 | Bridge / skill | Send work orders to ZCode in a `zcode/*` worktree. | Refuses the main checkout and any other branch. Never uses `yolo` or `build`. |
 | ZCode agent in `edit` mode | Write files in the worktree. | Cannot run commands. Claude Code runs all commands. |
-| Relay | Forward 16 session methods from a paired phone. | Only `plan` and `edit` modes. No settings, no provider or workspace calls. |
+| Relay | Forward 17 `session/*` methods from a paired phone, plus usage stats, attachments and the two voice methods. | Only `plan`, `edit` and `guarded` modes. Phones answer permission requests (allow/deny), not user-input questions. No settings, no provider or workspace calls. |
 | Phone app | Whatever the relay allows. | Token is stored in the system secure store (Keychain on iOS). |
 
 ## Your ZCode login
@@ -17,7 +17,7 @@ Zode never reads, copies or sends your ZCode credentials. Zode.app is a copy of 
 
 ## The relay
 
-- Listens on `127.0.0.1` unless you set `RELAY_HOST`.
+- The terminal relay (`./zode relay`) listens on `127.0.0.1` unless you set `RELAY_HOST`. The Mac app's Automatic mode listens on your Wi-Fi and Tailscale addresses at once, never `0.0.0.0`.
 - **No TLS.** Use a private network (Tailscale or WireGuard). Never expose the port to the internet.
 - Pairing codes work once and expire after 5 minutes. Each phone gets its own random token; only a hash is stored (`~/.zode/relay/devices.json`, mode 0600).
 - Five failed attempts from one address block it for a minute.

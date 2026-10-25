@@ -13,6 +13,8 @@ Zode runs on macOS. Setup takes about two minutes.
 
 ## Install
 
+The easy way is the packaged app: download **Zode for Mac** from the [latest release](https://github.com/zrll2/zode/releases/latest), open the DMG and drag **Zode** to Applications — its setup window walks you through the rest (see the README's Quick start). Everything below is the developer/legacy path that builds from this repo.
+
 ```bash
 git clone https://github.com/zrll2/zode.git
 cd zode
@@ -37,7 +39,9 @@ Add `--models` to `doctor` to also check that your login gives you models. (This
 
 To use the phone app: click the **Zode icon in the menu bar** of Zode.app → **Pair a phone…** → scan the QR code with Zode on your phone. Details in [PHONE.md](PHONE.md).
 
-## What is Zode.app (the Mac app)?
+## What is the copy of ZCode for?
+
+`./zode install` builds its copy as **Zode.app** with the relay inside — the original integrated product. The current menu bar app builds its copy as **ZCode Engine.app** and runs the relay itself; why a copy exists at all is the same in both cases.
 
 ZCode keeps your login inside the app, so another program cannot start its own agent and reuse the login. Zode needs to talk to the app's **own** agent. So `zode install` makes a copy of your ZCode app and replaces one small file inside the copy with a shim:
 
