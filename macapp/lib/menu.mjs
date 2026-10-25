@@ -1,9 +1,6 @@
 // The menu bar (tray) menu as plain template objects, so it can be built and tested without Electron.
 const HINT = 'Not encrypted. Use Tailscale away from home.';
 
-// The ZCode-now block for the top of the menu: a disabled header, one clickable line per active
-// conversation with its status light, a +N more stub, and a separator. The lights arrive as opaque
-// icon values in state.icons, so this stays testable without Electron.
 // Menus cannot right-align a second piece of text, so each line is padded with spaces until the whole line has
 // the same width: the status then ends at one right edge. Widths are measured in the real font by the app
 // (state.work.metrics) and fall back to a rough per-character estimate (em) in tests and before the first measure.
@@ -26,7 +23,7 @@ export function padTo(width, sp = ESTIMATE) {                         // as many
   return NBSP.repeat(Math.max(0, Math.round(width / sp.space)));
 }
 // "<project><spaces><status>" with every status ending at the same right edge.
-// lines[i].px = { project, status } (measured) when available; metrics = { em, en, thin, gap } in the same unit.
+// lines[i].px = { project, status } (measured) when available; metrics = { space, gap } in the same unit.
 export function alignedLabels(lines, metrics) {
   const measured = !!metrics && lines.every(l => l.px && Number.isFinite(l.px.project) && Number.isFinite(l.px.status));
   const w = l => (measured ? { p: l.px.project, s: l.px.status } : { p: textWidth(l.project), s: textWidth(l.status) });

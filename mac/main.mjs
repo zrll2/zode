@@ -83,7 +83,6 @@ async function start() {
       green: nativeImage.createFromPath(path.join(res, 'assets', 'dotGreen.png')),
       amber: nativeImage.createFromPath(path.join(res, 'assets', 'dotAmber.png')),
       red: nativeImage.createFromPath(path.join(res, 'assets', 'dotRed.png')),
-      grey: nativeImage.createFromPath(path.join(res, 'assets', 'dotGrey.png')),
       tick: nativeImage.createFromPath(path.join(res, 'assets', 'tickGreen.png')),         // a finished conversation
     };
 

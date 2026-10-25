@@ -34,6 +34,8 @@ flowchart TB
 
 **relay.** Accepts phones over WebSocket, checks their token, allows only a short list of session methods, forwards them to the tap socket, and streams events back. It keeps the last 5000 events so a phone can reconnect and catch up. It keeps every frame under 800 KB because iOS closes a WebSocket on a frame above 1 MiB (for example, it drops the message list from `session/resume`, which the phone loads separately).
 
+**Zode for Mac (`mac/`).** The Electron menu bar app most people install from the DMG. It runs the relay in its own process, offers pairing and the first-run setup, and keeps the Mac awake. `macapp/` is the older variant that ran the relay inside a patched ZCode copy; `scripts/build-tap.sh` still builds that integration into the Engine copy.
+
 **app.** An Expo app. A small client (`src/relay/client.ts`) handles pairing, authentication, request matching, reconnect and replay. A reducer (`src/relay/reducer.ts`) turns events into chat items. Screens follow [`app/docs/DESIGN.md`](../app/docs/DESIGN.md).
 
 **Zode.app.** Built by `scripts/build-tap.sh`: copy the app, move `glm/zcode.cjs` to `glm/zcode.real.cjs`, add a shim as `zcode.cjs`, sign ad hoc. The shim loads the wrapper from the Zode folder (path in `~/.zode/home`).
@@ -42,5 +44,5 @@ flowchart TB
 
 - **No API key.** The login stays inside the ZCode app. Zode only shares the agent the app already started.
 - **Nothing proprietary is shipped.** The tap copy is built locally from the user's own app.
-- **Small surface.** The relay allows 16 session methods and two safe modes. Everything else is refused.
+- **Small surface.** The relay allows 17 `session/*` methods, plus usage stats, attachments and the two voice methods, in three safe modes (`plan`, `edit`, `guarded`). Everything else is refused.
 - **Claude Code does the verification.** ZCode in `edit` mode cannot run commands, so a human-like checker (Claude Code) runs tests and the app. This is what makes the loop trustworthy.

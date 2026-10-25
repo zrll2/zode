@@ -1,6 +1,6 @@
 # zcode-relay
 
-WebSocket gateway on the Mac. It lets a phone use the ZCode sessions of the running **Zode.app** (see `../zcode-mcp`).
+WebSocket gateway on the Mac. It lets a phone use the ZCode sessions of the running agent on your Mac — the **Zode for Mac** menu bar app (`../mac`) runs it. (`zcode-mcp` was this project's old name.)
 
 ```
 phone (Expo app) --ws--> zcode-relay --unix socket--> agent-wrapper (inside Zode.app) --stdio--> zcode app-server
@@ -20,7 +20,7 @@ The relay never binds `0.0.0.0`, and it binds `127.0.0.1` only when that is the 
 
 ## Module API
 
-Zode.app runs the relay inside its own process; the CLI above is a thin wrapper over it.
+The Zode for Mac menu bar app (`../mac`) runs the relay in its own process, and the older patched-ZCode integration (`../macapp`) ran it inside the app; the CLI above is a thin wrapper over the same service.
 
 ```js
 import { createRelay } from './relay/service.mjs';
@@ -66,7 +66,7 @@ The pairing payload (the QR text) is `{u, urls, w, c}`: `u` is the http form of 
 
 ## Speech to text (`stt/transcribe`, `stt/status`)
 
-Answered by the relay itself — never forwarded to an agent server, and no ZCode server is needed. The host (Zode.app) passes its engine (the one in `../mac/lib/stt.mjs`) to `createRelay({ stt })`:
+Answered by the relay itself — never forwarded to an agent server, and no ZCode server is needed. The host (the Zode menu bar app) passes its engine (the one in `../mac/lib/stt.mjs`) to `createRelay({ stt })`:
 
 ```js
 stt = {
@@ -86,6 +86,6 @@ stt = {
 
 ## Known limits
 
-- Permission requests (`guarded` mode) go to the desktop window only. The phone sees them as events but cannot answer. Use `edit` mode until a claim step is added to the wrapper.
+- Permission **questions** (`interaction/requestUserInput`) go to the desktop window only. Permission requests (`guarded` mode) can be answered from the phone with `{type:"respond"}`; a typed question cannot.
 - Turn end: watch for a `session/event` whose `payload.response` is set. Telemetry events are filtered out.
-- The relay needs Zode.app running. Without it, `rpc` returns `no ZCode server`.
+- The relay needs a live ZCode server (a running Engine or Zode copy with a project open). Without one, `rpc` returns `no ZCode server`.
