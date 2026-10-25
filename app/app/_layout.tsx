@@ -10,6 +10,7 @@ import {
   SourceSerif4_500Medium,
 } from "@expo-google-fonts/source-serif-4";
 import { RelayProvider } from "../src/useRelay";
+import { useWatchBridge } from "../src/watchBridge";
 import { FontsLoadedProvider, useTheme } from "../src/theme";
 
 export default function RootLayout() {
@@ -25,10 +26,18 @@ export default function RootLayout() {
   );
 }
 
+// Mounted once near the root so the watch can reach the relay state from
+// anywhere (W1 spike).
+function WatchBridge() {
+  useWatchBridge();
+  return null;
+}
+
 function RootStack() {
   const t = useTheme();
   return (
     <RelayProvider>
+      <WatchBridge />
       <StatusBar style="auto" />
       <Stack
         screenOptions={{

@@ -1,6 +1,6 @@
 {
   "name": "zode-app",
-  "version": "1.1.1",
+  "version": "0.1.0",
   "private": true,
   "main": "expo-router/entry",
   "scripts": {
@@ -12,6 +12,7 @@
     "store:check": "node scripts/store-check.mjs"
   },
   "dependencies": {
+    "@bacons/apple-targets": "^5.0.0",
     "@expo-google-fonts/nunito": "^0.4.2",
     "@expo-google-fonts/source-serif-4": "^0.4.1",
     "@expo/vector-icons": "^15.1.1",
@@ -36,7 +37,8 @@
     "react-native": "0.88.0",
     "react-native-markdown-display": "^7.0.2",
     "react-native-safe-area-context": "~5.10.1",
-    "react-native-screens": "~4.30.0"
+    "react-native-screens": "~4.30.0",
+    "react-native-watch-connectivity": "^2.0.0"
   },
   "devDependencies": {
     "@types/jest": "30.0.0",

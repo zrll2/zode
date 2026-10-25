@@ -112,7 +112,13 @@
           }
         }
       ],
-      "expo-audio"
+      "expo-audio",
+      [
+        "@bacons/apple-targets",
+        {
+          "appleTeamId": "JLB545UV6D"
+        }
+      ]
     ],
     "icon": "./assets/icon.png",
     "web": {
