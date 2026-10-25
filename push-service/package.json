@@ -1,0 +1,11 @@
+{
+  "name": "zode-push-service",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}
