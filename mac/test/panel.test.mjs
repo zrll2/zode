@@ -11,7 +11,7 @@ const perm = over => ({ requestId: 'r1', kind: 'permission', toolName: 'Bash', s
 const input = over => ({
   running: true, phones: 2,
   addresses: [{ id: 'lan', label: 'Wi-Fi / local network (192.168.1.5)', ip: '192.168.1.5' }, { id: 'local', label: 'This Mac only', ip: '127.0.0.1' }],
-  addressId: 'lan', launchAtLogin: false, keepAwake: true, setupDone: true, foldFinished: false,
+  addressId: 'lan', launchAtLogin: false, keepAwake: true, autoAllow: true, setupDone: true, foldFinished: false,
   tapAlive: true, engine: { path: '/Applications/ZCode Engine.app' },
   update: { available: false, originalVersion: null, engineVersion: null },
   release: { available: false, latest: null, installed: null },
@@ -33,7 +33,7 @@ test('quiet: idle glyph, All quiet, no banner, empty lists, settings pass throug
   assert.equal(m.phones, 2);
   assert.equal(m.connected, true);
   assert.deepEqual(m.settings, {
-    keepAwake: true, relayEnabled: true, launchAtLogin: false, foldFinished: false,
+    keepAwake: true, autoAllow: true, askRisky: false, relayEnabled: true, launchAtLogin: false, foldFinished: false,
     addressId: 'lan',
     addresses: [{ id: 'lan', label: 'Wi-Fi / local network (192.168.1.5)' }, { id: 'local', label: 'This Mac only' }],
     version: '1.0.1', selfUpdate: 'idle',
@@ -230,6 +230,20 @@ test('piled-up requests: pile, sameCount and canAlways ride on the ask need', ()
   assert.equal(many.needs[0].pile.length, 500);
   assert.equal(many.needs[0].sameCount, 500);
   assert.equal(many.needs[0].more, 599);
+});
+
+test('the auto-allow switch rides in the settings model; a missing or invalid value means on', () => {
+  assert.equal(buildPanelModel(input({ autoAllow: true }), NOW).settings.autoAllow, true);
+  assert.equal(buildPanelModel(input({ autoAllow: false }), NOW).settings.autoAllow, false);
+  assert.equal(buildPanelModel(input({}), NOW).settings.autoAllow, true);         // the default is on: junk never flips it
+  assert.equal(buildPanelModel(input({ autoAllow: 'yes' }), NOW).settings.autoAllow, true);
+});
+
+test('the risky gate rides in the settings model; missing or invalid means off', () => {
+  assert.equal(buildPanelModel(input({ askRisky: true }), NOW).settings.askRisky, true);
+  assert.equal(buildPanelModel(input({ askRisky: false }), NOW).settings.askRisky, false);
+  assert.equal(buildPanelModel(input({}), NOW).settings.askRisky, false);
+  assert.equal(buildPanelModel(input({ askRisky: 'yes' }), NOW).settings.askRisky, false);
 });
 
 test('summary titles for every combination, plural and singular', () => {

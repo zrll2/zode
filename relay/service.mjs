@@ -4,6 +4,7 @@
 // Transport security is the network's job: bind to a Tailscale/WireGuard address. Default is 127.0.0.1.
 import { withRealActivity } from './activity.mjs';
 import { createLiveStatus } from './live.mjs';
+import { isRiskyRequest } from './risk.mjs';
 import { validateTranscribe, createLimiter } from './stt.mjs';
 import net from 'node:net';
 import fs from 'node:fs';
@@ -108,6 +109,8 @@ export function createRelay(opts = {}) {
   const tapDir = opts.tapDir || path.join(HOME, '.zcode-tap');
   const codeTtlMs = opts.codeTtlMs ?? CODE_TTL_MS;
   const pendingSyncMs = Number.isFinite(opts.pendingSyncMs) ? Math.max(0, opts.pendingSyncMs) : 10_000;   // how often the pending list is reconciled with the wrapper's truth; 0 disables
+  const autoAllow = typeof opts.autoAllow === 'function' ? opts.autoAllow : () => false;   // the host decides; the relay on its own never answers
+  const askRisky = typeof opts.askRisky === 'function' ? opts.askRisky : () => false;      // true: risky commands wait for a human even with auto-allow on
   const log = opts.log ?? console;
   const stt = opts.stt ?? null;               // the host's speech engine ({transcribe, status, defaultLanguage}); absent -> voice-off
   const sttLimiter = createLimiter();         // per device: one transcribe in flight, at most 20 per minute
@@ -132,6 +135,7 @@ export function createRelay(opts = {}) {
   // phone carries its verdict, and the host reads the same truth through relay.liveStatus.
   const live = createLiveStatus();
   const syncPending = () => live.setPending([...pendingReq.values()].map(p => ({ sessionId: p.params?.sessionId, method: p.method })));
+  const autoAnswered = new Set();     // `${pid}:${id}` this relay already answered itself: never twice, never re-added
 
   function status() {
     return { running, host: hosts[0], hosts: [...hosts], port, publicUrl, publicUrls: [...publicUrls], upstreams: upstream.size, clients: clients.size, devices: readJson(DEVICES, []).length };
@@ -163,6 +167,7 @@ export function createRelay(opts = {}) {
       sock.on('close', () => {
         upstream.delete(pid); emitStatus();
         for (const k of pendingReq.keys()) if (k.startsWith(pid + ':')) pendingReq.delete(k);
+        for (const k of autoAnswered) if (k.startsWith(pid + ':')) autoAnswered.delete(k);
         syncPending();
         for (const [rid, r] of routes) if (r.internalCall && r.pid === pid) { routes.delete(rid); clearTimeout(r.timer); r.reject(new Error('upstream closed')); }
       });
@@ -181,6 +186,30 @@ export function createRelay(opts = {}) {
     try { u.sock.write(JSON.stringify({ id, method: 'tap/pending', params: {} }) + '\n'); } catch {}
   }
 
+  // Auto-allow, when the host turned it on: answer a permission request the moment the relay knows
+  // it and strike it from the pending list (the wrapper's tap/resolved follows anyway). Questions
+  // are never answered here — they need a human. One answer per request even if a reconcile lists
+  // it again; a failed write leaves the request pending, as if the setting were off.
+  function autoAllowRequest(pid, entry) {
+    if (!entry || typeof entry !== 'object' || entry.method !== 'interaction/requestPermission' || entry.id == null) return;
+    let wanted = false;
+    try { wanted = autoAllow() === true; } catch { wanted = false; }
+    if (!wanted) return;
+    let careful = false;
+    try { careful = askRisky() === true; } catch { careful = false; }
+    if (careful && isRiskyRequest(entry.params)) return;              // the destructive ones wait for a human
+    const key = `${pid}:${entry.id}`;
+    if (autoAnswered.has(key)) return;
+    const u = upstream.get(pid);
+    if (!u) return;
+    try {
+      u.sock.write(JSON.stringify({ id: ++relayId, method: 'tap/respond', params: { id: entry.id, result: { decision: 'allow', reason: 'Approved automatically by Zode' } } }) + '\n');
+    } catch { return; }
+    autoAnswered.add(key);
+    pendingReq.delete(key);
+    log.log(`auto-allowed ${typeof entry.params?.toolName === 'string' && entry.params.toolName ? entry.params.toolName : 'request'} -> ${pid}`);
+  }
+
   // The wrapper's own pending list is the truth: events go stale when a turn is stopped or cancelled
   // and its request vanishes without a tap/resolved. Add what the reply lists and the relay does not
   // know yet, drop what vanished — but only requests old enough that they cannot have arrived while
@@ -195,7 +224,9 @@ export function createRelay(opts = {}) {
         if (!p || typeof p !== 'object' || p.id == null) continue;
         const key = `${pid}:${p.id}`;
         listed.add(String(p.id));
-        if (!pendingReq.has(key)) pendingReq.set(key, { server: pid, ...p, seenAt: now });
+        if (pendingReq.has(key) || autoAnswered.has(key)) continue;     // known, or already answered by us
+        pendingReq.set(key, { server: pid, ...p, seenAt: now });
+        autoAllowRequest(pid, p);                                       // may answer and remove it again
       }
       const cutoff = now - 5_000;
       for (const [key, p] of pendingReq) {
@@ -231,7 +262,10 @@ export function createRelay(opts = {}) {
     if (m.method === 'startup/storageState' || m.method === 'process/mcpTelemetry' || m.method?.startsWith('v4/telemetry')) return;
     if (m.method && m.id !== undefined && /^interaction\/request(Permission|UserInput)$/.test(m.method)) {
       const now = Date.now();
-      pendingReq.set(`${pid}:${m.id}`, { server: pid, id: m.id, method: m.method, params: m.params, at: now, seenAt: now });
+      if (!autoAnswered.has(`${pid}:${m.id}`)) {                        // an already-answered repeat stays out
+        pendingReq.set(`${pid}:${m.id}`, { server: pid, id: m.id, method: m.method, params: m.params, at: now, seenAt: now });
+        autoAllowRequest(pid, m);                                       // may answer and remove it again
+      }
       syncPending();
     }
     if (m.method === 'tap/resolved') { pendingReq.delete(`${pid}:${m.params?.id}`); syncPending(); }

@@ -46,6 +46,9 @@ function render() {
 
   setSwitch('swAwake', s.keepAwake === true);
   setSwitch('swRelay', s.relayEnabled === true);
+  setSwitch('swAutoAllow', s.autoAllow === true);
+  $('swAskRisky').disabled = s.autoAllow !== true;                  // it only matters while auto-allow is on
+  setSwitch('swAskRisky', s.autoAllow === true && s.askRisky === true);
   setSwitch('swLogin', s.launchAtLogin === true);
   renderAddresses(s.addresses ?? [], s.addressId);
   renderVoice(model.voice);
@@ -119,17 +122,15 @@ function needCard(n) {
       act('approve', { requestId: n.requestId, sock: n.sock, risky: n.risky === true, summary: n.ask });
       toast(`Allowed. ${project} continues.`);
     }));
-    if (n.more >= 2) acts.append(stopTask());                     // a repeated-request loop needs a way out
-    acts.append(btn('Show in ZCode', 'btn quiet', () => act('show')));
-    card.append(acts);
-    if (n.canAlways === true) {
-      const under = el('div', 'under');
-      under.append(txtBtn('Always allow this here', () => {
+    if (n.canAlways === true) {                                   // ZCode's own "always allow in this project" rule
+      acts.append(once('Always allow', 'btn', () => {
         act('alwaysAllow', { requestId: n.requestId, sock: n.sock, rest });
         toast('Allowed here from now on.');
       }));
-      card.append(under);
     }
+    if (n.more >= 2) acts.append(stopTask());                     // a repeated-request loop needs a way out
+    acts.append(btn('Show in ZCode', 'btn quiet', () => act('show')));
+    card.append(acts);
     return card;
   }
   if (n.kind === 'ask') {
@@ -350,6 +351,8 @@ document.addEventListener('click', e => {
 });
 $('swAwake').addEventListener('click', () => flip('swAwake', 'keepAwake'));
 $('swRelay').addEventListener('click', () => flip('swRelay', 'relayEnabled'));
+$('swAutoAllow').addEventListener('click', () => flip('swAutoAllow', 'autoAllow'));
+$('swAskRisky').addEventListener('click', () => { if (!$('swAskRisky').disabled) flip('swAskRisky', 'askRisky'); });
 $('swLogin').addEventListener('click', () => flip('swLogin', 'launchAtLogin'));
 $('addr').addEventListener('change', e => act('setAddress', { id: e.target.value }));
 $('voiceLang').addEventListener('click', e => {

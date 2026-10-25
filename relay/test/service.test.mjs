@@ -52,7 +52,10 @@ function fakeUpstream() {
     'v4/attachment/chunk': (m) => ({ uploadId: m.params.uploadId, nextChunkIndex: m.params.chunkIndex + 1 }),
     'v4/attachment/commit': () => ({ ref: `zcode-artifact://${beginSession}/tool-result-${commitSeq++}` }),
   };
+  let readyResolve = null;
+  const ready = new Promise((resolve) => { readyResolve = resolve; });   // resolves when a connection is accepted
   const server = net.createServer((s) => {
+    readyResolve();
     sock = s; let buf = '';
     s.on('data', (d) => {
       buf += d; let i;
@@ -78,7 +81,15 @@ function fakeUpstream() {
     home, tapDir, received,
     get pendingAsks() { return pendingAsks; },                      // how often the relay asked what is still pending
     answer: (method, fn) => { answers[method] = fn; },
-    send: (o) => sock.write(JSON.stringify(o) + '\n'),                                              // upstream -> relay
+    send: (o) => { const line = JSON.stringify(o) + '\n'; if (sock) sock.write(line); else ready.then(() => sock.write(line)); },   // upstream -> relay (queued until the relay has connected)
+    sendAndDie: async (o) => {                                                                      // a request whose socket dies mid-flight
+      try {
+        await ready;                                                                                  // never before a connection exists
+        if (!sock) return;
+        sock.write(JSON.stringify(o) + '\n');
+        sock.destroy();
+      } catch { /* the socket is gone: that is the point */ }
+    },
     respond: (m, result) => sock.write(JSON.stringify({ id: m.id, tapReply: true, result }) + '\n'),
     close: async () => { sock?.destroy(); await new Promise((r) => server.close(r)); rm(home); },
   };
@@ -403,6 +414,139 @@ test('the relay reconciles its pending list with what the wrapper still holds', 
     assert.equal(up.pendingAsks, asks);
     ws.close();
   } finally { await up.close(); }
+});
+
+test('autoAllow answers permission requests at once — once — and never touches questions', async () => {
+  const port = await freePort();
+  const up = fakeUpstream();
+  const lines = [];
+  const log = { log: (...a) => lines.push(a.join(' ')), warn() {}, error() {} };
+  const relay = createRelay({ port, stateDir: path.join(up.home, 'state'), tapDir: up.tapDir, log, pendingSyncMs: 60, autoAllow: () => true });
+  await relay.start();
+  let ws = null;
+  try {
+    await waitFor(() => relay.status().upstreams === 1);
+    // The wrapper's own list still holds an old permission and a question when the relay connects.
+    up.answer('tap/pending', () => ({ pending: [
+      { id: 'req-1', method: 'interaction/requestPermission', params: { sessionId: 'sess_a', toolName: 'Bash', input: { command: 'secret command' } }, at: Date.now() },
+      { id: 'q-1', method: 'interaction/requestUserInput', params: { sessionId: 'sess_a' }, at: Date.now() },
+    ] }));
+    await waitFor(() => up.received.some(m => m.method === 'tap/respond'));
+    assert.deepEqual(up.received.filter(m => m.method === 'tap/respond').map(m => m.params), [
+      { id: 'req-1', result: { decision: 'allow', reason: 'Approved automatically by Zode' } },   // the question is never answered
+    ]);
+
+    const { token } = await (await pair(port, relay.createPairing().code, 'phone')).json();
+    const phone = await authed(`ws://127.0.0.1:${port}`, token);
+    ws = phone.ws;
+    assert.deepEqual(phone.ready.pending.map(p => p.id), ['q-1']);      // the answered request is not offered to phones
+
+    // a fresh event is answered the same way; a repeat and later reconciles never answer twice
+    up.send({ id: 'req-2', method: 'interaction/requestPermission', params: { sessionId: 'sess_a', toolName: 'Edit' } });
+    up.send({ id: 'req-1', method: 'interaction/requestPermission', params: { sessionId: 'sess_a', toolName: 'Bash' } });
+    await waitFor(() => up.received.filter(m => m.method === 'tap/respond').length >= 2);
+    await sleep(200);                                                   // a couple of reconciles
+    assert.deepEqual(up.received.filter(m => m.method === 'tap/respond').map(m => m.params.id), ['req-1', 'req-2']);
+    const resP = nextMessage(ws, (m) => m.type === 'pending');
+    ws.send(JSON.stringify({ type: 'pending' }));
+    assert.deepEqual((await resP).pending.map(p => p.id), ['q-1']);     // still nothing pending but the question
+
+    const line = lines.find(l => l.startsWith('auto-allowed '));
+    assert.match(line, /^auto-allowed Bash -> \d+$/);
+    assert.ok(!lines.some(l => l.includes('secret command')));          // commands are never logged
+  } finally {
+    try { ws?.close(); } catch {}
+    await relay.stop();
+    await up.close();
+  }
+});
+
+test('without autoAllow (the default) permission requests stay pending as today', async () => {
+  const port = await freePort();
+  const up = fakeUpstream();
+  const relay = createRelay({ port, stateDir: path.join(up.home, 'state'), tapDir: up.tapDir, log: silent, pendingSyncMs: 60 });
+  await relay.start();
+  let ws = null;
+  try {
+    await waitFor(() => relay.status().upstreams === 1);
+    const { token } = await (await pair(port, relay.createPairing().code, 'phone')).json();
+    ({ ws } = await authed(`ws://127.0.0.1:${port}`, token));
+    up.answer('tap/pending', () => ({ pending: [{ id: 'p-1', method: 'interaction/requestPermission', params: { sessionId: 'sess_p', toolName: 'Edit' } }] }));
+    up.send({ id: 'q-1', method: 'interaction/requestUserInput', params: { sessionId: 'sess_p' } });
+    // the relay only learns p-1 at the next reconcile: ask until it shows up before asserting
+    const until = async (fn, ms = 3000) => { const end = Date.now() + ms; while (Date.now() < end) { const v = await fn(); if (v) return v; await sleep(25); } throw new Error('condition not met in time'); };
+    const askPending = async () => {
+      const resP = nextMessage(ws, (m) => m.type === 'pending');
+      ws.send(JSON.stringify({ type: 'pending' }));
+      return (await resP).pending;
+    };
+    await until(async () => (await askPending()).some(p => p.id === 'p-1'));
+    const pend = await askPending();
+    assert.deepEqual(pend.map(p => p.id).sort(), ['p-1', 'q-1']);
+    await sleep(200);                                                   // a couple of reconciles
+    assert.deepEqual(up.received.filter(m => m.method === 'tap/respond'), []);   // nothing was answered
+  } finally {
+    try { ws?.close(); } catch {}
+    await relay.stop();
+    await up.close();
+  }
+});
+
+test('autoAllow survives an upstream that dies mid-flight', async () => {
+  const port = await freePort();
+  const up = fakeUpstream();
+  const relay = createRelay({ port, stateDir: path.join(up.home, 'state'), tapDir: up.tapDir, log: silent, autoAllow: () => true });
+  await relay.start();
+  try {
+    await waitFor(() => relay.status().upstreams === 1);
+    await up.sendAndDie({ id: 'req-9', method: 'interaction/requestPermission', params: { sessionId: 'sess_x', toolName: 'Bash' } });
+    await sleep(200);                                                   // the answer races the dead socket
+    assert.equal(relay.status().running, true);                         // a failed write never takes the relay down
+  } finally {
+    await relay.stop();
+    await up.close();
+  }
+});
+
+test('askRisky keeps the destructive ones waiting while auto-allow handles the rest', async () => {
+  const port = await freePort();
+  const up = fakeUpstream();
+  const relay = createRelay({ port, stateDir: path.join(up.home, 'state'), tapDir: up.tapDir, log: silent, pendingSyncMs: 60, autoAllow: () => true, askRisky: () => true });
+  await relay.start();
+  let ws = null;
+  try {
+    await waitFor(() => relay.status().upstreams === 1);
+    up.answer('tap/pending', () => ({ pending: [] }));
+    const { token } = await (await pair(port, relay.createPairing().code, 'phone')).json();
+    ({ ws } = await authed(`ws://127.0.0.1:${port}`, token));
+    up.send({ id: 'risky-1', method: 'interaction/requestPermission', params: { sessionId: 'sess_r', toolName: 'Bash', riskLevel: 'high', input: { command: 'rm -rf /tmp/x' } } });
+    up.send({ id: 'safe-1', method: 'interaction/requestPermission', params: { sessionId: 'sess_r', toolName: 'Bash', riskLevel: 'low', input: { command: 'npm test' } } });
+    await waitFor(() => up.received.some(m => m.method === 'tap/respond' && m.params.id === 'safe-1'));
+    await sleep(200);                                                   // a couple of reconciles
+    assert.deepEqual(up.received.filter(m => m.method === 'tap/respond').map(m => m.params.id), ['safe-1']);   // the risky one waits
+    const resP = nextMessage(ws, (m) => m.type === 'pending');
+    ws.send(JSON.stringify({ type: 'pending' }));
+    assert.deepEqual((await resP).pending.map(p => p.id), ['risky-1']); // and it is offered to phones as pending
+    // with askRisky off (the default) even the destructive one is answered at once
+    const port2 = await freePort();
+    const up2 = fakeUpstream();
+    const relay2 = createRelay({ port: port2, stateDir: path.join(up2.home, 'state'), tapDir: up2.tapDir, log: silent, autoAllow: () => true });
+    try {
+      await relay2.start();
+      await waitFor(() => relay2.status().upstreams === 1);
+      up2.send({ id: 'risky-2', method: 'interaction/requestPermission', params: { sessionId: 'sess_r', toolName: 'Bash', riskLevel: 'high', input: { command: 'rm -rf /tmp/x' } } });
+      up2.send({ id: 'safe-2', method: 'interaction/requestPermission', params: { sessionId: 'sess_r', toolName: 'Bash', riskLevel: 'low', input: { command: 'npm test' } } });
+      await waitFor(() => up2.received.filter(m => m.method === 'tap/respond').length >= 2);
+      assert.deepEqual(up2.received.filter(m => m.method === 'tap/respond').map(m => m.params.id).sort(), ['risky-2', 'safe-2']);
+    } finally {
+      await relay2.stop();
+      await up2.close();
+    }
+  } finally {
+    try { ws?.close(); } catch {}
+    await relay.stop();
+    await up.close();
+  }
 });
 
 test('checkPolicy: rename/upload session ids, upload file rules, send attachments, usage ranges, no raw commands', () => {

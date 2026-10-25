@@ -18,7 +18,7 @@ import { panelBounds, trayImageName, isTemplate } from './lib/panelWindow.mjs';
 import { setupSteps, parseBuildProgress, friendlySetupError, kitDir } from './lib/setup.mjs';
 import { isRunning, quitApp, tapAlive, findOriginal, findEngine, findOldIntegrated, runBuild } from './lib/system.mjs';
 import { readVersion, compareVersions, checkRelease, engineRebuildScript } from './lib/updates.mjs';
-import { listSessions, listPending, readTapServers, summarize, withLiveStatus, readUsage, respondPermission, stopSession, sendToSession, nudgeSession, RETRY_MESSAGE } from './lib/sessions.mjs';
+import { listSessions, listPending, readTapServers, summarize, withLiveStatus, readUsage, respondPermission, pendingToAutoAllow, AUTO_ALLOW_RESULT, stopSession, sendToSession, nudgeSession, RETRY_MESSAGE } from './lib/sessions.mjs';
 import { createSelfUpdater } from './lib/selfupdate.mjs';
 import { createStt } from './lib/stt.mjs';
 import { buildPrompt } from './lib/vocab.mjs';
@@ -231,7 +231,7 @@ async function start() {
       if (settings.relayEnabled) {
         const ips = hostIps();                                    // concrete addresses only, never 0.0.0.0
         relayHostSig = ips.join(',');
-        relay = createRelay({ hosts: ips, port: settings.port, publicUrls: publicUrlsFor(), log: relayLog, stt: sttAdapter });
+        relay = createRelay({ hosts: ips, port: settings.port, publicUrls: publicUrlsFor(), autoAllow: () => settings.autoAllow === true, askRisky: () => settings.askRisky === true, log: relayLog, stt: sttAdapter });
         relay.on('status', refresh);
         try { await relay.start(); } catch (err) { error = startError(err); }
       }
@@ -366,6 +366,20 @@ async function start() {
             for (const request of await listPending({ timeoutMs: WORK_TIMEOUT_MS })) {
               if (request.sessionId == null) continue;
               (pending[request.sessionId] ??= []).push(request);
+            }
+          }
+          // Without the relay there is nobody else to answer: this refresh itself allows every
+          // pending permission request (setting permitting), one by one, and keeps the answered
+          // ones out of the needs list. Questions are never answered here.
+          const autoAllowList = pendingToAutoAllow(Object.values(pending).flat(), settings.autoAllow === true && !(relay && relay.status().running), settings.askRisky === true);
+          if (autoAllowList.length) {
+            for (const request of autoAllowList) {
+              try { await respondPermission({ sock: request.sock, requestId: request.requestId, response: AUTO_ALLOW_RESULT }); } catch { /* gone is fine */ }
+            }
+            appendLog(`zode: auto-allowed ${autoAllowList.length} permission request${autoAllowList.length === 1 ? '' : 's'} without the relay`);
+            for (const request of autoAllowList) {
+              const list = pending[request.sessionId];
+              if (list) pending[request.sessionId] = list.filter(r => r.requestId !== request.requestId);
             }
           }
           const usage = await readUsageCached();
@@ -687,6 +701,8 @@ async function start() {
       toggleFoldFinished: () => { settings.foldFinished = !settings.foldFinished; save(); pushPanel(); },
       toggleLaunchAtLogin: () => { settings.launchAtLogin = !settings.launchAtLogin; save(); app.setLoginItemSettings({ openAtLogin: settings.launchAtLogin }); refresh(); },
       toggleKeepAwake: () => { settings.keepAwake = !(settings.keepAwake === true); save(); updatePowerBlocker(); refresh(); },
+      toggleAutoAllow: () => { settings.autoAllow = !(settings.autoAllow === true); save(); refresh(); },   // the relay reads the flag per request, so this applies at once
+      toggleAskRisky: () => { settings.askRisky = !(settings.askRisky === true); save(); refresh(); },
       setup: () => showSetupWindow(),
       openEngine: async () => {
         const p = enginePath || await findEngine().catch(() => null);
@@ -780,6 +796,8 @@ async function start() {
           addressId: chosen().id,
           launchAtLogin: settings.launchAtLogin,
           keepAwake: settings.keepAwake,
+          autoAllow: settings.autoAllow === true,
+          askRisky: settings.askRisky === true,
           setupDone: settings.setupDone,
           foldFinished: settings.foldFinished === true,
           tapAlive: tapUp === true,
@@ -927,6 +945,8 @@ async function start() {
         if (p.key === 'keepAwake') actions.toggleKeepAwake();
         else if (p.key === 'relayEnabled') actions.toggleRelay();
         else if (p.key === 'launchAtLogin') actions.toggleLaunchAtLogin();
+        else if (p.key === 'autoAllow') actions.toggleAutoAllow();
+        else if (p.key === 'askRisky') actions.toggleAskRisky();
       } else if (name === 'removePhone') {
         if (typeof p.id === 'string' && p.id) actions.revoke(p.id);       // the popover's two-click remove
       } else if (name === 'foldFinished') {

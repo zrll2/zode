@@ -6,6 +6,7 @@ import net from 'node:net';
 import path from 'node:path';
 import os from 'node:os';
 import { withRealActivity } from '../../relay/activity.mjs';
+import { isRiskyRequest } from '../../relay/risk.mjs';
 
 const MIN = 60 * 1000;
 const tapDir = () => path.join(os.homedir(), '.zcode-tap');
@@ -121,9 +122,8 @@ async function ask(sock, method, params, timeoutMs = 1500, connect = defaultConn
   return null;
 }
 
-// Commands that deserve a second look before an allow from the menu bar — but only when ZCode itself
-// flags the request as high risk.
-const RISKY_BITS = ['rm -rf', 'sudo', 'curl ', 'wget ', 'git push', 'npm publish', 'chmod', 'chown', 'dd ', 'mkfs', '> /dev/'];
+// Whether a request needs a second look before an allow from the menu bar: the shared risky-command
+// classifier (relay/risk.mjs — the same rules the relay and the phone use) decides.
 const clip = (str, max = 80) => { const s = String(str); return s.length <= max ? s : s.slice(0, max - 1) + '…'; };
 
 // The answer options the agent offers with a permission request, kept for the panel's bulk answers:
@@ -147,7 +147,7 @@ function permissionOptions(params) {
 }
 
 // "Run: <command>" / "Edit: <file name>" — the tool plus its key input, never more than 80 characters,
-// plus whether the confirmation dialog is needed before an allow. `detail` stays untruncated for it.
+// plus the shared risky verdict. `detail` stays untruncated for the confirmation dialog.
 export function summarizeRequest(params) {
   const input = params?.input && typeof params.input === 'object' ? params.input : {};
   const command = typeof input.command === 'string' ? input.command : '';
@@ -160,7 +160,7 @@ export function summarizeRequest(params) {
   return {
     text: clip(detail),
     detail,
-    risky: params?.riskLevel === 'high' && RISKY_BITS.some(bit => command.includes(bit)),
+    risky: isRiskyRequest(params),
   };
 }
 
@@ -243,6 +243,19 @@ export async function readUsage({ dir = tapDir(), timeoutMs = 4000, connect = de
     });
     return await Promise.any(attempts);
   } catch { return null; }
+}
+
+// The plain allow every auto-answering path sends (one place builds it).
+export const AUTO_ALLOW_RESULT = Object.freeze({ decision: 'allow', reason: 'Approved automatically by Zode' });
+
+// The permission requests the no-relay fallback answers by itself: only permissions (questions
+// always need a human), oldest first, capped like the relay's own bulk answers. With askRisky on,
+// the risky ones (the shared classifier's verdict, applied when they were listed) stay for a human.
+export function pendingToAutoAllow(list, enabled, askRisky = false) {
+  if (enabled !== true) return [];
+  const permissions = (Array.isArray(list) ? list : []).filter(r => r && r.kind === 'permission');
+  if (askRisky === true) return permissions.filter(r => r.risky !== true).slice(0, 600);
+  return permissions.slice(0, 600);
 }
 
 // Answer a pending permission request. The first answer wins — a late answer comes back as an error

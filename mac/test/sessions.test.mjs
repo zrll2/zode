@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { readTapServers, listSessions, listPending, readUsage, describeSession, summarize, summarizeRequest, respondPermission, stopSession, sendToSession, nudgeSession, withLiveStatus, NUDGE_MESSAGE } from '../lib/sessions.mjs';
+import { readTapServers, listSessions, listPending, readUsage, describeSession, summarize, summarizeRequest, respondPermission, pendingToAutoAllow, AUTO_ALLOW_RESULT, stopSession, sendToSession, nudgeSession, withLiveStatus, NUDGE_MESSAGE } from '../lib/sessions.mjs';
 import { createLiveStatus } from '../../relay/live.mjs';
 
 const NOW = 1_700_000_000_000;
@@ -166,8 +166,9 @@ test('summarizeRequest: Run/Edit text, the 80-character cap, and the risky patte
   for (const bit of ['rm -rf', 'sudo', 'curl ', 'wget ', 'git push', 'npm publish', 'chmod', 'chown', 'dd ', 'mkfs', '> /dev/']) {
     assert.equal(summarizeRequest({ toolName: 'Bash', input: { command: `${bit} something` }, riskLevel: 'high' }).risky, true, bit);
   }
-  assert.equal(summarizeRequest({ toolName: 'Bash', input: { command: 'sudo ls' }, riskLevel: 'medium' }).risky, false);   // only high risk
-  assert.equal(summarizeRequest({ toolName: 'Bash', input: { command: 'curl.js run' }, riskLevel: 'high' }).risky, false); // 'curl ' needs the space
+  assert.equal(summarizeRequest({ toolName: 'Bash', input: { command: 'sudo ls' }, riskLevel: 'medium' }).risky, true);    // the classics are risky whatever the agent thinks
+  assert.equal(summarizeRequest({ toolName: 'Bash', input: { command: 'curl.js run' }, riskLevel: 'high' }).risky, false); // 'curl ' needs the space, even word-bounded
+  assert.equal(summarizeRequest({ toolName: 'Bash', input: { command: 'git push --force' }, riskLevel: 'low' }).risky, true);
   assert.equal(summarizeRequest({}).text, 'Permission request');
   assert.equal(summarizeRequest(null).text, 'Permission request');
 });
@@ -282,6 +283,37 @@ test('nudgeSession: stop first, then the continue message, on the same socket', 
     ['/x', { id: 1, method: 'session/stop', params: { sessionId: 's1' } }],
     ['/x', { id: 1, method: 'session/send', params: { sessionId: 's1', content: NUDGE_MESSAGE } }],
   ]);
+});
+
+test('pendingToAutoAllow: only permissions, only when enabled, capped like the bulk answers', () => {
+  const list = [
+    { requestId: 'p1', kind: 'permission', sock: '/a' },
+    { requestId: 'q1', kind: 'question', sock: '/a' },
+    { requestId: 'p2', kind: 'permission', sock: '/b' },
+    null, 7,
+  ];
+  assert.deepEqual(pendingToAutoAllow(list, true).map(r => r.requestId), ['p1', 'p2']);
+  assert.deepEqual(pendingToAutoAllow(list, false), []);
+  assert.deepEqual(pendingToAutoAllow(list, 'yes'), []);
+  assert.deepEqual(pendingToAutoAllow(undefined, true), []);
+  assert.deepEqual(pendingToAutoAllow(null, true), []);
+  assert.equal(AUTO_ALLOW_RESULT.decision, 'allow');
+  assert.equal(AUTO_ALLOW_RESULT.reason, 'Approved automatically by Zode');
+  assert.deepEqual(pendingToAutoAllow(Array.from({ length: 700 }, (_, i) => ({ requestId: 'r' + i, kind: 'permission', sock: '/a' })), true).length, 600);
+});
+
+test('pendingToAutoAllow: with askRisky on, the risky ones stay for a human', () => {
+  const list = [
+    { requestId: 'p1', kind: 'permission', sock: '/a', risky: true },    // the shared classifier's verdict
+    { requestId: 'p2', kind: 'permission', sock: '/a', risky: false },
+    { requestId: 'p3', kind: 'permission', sock: '/b', risky: true },
+    { requestId: 'q1', kind: 'question', sock: '/a', risky: false },
+  ];
+  assert.deepEqual(pendingToAutoAllow(list, true, true).map(r => r.requestId), ['p2']);
+  assert.deepEqual(pendingToAutoAllow(list, true, false).map(r => r.requestId), ['p1', 'p2', 'p3']);
+  assert.deepEqual(pendingToAutoAllow(list, false, true), []);
+  // without a risky flag at all (junk entries), askRisky keeps nothing back
+  assert.deepEqual(pendingToAutoAllow([{ requestId: 'p9', kind: 'permission', sock: '/a' }], true, true).map(r => r.requestId), ['p9']);
 });
 
 test('readUsage: week from the summary, today from the last heatmap day that matches the local date', async () => {

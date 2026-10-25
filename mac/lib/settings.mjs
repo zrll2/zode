@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 
 // voiceLanguage stays null until chosen: main.mjs picks it once from the macOS system language.
-const DEFAULTS = { relayEnabled: true, addressId: null, port: 8787, launchAtLogin: false, setupDone: false, keepAwake: true, foldFinished: false, voiceLanguage: null, voiceModel: 'small' };
+const DEFAULTS = { relayEnabled: true, addressId: null, port: 8787, launchAtLogin: false, setupDone: false, keepAwake: true, foldFinished: false, autoAllow: true, askRisky: false, voiceLanguage: null, voiceModel: 'small' };
 
 function sanitize(raw) {
   const s = { ...DEFAULTS };
@@ -14,6 +14,8 @@ function sanitize(raw) {
   if (typeof raw.setupDone === 'boolean') s.setupDone = raw.setupDone;
   if (typeof raw.keepAwake === 'boolean') s.keepAwake = raw.keepAwake;
   if (typeof raw.foldFinished === 'boolean') s.foldFinished = raw.foldFinished;
+  if (typeof raw.autoAllow === 'boolean') s.autoAllow = raw.autoAllow;     // a missing or invalid value means on
+  if (typeof raw.askRisky === 'boolean') s.askRisky = raw.askRisky;        // a missing or invalid value means off
   if (raw.voiceLanguage === 'en' || raw.voiceLanguage === 'zh') s.voiceLanguage = raw.voiceLanguage;
   if (raw.voiceModel === 'small') s.voiceModel = raw.voiceModel;     // 'small' is the only model today
   return s;
