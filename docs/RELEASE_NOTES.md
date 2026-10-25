@@ -1,5 +1,12 @@
 # Zode for Mac
 
+## 1.2.0
+- **ZCode never waits for you (new default).** Zode now allows ZCode's permission requests automatically, the moment they appear. Questions that need a human answer are never answered for you. Turn it off in Settings: **Allow ZCode requests automatically**.
+- **Keep asking for risky commands.** A second switch (off by default): even with automatic approval on, commands like `rm -rf`, `sudo`, `git push` and `curl` wait for you. The Mac and the phone now share one list of what counts as risky.
+- **Note:** with automatic approval on, ZCode can run any command in the projects it works in, without asking. Use the risky-command switch if you want a safety net, or turn automatic approval off.
+- The "Always allow" button on a pile of requests now matches the other buttons.
+- Documentation brought up to date (README, security, phone and setup guides); the older Zode-in-ZCode app no longer clears the new app's settings.
+
 ## 1.1.1
 - **Answer a pile of permission requests at once.** When a conversation keeps asking for the same permission, the card now offers Allow all, Deny all and Always allow this here (ZCode's own "always allow in this project" rule), plus Stop task.
 - **Fixed:** the menu bar panel showed old conversations as "Just now"; it uses the real last-activity time again.

@@ -21,7 +21,11 @@ codesign --verify --deep --strict --verbose=2 "$APP"
 echo "Signed: $(codesign -dv --verbose=2 "$APP" 2>&1 | grep -E 'Authority=Developer ID Application' | head -n 1)"
 
 if [ "$NOTARIZE" -eq 0 ]; then echo "Skipping notarization (--no-notarize). The app will be blocked by Gatekeeper on other Macs."; exit 0; fi
-xcrun notarytool submit "$DMG" --keychain-profile "$PROFILE" --wait
+if [ -n "${ZODE_NOTARY_KEY:-}" ]; then   # an App Store Connect API key file instead of a stored keychain profile (ZODE_NOTARY_KEY, ZODE_NOTARY_KEY_ID, ZODE_NOTARY_ISSUER)
+  xcrun notarytool submit "$DMG" --key "$ZODE_NOTARY_KEY" --key-id "$ZODE_NOTARY_KEY_ID" --issuer "$ZODE_NOTARY_ISSUER" --wait
+else
+  xcrun notarytool submit "$DMG" --keychain-profile "$PROFILE" --wait
+fi
 xcrun stapler staple "$DMG"
 spctl -a -t open --context context:primary-signature -vv "$DMG"
 echo "Release ready: $DMG"
