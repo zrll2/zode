@@ -11,7 +11,7 @@ const perm = over => ({ requestId: 'r1', kind: 'permission', toolName: 'Bash', s
 const input = over => ({
   running: true, phones: 2,
   addresses: [{ id: 'lan', label: 'Wi-Fi / local network (192.168.1.5)', ip: '192.168.1.5' }, { id: 'local', label: 'This Mac only', ip: '127.0.0.1' }],
-  addressId: 'lan', launchAtLogin: false, keepAwake: true, autoAllow: true, setupDone: true, foldFinished: false,
+  addressId: 'lan', launchAtLogin: false, keepAwake: true, autoAllow: true, askRisky: false, notify: true, setupDone: true, foldFinished: false,
   tapAlive: true, engine: { path: '/Applications/ZCode Engine.app' },
   update: { available: false, originalVersion: null, engineVersion: null },
   release: { available: false, latest: null, installed: null },
@@ -33,7 +33,7 @@ test('quiet: idle glyph, All quiet, no banner, empty lists, settings pass throug
   assert.equal(m.phones, 2);
   assert.equal(m.connected, true);
   assert.deepEqual(m.settings, {
-    keepAwake: true, autoAllow: true, askRisky: false, relayEnabled: true, launchAtLogin: false, foldFinished: false,
+    keepAwake: true, autoAllow: true, askRisky: false, notify: true, relayEnabled: true, launchAtLogin: false, foldFinished: false,
     addressId: 'lan',
     addresses: [{ id: 'lan', label: 'Wi-Fi / local network (192.168.1.5)' }, { id: 'local', label: 'This Mac only' }],
     version: '1.0.1', selfUpdate: 'idle',
@@ -244,6 +244,13 @@ test('the risky gate rides in the settings model; missing or invalid means off',
   assert.equal(buildPanelModel(input({ askRisky: false }), NOW).settings.askRisky, false);
   assert.equal(buildPanelModel(input({}), NOW).settings.askRisky, false);
   assert.equal(buildPanelModel(input({ askRisky: 'yes' }), NOW).settings.askRisky, false);
+});
+
+test('the notify switch rides in the settings model; a missing or invalid value means on', () => {
+  assert.equal(buildPanelModel(input({ notify: true }), NOW).settings.notify, true);
+  assert.equal(buildPanelModel(input({ notify: false }), NOW).settings.notify, false);
+  assert.equal(buildPanelModel(input({}), NOW).settings.notify, true);            // the default is on: junk never flips it
+  assert.equal(buildPanelModel(input({ notify: 'yes' }), NOW).settings.notify, true);
 });
 
 test('summary titles for every combination, plural and singular', () => {

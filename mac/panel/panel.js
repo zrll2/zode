@@ -49,6 +49,7 @@ function render() {
   setSwitch('swAutoAllow', s.autoAllow === true);
   $('swAskRisky').disabled = s.autoAllow !== true;                  // it only matters while auto-allow is on
   setSwitch('swAskRisky', s.autoAllow === true && s.askRisky === true);
+  setSwitch('swNotify', s.notify !== false);
   setSwitch('swLogin', s.launchAtLogin === true);
   renderAddresses(s.addresses ?? [], s.addressId);
   renderVoice(model.voice);
@@ -353,6 +354,7 @@ $('swAwake').addEventListener('click', () => flip('swAwake', 'keepAwake'));
 $('swRelay').addEventListener('click', () => flip('swRelay', 'relayEnabled'));
 $('swAutoAllow').addEventListener('click', () => flip('swAutoAllow', 'autoAllow'));
 $('swAskRisky').addEventListener('click', () => { if (!$('swAskRisky').disabled) flip('swAskRisky', 'askRisky'); });
+$('swNotify').addEventListener('click', () => flip('swNotify', 'notify'));
 $('swLogin').addEventListener('click', () => flip('swLogin', 'launchAtLogin'));
 $('addr').addEventListener('change', e => act('setAddress', { id: e.target.value }));
 $('voiceLang').addEventListener('click', e => {

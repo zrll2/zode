@@ -19,6 +19,7 @@ import { setupSteps, parseBuildProgress, friendlySetupError, kitDir } from './li
 import { isRunning, quitApp, tapAlive, findOriginal, findEngine, findOldIntegrated, runBuild } from './lib/system.mjs';
 import { readVersion, compareVersions, checkRelease, engineRebuildScript } from './lib/updates.mjs';
 import { listSessions, listPending, readTapServers, summarize, withLiveStatus, readUsage, respondPermission, pendingToAutoAllow, AUTO_ALLOW_RESULT, stopSession, sendToSession, nudgeSession, RETRY_MESSAGE } from './lib/sessions.mjs';
+import { lineStates, notificationsFor } from './lib/notify.mjs';
 import { createSelfUpdater } from './lib/selfupdate.mjs';
 import { createStt } from './lib/stt.mjs';
 import { buildPrompt } from './lib/vocab.mjs';
@@ -38,6 +39,7 @@ const WORK_POLL_MS = 30 * 1000;                       // background refresh whil
 const WORK_POLL_ACTIVE_MS = 10 * 1000;                // the same, while a conversation is running: follow the turn
 const ADDRESS_POLL_MS = 10 * 1000;                    // how often the network is re-checked (Wi-Fi joins, Tailscale starts)
 const USAGE_TTL_MS = 60 * 1000;                       // the agent is asked for token usage at most this often
+const NOTIFY_PACE_MS = 10 * 1000;                     // at most one notification this often; the rest queue into the next
 const WORK_SETTLE_MS = 1000;                          // after a menu action, before the refresh + reopen
 const PANEL_WIDTH = 340;                              // the panel that opens under the menu bar icon
 const PANEL_REOPEN_MS = 250;                          // a tray click this soon after a blur-hide is the click that closed it
@@ -106,6 +108,10 @@ async function start() {
     // What ZCode is doing right now, read from the tap sockets; the menu only ever sees the cached value.
     let work = { lines: [], more: 0, counts: { working: 0, waiting: 0, failed: 0 }, pending: {}, usage: null };
     let usageCache = { at: 0, usage: null };           // the last answer from the agent, good for a minute
+    let notifyStates = null;                           // the previous snapshot the notification diff works from
+    const notifyRunSince = new Map();                  // sessionId -> when the current run started
+    let notifyQueue = [];                              // notifications waiting for the next allowed show
+    let notifyShownAt = 0;                             // when the last notification was shown
     let workActive = 0;                                // the active count last logged, so a change logs once
     let workRefresh = null;
     let workPoll = null;
@@ -383,6 +389,7 @@ async function start() {
           }
           const usage = await readUsageCached();
           work = await withMeasures({ ...summary, pending, usage });
+          notifyTick();
           const active = work.counts.working + work.counts.waiting + work.counts.failed;
           if (active !== workActive) {
             workActive = active;
@@ -394,6 +401,77 @@ async function start() {
         } catch (err) { appendLog(`zode: sessions: ${err?.stack || err}`); }
       })().finally(() => { workRefresh = null; });
       return workRefresh;
+    }
+
+    // Fresh lines every 30 s while a ZCode server is live, every 10 s while one of its conversations
+    // is running so the panel follows a turn closely. A tick with no live server is one local readdir
+    // that touches no sockets, so nothing runs (and no server is asked) while ZCode is closed.
+    function pollSessions() {
+      if (workPoll) return;
+      const tick = () => {
+        workPoll = setTimeout(() => {
+          if (readTapServers().length > 0) refreshSessions();
+          tick();
+        }, work.counts.working > 0 ? WORK_POLL_ACTIVE_MS : WORK_POLL_MS);
+        workPoll.unref?.();
+      };
+      tick();
+    }
+
+    // ---- notifications ---------------------------------------------------------------------------
+    // A macOS notification when a conversation finishes, fails or needs the user. The diff itself is
+    // pure (mac/lib/notify.mjs); this side owns the snapshots, the run starts, the queue and the pace.
+    function notifyTick() {
+      try {
+        if (settings.notify === false || Notification.isSupported?.() !== true) {   // off: forget everything, the next on is a fresh baseline
+          notifyStates = null;
+          notifyQueue = [];
+          return;
+        }
+        notifyFlush();                                   // anything queued from ten seconds ago goes out now
+        const prevById = new Map((notifyStates ?? []).map(s => [s.id, s]));
+        const next = lineStates(work.lines).map(s => {
+          const since = notifyRunSince.get(s.id);
+          if (s.state === 'running' && since == null) notifyRunSince.set(s.id, prevById.get(s.id)?.since ?? Date.now());
+          if (s.state !== 'running') notifyRunSince.delete(s.id);
+          return since != null ? { ...s, since } : s;
+        });
+        const due = notificationsFor(notifyStates, next, { now: Date.now() });
+        notifyStates = next;
+        if (due.length) {
+          notifyQueue = notifyQueue.concat(due);
+          notifyFlush();
+        }
+      } catch (err) { appendLog(`zode: notify tick: ${err?.stack || err}`); }
+    }
+
+    function notifyFlush() {
+      try {
+        if (!notifyQueue.length) return;
+        if (panelFocused()) { notifyQueue = []; return; }            // the user is looking right now: nothing to tell them
+        if (Date.now() - notifyShownAt < NOTIFY_PACE_MS) return;     // paced: the queue merges into the next show
+        let batch = notifyQueue;
+        notifyQueue = [];
+        notifyShownAt = Date.now();
+        if (batch.length > 3) batch = [{ kind: 'many', count: batch.length }];
+        showNotification(batch[0]);
+        if (batch.length > 1) notifyQueue = batch.slice(1);          // the rest wait for the next slot
+      } catch (err) { appendLog(`zode: notify flush: ${err?.stack || err}`); }
+    }
+
+    function showNotification(note) {
+      try {
+        const project = typeof note.project === 'string' && note.project ? note.project : 'ZCode';
+        let title = `ZCode: ${Math.max(0, Math.floor(Number(note.count) || 0))} updates`, body = 'Open Zode to see them.', silent = true;
+        if (note.kind === 'finished') { title = `${project} finished`; body = (typeof note.title === 'string' && note.title) || 'Done.'; }
+        else if (note.kind === 'failed') { title = `${project} failed`; body = 'Open Zode to retry.'; silent = false; }
+        else if (note.kind === 'needs') { title = `${project} needs you`; body = 'Waiting for an answer or permission.'; silent = false; }
+        else if (note.kind === 'stalled') { title = `${project} may be stuck`; body = 'No activity for a while.'; }
+        const n = new Notification({ title, body, silent });
+        n.on('click', () => { try { showPanel(); } catch { /* the panel comes with the next click */ } });
+        n.show();
+        appendLog(`zode: notification ${note.kind}`);
+      } catch (err) { appendLog(`zode: notification: ${err?.stack || err}`); }
     }
 
     // Fresh lines every 30 s while a ZCode server is live, every 10 s while one of its conversations
@@ -702,6 +780,7 @@ async function start() {
       toggleKeepAwake: () => { settings.keepAwake = !(settings.keepAwake === true); save(); updatePowerBlocker(); refresh(); },
       toggleAutoAllow: () => { settings.autoAllow = !(settings.autoAllow === true); save(); refresh(); },   // the relay reads the flag per request, so this applies at once
       toggleAskRisky: () => { settings.askRisky = !(settings.askRisky === true); save(); refresh(); },
+      toggleNotify: () => { settings.notify = !(settings.notify === true); save(); refresh(); },
       setup: () => showSetupWindow(),
       openEngine: async () => {
         const p = enginePath || await findEngine().catch(() => null);
@@ -781,6 +860,11 @@ async function start() {
       try { return !!(panelWindow && !panelWindow.isDestroyed() && panelWindow.isVisible()); } catch { return false; }
     }
 
+    // The user is looking at the panel right now: nothing to tell them through a notification.
+    function panelFocused() {
+      try { return !!(panelVisible() && panelWindow && !panelWindow.isDestroyed() && panelWindow.isFocused()); } catch { return false; }
+    }
+
     // The same state the native menu reads, shaped for buildPanelModel; work.lines carry `at`
     // (refreshSessions keeps them) so the panel can show ages.
     function panelModel() {
@@ -797,6 +881,7 @@ async function start() {
           keepAwake: settings.keepAwake,
           autoAllow: settings.autoAllow === true,
           askRisky: settings.askRisky === true,
+          notify: settings.notify !== false,
           setupDone: settings.setupDone,
           foldFinished: settings.foldFinished === true,
           tapAlive: tapUp === true,
@@ -946,6 +1031,7 @@ async function start() {
         else if (p.key === 'launchAtLogin') actions.toggleLaunchAtLogin();
         else if (p.key === 'autoAllow') actions.toggleAutoAllow();
         else if (p.key === 'askRisky') actions.toggleAskRisky();
+        else if (p.key === 'notify') actions.toggleNotify();
       } else if (name === 'removePhone') {
         if (typeof p.id === 'string' && p.id) actions.revoke(p.id);       // the popover's two-click remove
       } else if (name === 'foldFinished') {
