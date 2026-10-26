@@ -23,6 +23,8 @@ extraResources:                      # the "engine kit": what the setup wizard n
     to: engine-kit/bridge/agent-wrapper.mjs
   - from: vendor/whisper-cli          # the voice engine (whisper.cpp, built by scripts/build-whisper.sh)
     to: bin/whisper-cli               # the app runs it at process.resourcesPath/bin/whisper-cli
+  - from: resources/Assets.car       # compiled from resources/Icon.xcassets (actool): macOS 26 draws the icon on its own rounded plate
+    to: Assets.car
   - from: bin/zode-watch.mjs          # the Claude Code event watcher (runs via ELECTRON_RUN_AS_NODE)
     to: bin/zode-watch.mjs
 mac:
@@ -42,6 +44,7 @@ mac:
   identity: "GOOLOO PTE LTD (JLB545UV6D)"
   notarize: false
   extendInfo:
+    CFBundleIconName: AppIcon
     LSUIElement: true                # menu bar only: no Dock icon
     NSLocalNetworkUsageDescription: Zode lets your phone reach this Mac over your local or private network.
 dmg:
