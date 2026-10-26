@@ -1,5 +1,11 @@
 # Zode for Mac
 
+## 1.4.0
+- **A redesigned panel.** One queue with no headings: what needs you first, then what is running with how long each run has lasted, then a single "finished" row that opens in place. The top bar holds your phones, refresh and settings; the footer shows today's token use and Open Zode.
+- **A smaller menu bar icon** with a status light (green while work runs, amber when something needs you) and the number of running conversations beside it.
+- Settings is grouped, with switches and segmented choices instead of long labels.
+- Notifications reach your phone: sealed end to end, they need the new phone build.
+
 ## 1.3.1
 - **Notifications.** A macOS notification when a conversation finishes, fails, needs an answer or looks stuck. One switch in Settings (on by default), short bursts are grouped, and nothing about your commands or files is shown.
 - **Cleaner text.** Settings, banners, toasts and the setup and pairing windows lost their explanatory sentences; the layout does the explaining.
