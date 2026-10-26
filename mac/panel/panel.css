@@ -42,6 +42,9 @@ body{color:var(--ink);font:13px/1.35 var(--font);overflow:hidden}
 .row .p b{display:block;font-weight:600;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .row .p span{display:block;color:var(--sub);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .row .t{color:var(--sub);font-size:12px;font-variant-numeric:tabular-nums;flex:none}
+.row .t2{display:flex;flex-direction:column;align-items:flex-end;flex:none;font-variant-numeric:tabular-nums}
+.row .t2 .ago{color:var(--sub);font-size:12px}
+.row .t2 .clock{color:var(--green);font-size:11.5px;font-weight:600}
 .need{background:var(--amber-bg);border:1px solid var(--amber-line);border-radius:13px;padding:11px 12px 12px;display:flex;flex-direction:column;gap:9px}
 .need .top{display:flex;align-items:baseline;gap:8px}
 .need .top b{font-size:14px;font-weight:650;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

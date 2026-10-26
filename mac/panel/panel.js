@@ -161,21 +161,32 @@ function needCard(n) {
   return card;
 }
 
-// Running rows: pulsing dot, project, summary, and how long the run has been going (the tracker's
-// start; when unknown, the age of the last activity).
+// Running rows: pulsing dot, project, summary; on the right when it last did something and, under it,
+// a running-time counter that ticks every second (the tracker's start; no counter when unknown).
+let clockTimer = null;
 function renderRunning(rows) {
   const root = $('running');
   root.textContent = '';
+  clearInterval(clockTimer);
   const now = Date.now();
+  const clocks = [];
   for (const x of rows) {
     const row = el('div', 'row');
     row.append(el('span', 'dot run'));
     const p = el('div', 'p');
     p.append(el('b', null, x.project ?? ''));
     if (x.doing) p.append(el('span', null, x.doing));
-    row.append(p, el('span', 't', x.since ? runFor(x.since, now) : relAgeText(x.at, now)));
+    const t = el('div', 't2');
+    t.append(el('span', 'ago', agoFor(x.at, now) || (x.since ? agoFor(x.since, now) : '')));
+    if (x.since) {
+      const c = el('span', 'clock', clockFor(x.since, now));
+      clocks.push([c, x.since]);
+      t.append(c);
+    }
+    row.append(p, t);
     root.append(row);
   }
+  if (clocks.length) clockTimer = setInterval(() => { const n = Date.now(); for (const [c, since] of clocks) c.textContent = clockFor(since, n); }, 1000);
 }
 
 function relAgeText(at, now) {

@@ -389,3 +389,17 @@ test('voice: quiet defaults on no or junk input; real values pass through', () =
   }), NOW).voice,
   { language: 'zh', engine: true, model: { id: 'small', state: 'ready', bytes: 487601967 }, download: { state: 'downloading', received: 122, total: 488, error: '' } });
 });
+
+test('agoFor and clockFor: the right-hand time of a running row', async () => {
+  const { agoFor, clockFor } = await import('../panel/helpers.mjs');
+  assert.equal(agoFor(NOW - 3_000, NOW), 'now');
+  assert.equal(agoFor(NOW - 42_000, NOW), '42s ago');
+  assert.equal(agoFor(NOW - 5 * min, NOW), '5m ago');
+  assert.equal(agoFor(NOW - 130 * min, NOW), '2h ago');
+  assert.equal(agoFor(0, NOW), '');
+  assert.equal(clockFor(NOW - 247_000, NOW), '4:07');
+  assert.equal(clockFor(NOW - (3600 + 5 * 60 + 9) * 1000, NOW), '1:05:09');
+  assert.equal(clockFor(NOW - 9_000, NOW), '0:09');
+  assert.equal(clockFor(undefined, NOW), '');
+  assert.equal(clockFor(-5, NOW), '');
+});
