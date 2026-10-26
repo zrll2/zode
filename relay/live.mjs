@@ -9,8 +9,9 @@
 // Applying also rewrites a running session's updatedAt to its last event, so "quiet for N min" only
 // ever means the events really stopped.
 
-const ACTIVITY_MS = 20 * 1000;            // an event this fresh means running even without an explicit mark
-const STALE_MS = 120 * 1000;              // a running mark with no event for this long expires to idle
+const ACTIVITY_MS = 60 * 1000;            // an event this fresh means running even without an explicit mark (an app that started mid-turn)
+const STALE_MS = 45 * 60 * 1000;          // a running mark with no event at all for this long expires to idle: a long test or build run is
+                                          // silent for minutes, and only prompt_completed / turn.terminal ends a turn for real
 const IDLE_GRACE_MS = 3 * 1000;           // events this soon after a settle are the old turn trailing off
 const FORGET_MS = 6 * 60 * 60 * 1000;     // a session unseen for this long is dropped from memory
 const WAITING = new Set(['interaction/requestPermission', 'interaction/requestUserInput']);
@@ -32,8 +33,19 @@ export function createLiveStatus({ now = Date.now } = {}) {
   function observe(msg) {
     const method = msg?.method;
     if (typeof method !== 'string') return;
-    if (method.startsWith('v4/telemetry') || method.startsWith('process/') || method === 'startup/storageState') return;
     const p = msg.params;
+    if (method === 'v4/telemetry/event') {                         // telemetry shows the turn is alive (stream chunks, tool starts), and
+      const id = p?.sessionId, kind = p?.kind;                     // turn.terminal ends it for sure even if prompt_completed was missed
+      if (id == null || typeof kind !== 'string') return;
+      const t = now(), r = record(String(id));
+      r.seenAt = t; forget(t);
+      if (kind === 'turn.terminal') { r.explicit = 'idle'; r.idleAt = t; r.since = 0; return; }
+      if (kind === 'resourceSample' || kind.startsWith('resource')) return;
+      r.lastEventAt = t;
+      if (!(r.idleAt && t - r.idleAt <= IDLE_GRACE_MS)) r.activityAt = t;
+      return;
+    }
+    if (method.startsWith('v4/telemetry') || method.startsWith('process/') || method === 'startup/storageState') return;
     if (method === 'state.updated') {
       if (p?.scope !== 'session' || p.sessionId == null) return;
       const t = now(), r = record(String(p.sessionId));

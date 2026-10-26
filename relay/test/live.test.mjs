@@ -62,17 +62,17 @@ test('telemetry and non-session traffic are ignored: nothing looks running becau
   assert.deepEqual(live.apply([listed('s1')]), [listed('s1')]);
 });
 
-test('activity fallback: events alone mean running, and 20 s after the last one the list stands again', () => {
+test('activity fallback: events alone mean running, and 60 s after the last one the list stands again', () => {
   const c = clock();
   const live = createLiveStatus({ now: c.at });
   live.observe(event('s1'));
   assert.equal(live.apply([listed('s1')])[0].status, 'running');
   c.move(10_000);
   live.observe(event('s1'));
-  c.move(15_000);
-  assert.equal(live.apply([listed('s1')])[0].status, 'running');               // 15 s since the last event
+  c.move(55_000);
+  assert.equal(live.apply([listed('s1')])[0].status, 'running');               // 55 s since the last event
   c.move(6_000);
-  assert.deepEqual(live.apply([listed('s1')]), [listed('s1')]);               // 21 s: quiet again
+  assert.deepEqual(live.apply([listed('s1')]), [listed('s1')]);               // 61 s: quiet again
 });
 
 test('events within 3 s of a settle are the old turn trailing off, not a new one', () => {
@@ -88,24 +88,26 @@ test('events within 3 s of a settle are the old turn trailing off, not a new one
   assert.equal(live.apply([listed('s1')])[0].status, 'running');
 });
 
-test('a running mark with no event for 120 s expires: a crashed turn stops looking running', () => {
+test('a running mark survives a long silent tool run and expires only after 45 minutes without any event', () => {
   const c = clock();
   const live = createLiveStatus({ now: c.at });
   live.observe(started('s1'));
   c.move(60_000);
   live.observe(event('s1'));                                                   // the mark stays fresh while events come
-  c.move(119_000);
-  assert.equal(live.apply([listed('s1')])[0].status, 'running');               // 119 s without an event
+  c.move(10 * 60_000);
+  assert.equal(live.apply([listed('s1')])[0].status, 'running');               // ten silent minutes: a long build, still running
+  c.move(35 * 60_000);
+  assert.equal(live.apply([listed('s1')])[0].status, 'running');               // 45 minutes exactly
   c.move(2_000);
-  assert.deepEqual(live.apply([listed('s1')]), [listed('s1')]);               // 121 s without an event
+  assert.deepEqual(live.apply([listed('s1')]), [listed('s1')]);               // past 45 minutes: a crashed turn lets go
 });
 
-test('a started turn that never emits an event expires 120 s after the mark', () => {
+test('a started turn that never emits an event expires 45 minutes after the mark', () => {
   const c = clock();
   const live = createLiveStatus({ now: c.at });
   live.observe(started('s1'));
-  c.move(120_000);
-  assert.equal(live.apply([listed('s1')])[0].status, 'running');               // 120 s exactly
+  c.move(45 * 60_000);
+  assert.equal(live.apply([listed('s1')])[0].status, 'running');               // 45 minutes exactly
   c.move(1_000);
   assert.deepEqual(live.apply([listed('s1')]), [listed('s1')]);
 });
@@ -141,7 +143,7 @@ test("the list's own error stands unless the session is really running or waitin
   live.setPending([{ sessionId: 's1', method: 'interaction/requestPermission' }]);
   assert.equal(live.apply([broken])[0].status, 'waiting');
   live.setPending([]);
-  c.move(30_000);                                                              // the activity goes stale
+  c.move(70_000);                                                              // the activity goes stale
   assert.deepEqual(live.apply([broken]), [broken]);                           // and error stands again
 });
 
@@ -151,7 +153,7 @@ test('memory is bounded: nothing observed for 6 hours leaves no stale truth behi
   live.observe(started('s1'));
   c.move(6 * 60 * 60 * 1000 + 1);
   live.observe(started('s2'));                                                 // the walk that drops s1
-  c.move(200_000);                                                             // s2's own mark expires too
+  c.move(46 * 60_000);                                                         // s2's own mark expires too
   assert.deepEqual(live.apply([listed('s1'), listed('s2')]), [listed('s1'), listed('s2')]);
   live.observe(event('s2'));                                                   // and the tracker still works afterwards
   assert.equal(live.apply([listed('s2')])[0].status, 'running');
@@ -172,4 +174,25 @@ test('apply tolerates junk entries, never mutates its input, and passes a junk l
   assert.equal(row.status, 'idle');                                            // the input object is untouched
   assert.equal(live.apply(undefined), undefined);
   assert.equal(live.apply('nope'), 'nope');
+});
+
+test('telemetry keeps a turn alive and turn.terminal ends it even when prompt_completed was missed', () => {
+  const c = clock();
+  const live = createLiveStatus({ now: c.at });
+  const tele = (id, kind) => ({ method: 'v4/telemetry/event', params: { sessionId: id, kind } });
+  live.observe(started('s1'));
+  c.move(5 * 60_000);
+  live.observe(tele('s1', 'stream.chunk'));                                     // activity: the quiet gap restarts
+  c.move(40 * 60_000);
+  assert.equal(live.apply([listed('s1')])[0].status, 'running');               // 40 min after the last telemetry: still within 45
+  live.observe(tele('s1', 'resourceSample'));                                   // resource samples are not proof of a turn
+  c.move(6 * 60_000);
+  assert.deepEqual(live.apply([listed('s1')]), [listed('s1')]);               // 46 min since real telemetry
+  live.observe(started('s2'));
+  live.observe(tele('s2', 'turn.terminal'));
+  assert.deepEqual(live.apply([listed('s2')]), [listed('s2')]);               // the terminal telemetry settled it
+  live.observe(tele('s3', 'stream.chunk'));                                     // activity fallback from telemetry alone
+  assert.equal(live.apply([listed('s3')])[0].status, 'running');
+  live.observe({ method: 'v4/telemetry/event', params: { kind: 'stream.chunk' } });   // no session id: ignored
+  live.observe({ method: 'v4/telemetry/event' });
 });
