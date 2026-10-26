@@ -173,7 +173,6 @@ function renderMonitor(f) {
   $('plotArea').setAttribute('points', `0,96 ${pts.join(' ')} 340,96`);
   $('rateNum').textContent = f.rateLabel;
   $('rate').classList.toggle('idle', f.rate === 0);
-  $('peak').textContent = f.peak ? `peak ${f.peakLabel}` : '';
   $('stats').hidden = !(f.avgTokensLabel && f.avgTimeLabel);
   $('avgTok').lastElementChild.textContent = f.avgTokensLabel;
   $('avgTime').lastElementChild.textContent = f.avgTimeLabel;
