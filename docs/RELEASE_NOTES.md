@@ -1,5 +1,8 @@
 # Zode for Mac
 
+## 1.4.1
+- **Tell Claude Code.** Zode now tells Claude Code when a ZCode conversation finishes, fails, needs an answer or looks stuck, so a Claude Code session that delegated the work notices right away instead of being checked by hand. One switch in Settings (on by default) installs a small Claude Code skill and turns the feed on; turning it off removes the skill. Nothing but the project name and conversation title is shared, and only on your Mac.
+
 ## 1.4.0
 - **A redesigned panel.** One queue with no headings: what needs you first, then what is running with how long each run has lasted, then a single "finished" row that opens in place. The top bar holds your phones, refresh and settings; the footer shows today's token use and Open Zode.
 - **A smaller menu bar icon** with a status light (green while work runs, amber when something needs you) and the number of running conversations beside it.
