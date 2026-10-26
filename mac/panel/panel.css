@@ -110,7 +110,7 @@ body{color:var(--ink);font:13px/1.35 var(--font);overflow:hidden}
 .sw:disabled{opacity:.4;cursor:default}
 .seg{display:flex;background:var(--chip);border-radius:8px;padding:2px;gap:2px}
 .seg button{border:0;background:transparent;color:var(--sub);font:inherit;font-weight:600;font-size:12px;height:24px;padding:0 10px;border-radius:6px;cursor:pointer}
-.seg button.on{background:var(--card);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.15)}
+.seg button.on,.seg button[aria-checked="true"]{background:var(--card);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.15)}
 .linkrow{display:flex;gap:6px;padding:2px 8px 6px;flex-wrap:wrap;align-items:center}
 .ver{font-size:12px;color:var(--sub);padding:2px 4px;margin-right:auto}
 .voiceact{flex:none}

@@ -282,6 +282,7 @@ function sheet(on) {
   $('sheet').classList.toggle('on', on);
   $('sheet').setAttribute('aria-hidden', on ? 'false' : 'true');
   $('gear').setAttribute('aria-expanded', on ? 'true' : 'false');
+  reportHeight();
 }
 
 function setSwitch(id, on) { $(id).setAttribute('aria-checked', on ? 'true' : 'false'); }
@@ -345,7 +346,9 @@ function renderVoice(v) {
 // the window from this number, so measure the natural content height, not the clipped one.
 function reportHeight() {
   try {
-    const h = $('bar').offsetHeight + $('mid').scrollHeight + $('foot').offsetHeight + 2;   // + the panel's top and bottom border
+    const h = sheetOn
+      ? document.querySelector('#sheet .hdr').offsetHeight + $('scroll').scrollHeight + 2    // the settings sheet sizes the window while it is open
+      : $('bar').offsetHeight + $('mid').scrollHeight + $('foot').offsetHeight + 2;          // + the panel's top and bottom border
     window.zode.panelResize(Math.min(MAX_HEIGHT, Math.max(1, Math.ceil(h))));
   } catch { /* the app keeps the last size */ }
 }
