@@ -48,8 +48,11 @@ const KEY = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
 const IV = Uint8Array.from([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
 
 function sealedData(kind: string, payload: Record<string, unknown>) {
-  const sealed = gcm(fromKey(), IV, utf8ToBytes(kind)).encrypt(utf8ToBytes(JSON.stringify(payload)));
-  return { k: kind, s: bytesToBase64Url(sealed) };
+  const body = gcm(fromKey(), IV, utf8ToBytes(kind)).encrypt(utf8ToBytes(JSON.stringify(payload)));
+  const wire = new Uint8Array(IV.length + body.length);   // iv | ciphertext | tag, as the Mac sends it
+  wire.set(IV);
+  wire.set(body, IV.length);
+  return { k: kind, s: bytesToBase64Url(wire) };
 }
 
 function fromKey() {

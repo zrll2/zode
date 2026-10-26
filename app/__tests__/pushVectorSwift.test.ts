@@ -16,9 +16,11 @@ const PLAINTEXT = '{"v":1,"kind":"ask","title":"web-app","body":"Run: npm test",
 const VECTOR_FILE = path.join(__dirname, "..", "targets", "notification-service", "VECTOR.md");
 
 it("produces the fixed sealed vector and keeps VECTOR.md in sync", () => {
-  const sealed = bytesToBase64Url(
-    gcm(fromBase64Url(KEY), IV, utf8ToBytes(KIND)).encrypt(utf8ToBytes(PLAINTEXT)),
-  );
+  const body = gcm(fromBase64Url(KEY), IV, utf8ToBytes(KIND)).encrypt(utf8ToBytes(PLAINTEXT));
+  const wire = new Uint8Array(IV.length + body.length); // iv | ciphertext | tag, as the Mac sends it
+  wire.set(IV);
+  wire.set(body, IV.length);
+  const sealed = bytesToBase64Url(wire);
 
   // The phone-side decoder must round-trip exactly this string.
   expect(openSealed(KEY, KIND, sealed)).toEqual({

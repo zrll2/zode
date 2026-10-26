@@ -11,7 +11,7 @@ key (hex): 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
 iv (hex):  000102030405060708090a0b
 kind:      ask
 plaintext: {"v":1,"kind":"ask","title":"web-app","body":"Run: npm test","at":1792800000000}
-sealed: (written by __tests__/pushVectorSwift.test.ts)
+sealed: AAECAwQFBgcICQoLPCCgOf_U7jnmKPnvk9NaDPC9pRjSDzYIVALHvz8eZdAscd6Mje0w-hvABs-ypXpNgGNA4yq7g65a5F47NMGUmtIG903q4x5RLGSaXt-_PpVac9RXTccMAN7BWjG_aFTF
 ```
 
 ## Swift check

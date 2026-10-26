@@ -114,7 +114,7 @@ describe("push key sibling record", () => {
     expect(mockedSet).toHaveBeenCalledWith(
       "zode.push.key.v1",
       "cHVzaC1rZXktMzItYnl0ZXM",
-      expect.objectContaining({ accessGroup: "JLB545UV6D.com.zode.app.shared" }),
+      expect.objectContaining({ accessGroup: "XP5Q8LPH52.sg.comex.zode.shared" }),
     );
     await expect(loadPushKey()).resolves.toBe("cHVzaC1rZXktMzItYnl0ZXM");
   });

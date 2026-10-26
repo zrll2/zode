@@ -3,10 +3,10 @@ module.exports = {
   type: "watch",
   name: "ZodeWatch",
   displayName: "Zode",
-  bundleIdentifier: "com.zode.app.watch",
+  bundleIdentifier: "sg.comex.zode.watch",
   // Lowest the SDK allows but not below watchOS 10.
   deploymentTarget: "10.0",
-  appleTeamId: "JLB545UV6D",
+  appleTeamId: "XP5Q8LPH52",
   frameworks: ["WatchConnectivity"],
   icon: "../../assets/icon.png",
 };

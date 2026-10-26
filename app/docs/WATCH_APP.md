@@ -5,9 +5,9 @@ Status: voice flow built, untested on a real watch (W2). The W1 snapshot slice w
 ## Notification service extension (PS4)
 
 `targets/notification-service/` is a `UNNotificationServiceExtension` target (bundle id
-`com.zode.app.notification-service`) that decrypts sealed pushes before iOS shows
+`sg.comex.zode.notification-service`) that decrypts sealed pushes before iOS shows
 them: it reads the push key from the shared keychain access group
-`JLB545UV6D.com.zode.app.shared` (the app stores it there with expo-secure-store's
+`XP5Q8LPH52.sg.comex.zode.shared` (the app stores it there with expo-secure-store's
 `accessGroup` option), opens the AES-GCM box with the kind as AAD, and replaces
 title/body. `userInfo` and the category are kept untouched so the app can still
 answer actions. On any failure (no key, tamper, wrong kind, bad JSON) the unchanged

@@ -9,8 +9,13 @@ export interface ConnectionHintAction {
   quiet?: boolean;
 }
 
+export type ConnectionHintIcon = "wifi-off" | "monitor" | "smartphone";
+
+// title: a few words, shown big; icon: a Feather glyph; body: the long
+// explanation, read out by screen readers but not drawn.
 export interface ConnectionHint {
   title: string;
+  icon: ConnectionHintIcon;
   body: string;
   actions: ConnectionHintAction[];
 }
@@ -76,14 +81,16 @@ export function connectionHint(input: ConnectionHintInput): ConnectionHint | nul
   if (!hasTailscale) {
     if (input.lastGood) {
       return {
-        title: "Your phone only knows your home Wi-Fi",
+        title: "Pair again",
+        icon: "smartphone",
         body:
           "Open Zode once while you are on your home Wi-Fi so it can learn the other way in (Tailscale), or scan the pairing code again.",
         actions: [{ label: "Scan code again", kind: "scan" }],
       };
     }
     return {
-      title: "Can't reach your Mac",
+      title: "Mac not reachable",
+      icon: "monitor",
       body: "Your Mac is not reachable. Check that it is awake and on the same Wi-Fi.",
       actions: [{ label: "Try again", kind: "retry" }],
     };
@@ -91,7 +98,8 @@ export function connectionHint(input: ConnectionHintInput): ConnectionHint | nul
 
   if (!hasLan || !input.lastGood || lastGoodIsTailscale) {
     return {
-      title: "Can't reach your Mac from here",
+      title: "Turn on Tailscale",
+      icon: "wifi-off",
       body:
         "You are away from your home Wi-Fi. Open Tailscale on this phone and make sure it is connected, then try again. Your Mac must be awake with Zode open.",
       actions: [
@@ -102,7 +110,8 @@ export function connectionHint(input: ConnectionHintInput): ConnectionHint | nul
   }
 
   return {
-    title: "Can't reach your Mac",
+    title: "Mac not reachable",
+    icon: "monitor",
     body: "Your Mac is not reachable. Check that it is awake and on the same Wi-Fi.",
     actions: [{ label: "Try again", kind: "retry" }],
   };

@@ -33,7 +33,8 @@ describe("home Wi-Fi only (no Tailscale address known, connected before)", () =>
   it("tells the user how to learn the other way in", () => {
     const hint = connectionHint(BASE);
     expect(hint).toEqual({
-      title: "Your phone only knows your home Wi-Fi",
+      title: "Pair again",
+      icon: "smartphone",
       body:
         "Open Zode once while you are on your home Wi-Fi so it can learn the other way in (Tailscale), or scan the pairing code again.",
       actions: [{ label: "Scan code again", kind: "scan" }],
@@ -51,7 +52,7 @@ describe("away from home with a Tailscale address known", () => {
 
   it("points at Tailscale when the last good address was Tailscale", () => {
     const hint = connectionHint(AWAY);
-    expect(hint?.title).toBe("Can't reach your Mac from here");
+    expect(hint?.title).toBe("Turn on Tailscale");
     expect(hint?.body).toContain("Open Tailscale on this phone");
     expect(hint?.actions).toEqual([
       { label: "Open Tailscale", kind: "tailscale" },
@@ -61,18 +62,19 @@ describe("away from home with a Tailscale address known", () => {
 
   it("points at Tailscale when we cannot tell what worked last", () => {
     const hint = connectionHint({ ...AWAY, lastGood: null });
-    expect(hint?.title).toBe("Can't reach your Mac from here");
+    expect(hint?.title).toBe("Turn on Tailscale");
   });
 
   it("points at Tailscale when only the Tailscale address is known", () => {
     const hint = connectionHint({ ...AWAY, urls: ["ws://100.86.6.90:8787"] });
-    expect(hint?.title).toBe("Can't reach your Mac from here");
+    expect(hint?.title).toBe("Turn on Tailscale");
   });
 
   it("keeps the plain advice when home Wi-Fi was the last good address", () => {
     const hint = connectionHint({ ...AWAY, lastGood: "ws://192.168.86.46:8787" });
     expect(hint).toEqual({
-      title: "Can't reach your Mac",
+      title: "Mac not reachable",
+      icon: "monitor",
       body: "Your Mac is not reachable. Check that it is awake and on the same Wi-Fi.",
       actions: [{ label: "Try again", kind: "retry" }],
     });
@@ -83,7 +85,8 @@ describe("never connected, LAN only", () => {
   it("gives the plain awake-and-same-Wi-Fi advice", () => {
     const hint = connectionHint({ ...BASE, lastGood: null, status: "connecting" });
     expect(hint).toEqual({
-      title: "Can't reach your Mac",
+      title: "Mac not reachable",
+      icon: "monitor",
       body: "Your Mac is not reachable. Check that it is awake and on the same Wi-Fi.",
       actions: [{ label: "Try again", kind: "retry" }],
     });

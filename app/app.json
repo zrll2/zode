@@ -7,12 +7,12 @@
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "bundleIdentifier": "com.zode.app",
+      "bundleIdentifier": "sg.comex.zode",
       "buildNumber": "1",
       "supportsTablet": false,
       "requireFullScreen": false,
       "entitlements": {
-        "keychain-access-groups": ["$(AppIdentifierPrefix)com.zode.app.shared"]
+        "keychain-access-groups": ["$(AppIdentifierPrefix)sg.comex.zode.shared"]
       },
       "config": {
         "usesNonExemptEncryption": false
@@ -126,7 +126,7 @@
       [
         "@bacons/apple-targets",
         {
-          "appleTeamId": "JLB545UV6D"
+          "appleTeamId": "XP5Q8LPH52"
         }
       ]
     ],

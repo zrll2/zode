@@ -67,7 +67,7 @@ describe("registerPush", () => {
         body: JSON.stringify({
           deviceToken: "aabbcc",
           env: "sandbox",
-          bundleId: "com.zode.app",
+          bundleId: "sg.comex.zode",
         }),
       }),
     );

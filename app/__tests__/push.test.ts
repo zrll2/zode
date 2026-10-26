@@ -15,7 +15,11 @@ const PLAINTEXT =
   '{"v":1,"kind":"ask","title":"web-app","body":"Run: npm test","at":1792800000000}';
 
 function seal(key: Uint8Array, kind: string, plaintext: string, iv: Uint8Array): Uint8Array {
-  return gcm(key, iv, utf8ToBytes(kind)).encrypt(utf8ToBytes(plaintext));
+  const body = gcm(key, iv, utf8ToBytes(kind)).encrypt(utf8ToBytes(plaintext));
+  const out = new Uint8Array(iv.length + body.length);   // the wire form: iv | ciphertext | tag
+  out.set(iv);
+  out.set(body, iv.length);
+  return out;
 }
 
 describe("base64url helpers", () => {
@@ -31,8 +35,8 @@ describe("base64url helpers", () => {
   });
 
   it("accepts padded standard base64 too", () => {
-    expect(Array.from(fromBase64Url("AAECAwQ="))).toEqual([0, 1, 2, 3]);
-    expect(Array.from(fromBase64Url("AAECAwQ"))).toEqual([0, 1, 2, 3]);
+    expect(Array.from(fromBase64Url("AAECAwQ="))).toEqual([0, 1, 2, 3, 4]);
+    expect(Array.from(fromBase64Url("AAECAwQ"))).toEqual([0, 1, 2, 3, 4]);
   });
 });
 

@@ -14,7 +14,7 @@ import UserNotifications
 // and the value is stored as UTF-8 bytes of the base64url key string under
 // kSecValueData.
 enum PushKeyStore {
-    static let accessGroup = "JLB545UV6D.com.zode.app.shared"
+    static let accessGroup = "XP5Q8LPH52.sg.comex.zode.shared"
     private static let service = "app"
     private static let storageKey = "zode.push.key.v1"
 

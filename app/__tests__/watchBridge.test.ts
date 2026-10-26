@@ -21,6 +21,13 @@ jest.mock("expo-file-system", () => ({
   File: class {},
 }));
 
+// The bridge reaches expo-audio through ../src/voice; the real module needs the native side.
+jest.mock("expo-audio", () => ({
+  useAudioRecorder: () => ({}),
+  RecordingPresets: { HIGH_QUALITY: {} },
+  AudioModule: { requestRecordingPermissionsAsync: async () => ({ granted: true }) },
+}));
+
 function row(overrides: Record<string, unknown>): Record<string, unknown> {
   return {
     id: "s1",
@@ -185,7 +192,7 @@ describe("fetch/push decisions (W4)", () => {
   });
 
   it("throttles pushes from the last actual push", () => {
-    expect(nextPushDelayMs(0, 1_000, throttle)).toBe(0); // nothing pushed yet
+    expect(nextPushDelayMs(0, 1_700_000_000_000, throttle)).toBe(0); // nothing pushed yet: the clock is far past 0
     expect(nextPushDelayMs(1_000, 61_000, throttle)).toBe(0); // long past
     expect(nextPushDelayMs(60_000, 60_500, throttle)).toBe(1_500); // just pushed
     expect(nextPushDelayMs(60_000, 62_000, throttle)).toBe(0); // window over

@@ -648,19 +648,42 @@ export default function SessionsScreen() {
               Pairing rejected — unpair and pair again
             </Text>
           ) : view === "hint" && hint ? (
-            <View style={[styles.hintCard, { backgroundColor: t.colors.surface }]}>
+            <View style={styles.hintPane} accessible accessibilityLabel={`${hint.title}. ${hint.body}`}>
+              <View style={[styles.hintIcon, { backgroundColor: t.colors.surface }]}>
+                <Feather name={hint.icon} size={30} color={t.colors.subtext} />
+              </View>
               <Text style={[styles.hintTitle, { color: t.colors.text }]}>{hint.title}</Text>
-              <Text style={[styles.hintBody, { color: t.colors.subtext }]}>{hint.body}</Text>
               <View style={styles.hintActions}>
-                {hint.actions.map((action) => (
-                  <ActionButton
-                    key={action.label}
-                    label={action.label}
-                    variant={action.quiet ? "quiet" : "primary"}
-                    onPress={() => runHintAction(action.kind)}
-                    accessibilityLabel={action.label}
-                  />
-                ))}
+                {hint.actions.map((action) =>
+                  action.kind === "retry" ? (
+                    <Pressable
+                      key={action.label}
+                      onPress={() => runHintAction(action.kind)}
+                      accessibilityRole="button"
+                      accessibilityLabel={action.label}
+                      style={[
+                        styles.hintRetry,
+                        {
+                          backgroundColor: action.quiet ? t.colors.surface : t.colors.accent,
+                        },
+                      ]}
+                    >
+                      <Feather
+                        name="refresh-cw"
+                        size={20}
+                        color={action.quiet ? t.colors.text : t.colors.onAccent}
+                      />
+                    </Pressable>
+                  ) : (
+                    <ActionButton
+                      key={action.label}
+                      label={action.label}
+                      variant="primary"
+                      onPress={() => runHintAction(action.kind)}
+                      accessibilityLabel={action.label}
+                    />
+                  ),
+                )}
               </View>
             </View>
           ) : (
@@ -941,16 +964,11 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 14,
   },
-  hintCard: {
-    marginTop: 4,
-    marginBottom: 10,
-    borderRadius: 16,
-    padding: 14,
-    gap: 6,
-  },
-  hintTitle: { fontSize: 15, lineHeight: 20, fontWeight: "700" },
-  hintBody: { fontSize: 13, lineHeight: 18 },
-  hintActions: { flexDirection: "row", gap: 8, marginTop: 6 },
+  hintPane: { alignItems: "center", gap: 14, paddingHorizontal: 24 },
+  hintIcon: { width: 72, height: 72, borderRadius: 36, alignItems: "center", justifyContent: "center" },
+  hintTitle: { fontSize: 18, lineHeight: 24, fontWeight: "700", textAlign: "center" },
+  hintActions: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 4 },
+  hintRetry: { width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center" },
   pushPromptActions: { flexDirection: "row", gap: 12, marginTop: 8 },
   centerPane: {
     flex: 1,

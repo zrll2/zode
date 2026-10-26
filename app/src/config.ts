@@ -16,5 +16,5 @@ export const SUPPORT_URL = "https://github.com/zrll2/zode/issues";
 // the keychain access group the push key shares with the notification
 // extension (team prefix + shared suffix; SecureStore passes it verbatim).
 export const PUSH_SERVICE_URL = "https://zode-push.vercel.app";
-export const PUSH_KEYCHAIN_GROUP = "JLB545UV6D.com.zode.app.shared";
-export const BUNDLE_ID = "com.zode.app";
+export const PUSH_KEYCHAIN_GROUP = "XP5Q8LPH52.sg.comex.zode.shared";
+export const BUNDLE_ID = "sg.comex.zode";

@@ -2,10 +2,10 @@
 module.exports = {
   type: "notification-service",
   name: "ZodeNotificationService",
-  bundleIdentifier: "com.zode.app.notification-service",
+  bundleIdentifier: "sg.comex.zode.notification-service",
   deploymentTarget: "15.1",
-  appleTeamId: "JLB545UV6D",
+  appleTeamId: "XP5Q8LPH52",
   entitlements: {
-    "keychain-access-groups": ["$(AppIdentifierPrefix)com.zode.app.shared"],
+    "keychain-access-groups": ["$(AppIdentifierPrefix)sg.comex.zode.shared"],
   },
 };
