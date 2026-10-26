@@ -1,7 +1,7 @@
 // panelBounds and the tray icon helpers for every documented case.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { panelBounds, trayImageName, isTemplate } from '../lib/panelWindow.mjs';
+import { panelBounds, trayImageName, isTemplate, trayTitle } from '../lib/panelWindow.mjs';
 
 // A 1440x925 display minus the menu bar.
 const WA = { x: 0, y: 25, width: 1440, height: 900 };
@@ -54,14 +54,22 @@ test('trayImageName and isTemplate for every glyph and both bar appearances', ()
   // idle is the quiet template image on both bars; macOS tints it itself
   assert.equal(trayImageName({ glyph: 'idle', dark: false }), 'trayTemplate.png');
   assert.equal(trayImageName({ glyph: 'idle', dark: true }), 'trayTemplate.png');
-  // 'Light' files belong to a light menu bar (a dark glyph), 'Dark' ones to a dark bar
-  assert.equal(trayImageName({ glyph: 'working', dark: false }), 'trayWorkingDark.png');
-  assert.equal(trayImageName({ glyph: 'working', dark: true }), 'trayWorkingDark.png');
+  // working is the same template glyph: the number of running conversations is the tray title instead
+  assert.equal(trayImageName({ glyph: 'working', dark: false }), 'trayTemplate.png');
+  assert.equal(trayImageName({ glyph: 'working', dark: true }), 'trayTemplate.png');
   assert.equal(trayImageName({ glyph: 'needs', dark: false }), 'trayNeedsDark.png');
   assert.equal(trayImageName({ glyph: 'needs', dark: true }), 'trayNeedsDark.png');
   assert.equal(trayImageName({ glyph: 'weird', dark: false }), 'trayTemplate.png');   // junk glyph: the quiet icon
   assert.ok(isTemplate('idle'));
-  assert.equal(isTemplate('working'), false);
+  assert.ok(isTemplate('working'));
   assert.equal(isTemplate('needs'), false);
   assert.ok(isTemplate('weird'));
+});
+
+test('trayTitle: the running count beside the icon, nothing at zero, junk, or a huge number', () => {
+  assert.equal(trayTitle({ working: 0 }), '');
+  assert.equal(trayTitle({ working: 3 }), ' 3');
+  assert.equal(trayTitle({ working: 250 }), ' 99');
+  for (const bad of [undefined, null, 'x', -2, NaN]) assert.equal(trayTitle({ working: bad }), '');
+  assert.equal(trayTitle(), '');
 });

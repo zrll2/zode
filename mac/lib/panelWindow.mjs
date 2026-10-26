@@ -32,14 +32,20 @@ export function panelBounds(opts) {
   return { x: Math.round(x), y: Math.round(y), width: w, height: Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, want, fits)) };
 }
 
-// The tray icon per panel glyph: the quiet state is a template image that macOS tints itself; the
-// dot variants are colored PNGs with a white glyph, always. The app theme says nothing about the menu
-// bar (it follows the wallpaper), and a dark glyph vanished on a dark bar; white reads on both.
+// The tray icon per panel glyph: the quiet and the working states are the template glyph (macOS tints
+// it for the menu bar itself; the number of running conversations is the tray title next to it, see
+// trayTitle); only "needs you" is a colored amber-dot PNG with a white glyph, always. The app theme says
+// nothing about the menu bar (it follows the wallpaper), and a dark glyph vanished on a dark bar.
 export function trayImageName({ glyph } = {}) {
-  if (glyph === 'working') return 'trayWorkingDark.png';
   if (glyph === 'needs') return 'trayNeedsDark.png';
   return 'trayTemplate.png';
 }
 
-// Whether the icon file is a macOS template image (only the quiet one is).
-export function isTemplate(glyph) { return glyph !== 'working' && glyph !== 'needs'; }
+// Whether the icon file is a macOS template image (everything except the amber "needs you" dot).
+export function isTemplate(glyph) { return glyph !== 'needs'; }
+
+// The text beside the icon: how many conversations are running (nothing at zero).
+export function trayTitle({ working } = {}) {
+  const n = Math.floor(Number(working));
+  return Number.isFinite(n) && n > 0 ? ` ${Math.min(n, 99)}` : '';
+}

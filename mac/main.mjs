@@ -14,7 +14,7 @@ import { detectAddresses, defaultAddress, autoAddresses } from './lib/addresses.
 import { loadSettings, saveSettings } from './lib/settings.mjs';
 import { buildMenuTemplate } from './lib/menu.mjs';
 import { buildPanelModel } from './lib/panel.mjs';
-import { panelBounds, trayImageName, isTemplate } from './lib/panelWindow.mjs';
+import { panelBounds, trayImageName, isTemplate, trayTitle } from './lib/panelWindow.mjs';
 import { setupSteps, parseBuildProgress, friendlySetupError, kitDir } from './lib/setup.mjs';
 import { isRunning, quitApp, tapAlive, findOriginal, findEngine, findOldIntegrated, runBuild } from './lib/system.mjs';
 import { readVersion, compareVersions, checkRelease, engineRebuildScript } from './lib/updates.mjs';
@@ -913,6 +913,7 @@ async function start() {
         if (image.isEmpty()) { appendLog(`zode: assets/${name} is missing; keeping the tray icon.`); return; }
         if (!isTemplate(glyph)) image.setTemplateImage(false);
         tray.setImage(image);
+        tray.setTitle(trayTitle({ working: work.counts.working }));          // the number of running conversations
       } catch (err) { appendLog(`zode: tray image: ${err?.stack || err}`); }
     }
 
