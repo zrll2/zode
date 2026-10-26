@@ -409,7 +409,7 @@ test('withLiveStatus: quiet minutes only count when events really stop; a settle
   const applied = withLiveStatus(rows, live);
   assert.equal(applied[0].updatedAt, NOW + 6 * 60_000);
   assert.deepEqual(describeSession(applied[0], NOW + 6 * 60_000), { light: 'green', text: 'Working' });
-  t = NOW + 6 * 60_000 + 121_000;                                                     // events stop: the mark expires
+  t = NOW + 6 * 60_000 + 46 * 60_000;                                                // events stop for 46 minutes: the mark expires
   assert.deepEqual(withLiveStatus(rows, live), rows);
   t += 60_000;
   live.observe(completedMsg('s1'));                                                   // an explicit settle: the list's object stands
