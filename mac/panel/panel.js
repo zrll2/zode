@@ -389,4 +389,5 @@ document.addEventListener('keydown', e => {
 });
 document.addEventListener('mousedown', () => document.body.classList.remove('kb'));
 
-load();
+// The helpers module defines runFor and friends on window; wait for it before the first draw.
+import('./helpers.mjs').catch(() => {}).then(() => load());

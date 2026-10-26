@@ -144,7 +144,7 @@ export function buildPanelModel(input, now = Date.now()) {
           at: Number.isFinite(line.at) ? line.at : 0,
         });
       } else if (line.done) {
-        const row = { id: line.id, project: str(line.project) || 'Zode', doing: str(line.title), t: str(line.status) || relAge(ageOf(line, t)) };
+        const row = { id: line.id, project: str(line.project) || 'Zode', doing: str(line.title), t: relAge(ageOf(line, t)) || str(line.status) };
         (line.older ? earlier : done).push(row);
       }
     }

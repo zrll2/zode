@@ -104,10 +104,10 @@ test('busy: every need kind, red before amber, working rows with run start, fini
   assert.equal('ask' in m.needs[3], false);
   assert.deepEqual(m.working, [{ id: 'w1', project: 'web', doing: 'Rewrite the pagination', since: NOW - 12 * 60_000, at: NOW - 3 * min }]);
   assert.deepEqual(m.done, [
-    { id: 'd1', project: 'web', doing: '', t: '3 min ago' },
-    { id: 'd2', project: 'web', doing: '', t: '48 min ago' },
+    { id: 'd1', project: 'web', doing: '', t: '3 min' },
+    { id: 'd2', project: 'web', doing: '', t: '48 min' },
   ]);
-  assert.deepEqual(m.earlier, [{ id: 'e1', project: 'web', doing: '', t: '2 h ago' }]);
+  assert.deepEqual(m.earlier, [{ id: 'e1', project: 'web', doing: '', t: '2 h' }]);
   assert.equal(m.glyph, 'needs');
 });
 
