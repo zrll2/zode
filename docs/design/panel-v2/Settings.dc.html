@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Panel, settings</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="panel.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>body{margin:0}</style>
+</helmet>
+<div class="stage">
+  <div class="panel">
+    <div class="hdr"><button class="ib" aria-label="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 6-6 6 6 6"/></svg></button>Settings</div>
+    <div class="group">
+      <div class="set"><span>Allow ZCode requests automatically</span><button class="sw on" role="switch" aria-checked="true" aria-label="Allow ZCode requests automatically"></button></div>
+      <div class="set"><span>Keep asking for risky commands</span><button class="sw" role="switch" aria-checked="false" aria-label="Keep asking for risky commands"></button></div>
+      <div class="set"><span>Notify me</span><button class="sw on" role="switch" aria-checked="true" aria-label="Notify me"></button></div>
+    </div>
+    <div class="group">
+      <div class="set"><span>Phone connection</span><button class="sw on" role="switch" aria-checked="true" aria-label="Phone connection"></button></div>
+      <div class="set"><span>Reachable from</span><div class="seg"><button class="on">Automatic</button><button>Wi-Fi</button><button>Tailscale</button></div></div>
+      <div class="set"><span>Keep my Mac awake</span><button class="sw on" role="switch" aria-checked="true" aria-label="Keep my Mac awake"></button></div>
+      <div class="set"><span>Start at login</span><button class="sw on" role="switch" aria-checked="true" aria-label="Start at login"></button></div>
+    </div>
+    <div class="group">
+      <div class="set"><span>Voice language</span><div class="seg"><button class="on">English</button><button>中文</button></div></div>
+      <div class="set"><span>Voice model</span><span class="val" style="flex: none">Ready</span></div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":440,"height":640}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>
