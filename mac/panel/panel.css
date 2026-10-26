@@ -117,7 +117,7 @@ body.kb button:focus-visible{outline:2px solid var(--pri);outline-offset:2px}   
 @media (prefers-reduced-motion:reduce){.row .dot.run::after{animation:none}.spin svg{animation:none}.sheet,.sw::after,.toast,.fin .chev{transition:none}}
 
 .ib.z{color:var(--ink)}
-.ib.z svg{width:19px;height:19px}
+.ib.z svg{width:14px;height:14px}
 .mon{border-top:1px solid var(--line);position:relative;flex:none}
 .mon[hidden]{display:none}
 .mon .plot{display:block;width:100%;height:96px}
