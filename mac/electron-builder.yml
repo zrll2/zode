@@ -23,6 +23,8 @@ extraResources:                      # the "engine kit": what the setup wizard n
     to: engine-kit/bridge/agent-wrapper.mjs
   - from: vendor/whisper-cli          # the voice engine (whisper.cpp, built by scripts/build-whisper.sh)
     to: bin/whisper-cli               # the app runs it at process.resourcesPath/bin/whisper-cli
+  - from: bin/zode-watch.mjs          # the Claude Code event watcher (runs via ELECTRON_RUN_AS_NODE)
+    to: bin/zode-watch.mjs
 mac:
   category: public.app-category.developer-tools
   icon: ../assets/Zode.icns

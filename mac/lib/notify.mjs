@@ -44,11 +44,12 @@ function shortRun(e, was, now, minRunMs) {
 }
 
 // What changed between the two snapshots, as [{ id, kind, project, title }] with kind one of
-// finished | failed | needs | stalled — or a single { kind: 'many', count } when more than three
-// fire at once. The first snapshot (prev null) is the baseline and is always silent; a conversation
-// that was never seen running is only announced when it needs the user or failed; every (id, kind)
-// fires once per state change, never again while the state stays.
-export function notificationsFor(prev, next, { now = Date.now(), minRunMs = 20000 } = {}) {
+// finished | failed | needs | stalled — or a single { kind: 'many', count } when more than
+// `mergeAbove` fire at once (pass Infinity for the event feed, which wants every member). The first
+// snapshot (prev null) is the baseline and is always silent; a conversation that was never seen
+// running is only announced when it needs the user or failed; every (id, kind) fires once per
+// state change, never again while the state stays.
+export function notificationsFor(prev, next, { now = Date.now(), minRunMs = 20000, mergeAbove = 3 } = {}) {
   if (prev == null) return [];                                  // baseline
   const before = byId(prev);
   const out = [];
@@ -69,6 +70,6 @@ export function notificationsFor(prev, next, { now = Date.now(), minRunMs = 2000
       if ((was.state === 'running' || was.state === 'stalled') && !shortRun(e, was, now, minRunMs)) out.push(entry(id, 'finished', e));
     }
   }
-  if (out.length > 3) return [{ kind: 'many', count: out.length }];
+  if (out.length > mergeAbove) return [{ kind: 'many', count: out.length }];
   return out;
 }

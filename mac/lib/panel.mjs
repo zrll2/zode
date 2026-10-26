@@ -188,6 +188,7 @@ export function buildPanelModel(input, now = Date.now()) {
         autoAllow: s.autoAllow !== false,                     // the setting defaults on: missing or junk means on
         askRisky: s.askRisky === true,
         notify: s.notify !== false,                           // the setting defaults on: missing or junk means on
+        claudeCode: s.claudeCode !== false,                   // the setting defaults on: missing or junk means on
         relayEnabled: s.running === true,
         launchAtLogin: s.launchAtLogin === true,
         foldFinished: s.foldFinished === true,
@@ -211,7 +212,7 @@ export function buildPanelModel(input, now = Date.now()) {
       usage: null, usageLabel: null,
       connected: false,
       settings: {
-        keepAwake: false, autoAllow: true, askRisky: false, notify: true, relayEnabled: false, launchAtLogin: false, foldFinished: false,
+        keepAwake: false, autoAllow: true, askRisky: false, notify: true, claudeCode: true, relayEnabled: false, launchAtLogin: false, foldFinished: false,
         addressId: '', addresses: [], version: '', selfUpdate: 'idle',
       },
       voice: voiceOf(null),

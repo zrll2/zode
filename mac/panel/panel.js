@@ -287,6 +287,7 @@ function renderSettings(s, voice) {
   risky.disabled = s.autoAllow !== true;                          // it only matters while auto-allow is on
   setSwitch('swAskRisky', s.autoAllow === true && s.askRisky === true);
   setSwitch('swNotify', s.notify !== false);
+  setSwitch('swClaudeCode', s.claudeCode !== false);
   setSwitch('swRelay', s.relayEnabled === true);
   setSwitch('swAwake', s.keepAwake === true);
   setSwitch('swLogin', s.launchAtLogin === true);
@@ -368,6 +369,7 @@ $('swRelay').addEventListener('click', () => flip('swRelay', 'relayEnabled'));
 $('swAutoAllow').addEventListener('click', () => flip('swAutoAllow', 'autoAllow'));
 $('swAskRisky').addEventListener('click', () => { if (!$('swAskRisky').disabled) flip('swAskRisky', 'askRisky'); });
 $('swNotify').addEventListener('click', () => flip('swNotify', 'notify'));
+$('swClaudeCode').addEventListener('click', () => flip('swClaudeCode', 'claudeCode'));
 $('swLogin').addEventListener('click', () => flip('swLogin', 'launchAtLogin'));
 $('voiceLang').addEventListener('click', e => {
   const b = e.target.closest('button[data-lang]');

@@ -20,6 +20,8 @@ import { isRunning, quitApp, tapAlive, findOriginal, findEngine, findOldIntegrat
 import { readVersion, compareVersions, checkRelease, engineRebuildScript } from './lib/updates.mjs';
 import { listSessions, listPending, readTapServers, summarize, withLiveStatus, readUsage, respondPermission, pendingToAutoAllow, AUTO_ALLOW_RESULT, stopSession, sendToSession, nudgeSession, RETRY_MESSAGE } from './lib/sessions.mjs';
 import { lineStates, notificationsFor } from './lib/notify.mjs';
+import { createEventFeed } from './lib/events.mjs';
+import { installSkill, removeSkill } from './lib/claudeCode.mjs';
 import { createSelfUpdater } from './lib/selfupdate.mjs';
 import { createStt } from './lib/stt.mjs';
 import { buildPrompt } from './lib/vocab.mjs';
@@ -112,6 +114,24 @@ async function start() {
     const notifyRunSince = new Map();                  // sessionId -> when the current run started
     let notifyQueue = [];                              // notifications waiting for the next allowed show
     let notifyShownAt = 0;                             // when the last notification was shown
+    const events = createEventFeed({ dir: path.join(HOME, '.zode') });   // the Claude Code feed: one JSON line per event
+    let sessionWs = new Map();                         // sessionId -> workspace path, from the last listing
+    const watchScript = () => app.isPackaged
+      ? path.join(process.resourcesPath ?? '', 'bin', 'zode-watch.mjs')
+      : path.join(devRoot() ?? path.join(import.meta.dirname, '..'), 'mac', 'bin', 'zode-watch.mjs');
+    const watchCommand = () => `ELECTRON_RUN_AS_NODE=1 "${process.execPath}" "${watchScript()}"`;
+    // Install (or remove) the zode-results skill Claude Code sessions read. The events file itself
+    // is fed from notifyTick whenever the setting is on.
+    const syncClaudeCode = () => {
+      try {
+        if (settings.claudeCode !== false) {
+          installSkill({ home: HOME, command: watchCommand(), version: app.getVersion() });
+          appendLog('zode: Claude Code skill installed');
+        } else if (removeSkill({ home: HOME })) {
+          appendLog('zode: Claude Code skill removed');
+        }
+      } catch (err) { appendLog(`zode: claude code skill: ${err?.stack || err}`); }
+    };
     let workActive = 0;                                // the active count last logged, so a change logs once
     let workRefresh = null;
     let workPoll = null;
@@ -366,6 +386,7 @@ async function start() {
           const at = new Map(sessions.map(s => [s?.sessionId, Number(s?.updatedAt) || 0]));
           const title = new Map(sessions.map(s => [s?.sessionId, typeof s?.title === 'string' ? s.title : '']));
           summary.lines = summary.lines.map(l => ({ ...l, at: at.get(l.id) ?? 0, title: title.get(l.id) ?? '' }));
+          sessionWs = new Map(sessions.map(s => [s?.sessionId, typeof s?.workspace?.workspacePath === 'string' ? s.workspace.workspacePath : '']));   // for the Claude Code feed
           const pending = {};
           if (summary.counts.waiting > 0) {            // only waiting conversations can have something pending
             for (const request of await listPending({ timeoutMs: WORK_TIMEOUT_MS })) {
@@ -419,11 +440,14 @@ async function start() {
     }
 
     // ---- notifications ---------------------------------------------------------------------------
-    // A macOS notification when a conversation finishes, fails or needs the user. The diff itself is
-    // pure (mac/lib/notify.mjs); this side owns the snapshots, the run starts, the queue and the pace.
+    // A macOS notification when a conversation finishes, fails or needs the user, and — when the
+    // Claude Code feed is on — one line per event in ~/.zode/events.jsonl. The diff itself is pure
+    // (mac/lib/notify.mjs); this side owns the snapshots, the run starts, the queue and the pace.
     function notifyTick() {
       try {
-        if (settings.notify === false || Notification.isSupported?.() !== true) {   // off: forget everything, the next on is a fresh baseline
+        const feedOn = settings.claudeCode !== false;
+        const notifyOn = settings.notify !== false && Notification.isSupported?.() === true;
+        if (!feedOn && !notifyOn) {                      // both off: forget everything, the next on is a fresh baseline
           notifyStates = null;
           notifyQueue = [];
           return;
@@ -436,9 +460,22 @@ async function start() {
           if (s.state !== 'running') notifyRunSince.delete(s.id);
           return since != null ? { ...s, since } : s;
         });
+        if (feedOn) {
+          // The feed is independent of the macOS notification switch, pacing and merging: one line
+          // per conversation, same diff rules (baseline, short runs, no repeats).
+          for (const e of notificationsFor(notifyStates, next, { now: Date.now(), mergeAbove: Infinity })) {
+            events.append({
+              kind: e.kind,
+              sessionId: String(e.id ?? ''),
+              project: e.project,
+              title: e.title,
+              workspace: sessionWs.get(String(e.id ?? '')) ?? '',
+            });
+          }
+        }
         const due = notificationsFor(notifyStates, next, { now: Date.now() });
         notifyStates = next;
-        if (due.length) {
+        if (notifyOn && due.length) {
           notifyQueue = notifyQueue.concat(due);
           notifyFlush();
         }
@@ -773,6 +810,7 @@ async function start() {
       toggleAutoAllow: () => { settings.autoAllow = !(settings.autoAllow === true); save(); refresh(); },   // the relay reads the flag per request, so this applies at once
       toggleAskRisky: () => { settings.askRisky = !(settings.askRisky === true); save(); refresh(); },
       toggleNotify: () => { settings.notify = !(settings.notify === true); save(); refresh(); },
+      toggleClaudeCode: () => { settings.claudeCode = !(settings.claudeCode === true); save(); syncClaudeCode(); refresh(); },
       setup: () => showSetupWindow(),
       openEngine: async () => {
         const p = enginePath || await findEngine().catch(() => null);
@@ -874,6 +912,7 @@ async function start() {
           autoAllow: settings.autoAllow === true,
           askRisky: settings.askRisky === true,
           notify: settings.notify !== false,
+          claudeCode: settings.claudeCode !== false,
           setupDone: settings.setupDone,
           foldFinished: settings.foldFinished === true,
           tapAlive: tapUp === true,
@@ -1025,6 +1064,7 @@ async function start() {
         else if (p.key === 'autoAllow') actions.toggleAutoAllow();
         else if (p.key === 'askRisky') actions.toggleAskRisky();
         else if (p.key === 'notify') actions.toggleNotify();
+        else if (p.key === 'claudeCode') actions.toggleClaudeCode();
       } else if (name === 'removePhone') {
         if (typeof p.id === 'string' && p.id) actions.revoke(p.id);       // the popover's two-click remove
       } else if (name === 'foldFinished') {
@@ -1291,6 +1331,7 @@ async function start() {
     } catch (err) { appendLog(`zode: old copy check: ${err?.stack || err}`); }
 
     await applyRelay();
+    syncClaudeCode();                                 // refresh (or remove) the Claude Code skill for this launch
 
     checkUpdate();
     setInterval(checkUpdate, UPDATE_CHECK_MS);

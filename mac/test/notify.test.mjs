@@ -100,3 +100,10 @@ test('bursts merge into one many; exactly three stay three', () => {
   assert.deepEqual(notificationsFor(prev, next, { now: NOW }), [{ kind: 'many', count: 4 }]);
   assert.equal(notificationsFor(prev.slice(0, 3), next.slice(0, 3), { now: NOW }).length, 3);
 });
+
+test('mergeAbove: Infinity keeps every member of a burst (the event feed wants each one)', () => {
+  const prev = ['a', 'b', 'c', 'd'].map(id => ({ id, project: 'p', title: id.toUpperCase(), state: 'running', at: NOW - 60_000, since: NOW - 60_000 }));
+  const next = prev.map(s => ({ ...s, state: 'finished', at: NOW }));
+  const out = notificationsFor(prev, next, { now: NOW, mergeAbove: Infinity });
+  assert.deepEqual(out.map(e => [e.id, e.kind]), [['a', 'finished'], ['b', 'finished'], ['c', 'finished'], ['d', 'finished']]);
+});

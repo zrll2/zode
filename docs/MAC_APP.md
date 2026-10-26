@@ -25,6 +25,12 @@ The phone talks to the relay exactly as before (protocol unchanged). The relay t
 
 Built along the way: the menu bar icon opens a small panel (left click) — the native menu remains as the right-click fallback.
 
+## Claude Code feed (built)
+
+Zode appends one JSON line per notification decision (finished, failed, needs you, stuck) to `~/.zode/events.jsonl` (mode 0600, rotated at 512 KB to `events.jsonl.1`). Each line is `{ v, at, kind, sessionId, project, title, workspace }` — states and names only, never commands or message text. The feed runs whether or not macOS notifications are on; it is independent of their pacing and merging.
+
+The app also installs a Claude Code skill, `~/.claude/skills/zode-results/SKILL.md`, which tells any Claude Code session to run the shipped watcher (`mac/bin/zode-watch.mjs`, launched through the app binary with `ELECTRON_RUN_AS_NODE=1`) as a Monitor. The watcher tails the feed and prints one plain line per event (`finished: <project> - <title> (session <id>)`). The skill is marked `managed-by: zode` and rewritten on every launch; turning the `Tell Claude Code` switch off in Settings removes it (only if it still carries the marker) and stops the feed. Developers: `ELECTRON_RUN_AS_NODE` must stay enabled — no Electron fuse disabling it is set in `mac/electron-builder.yml`.
+
 ## Decisions made
 - Electron (reuse the tested JavaScript; ~100 MB download is fine). A native rewrite stays possible later because the phone protocol does not change.
 - Publisher shown to users: GOOLOO PTE LTD.
