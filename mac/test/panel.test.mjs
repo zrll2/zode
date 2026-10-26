@@ -104,10 +104,10 @@ test('busy: every need kind, red before amber, working rows with run start, fini
   assert.equal('ask' in m.needs[3], false);
   assert.deepEqual(m.working, [{ id: 'w1', project: 'web', doing: 'Rewrite the pagination', since: NOW - 12 * 60_000, at: NOW - 3 * min }]);
   assert.deepEqual(m.done, [
-    { id: 'd1', project: 'web', doing: '', t: '3 min' },
-    { id: 'd2', project: 'web', doing: '', t: '48 min' },
+    { id: 'd1', project: 'web', doing: '', t: '3 min ago', took: '' },
+    { id: 'd2', project: 'web', doing: '', t: '48 min ago', took: '' },
   ]);
-  assert.deepEqual(m.earlier, [{ id: 'e1', project: 'web', doing: '', t: '2 h' }]);
+  assert.deepEqual(m.earlier, [{ id: 'e1', project: 'web', doing: '', t: '2 h ago', took: '' }]);
   assert.equal(m.glyph, 'needs');
 });
 
@@ -411,4 +411,14 @@ test('orderTitle: every work order reads "Work order NN: ..."', () => {
   assert.equal(t('Bug register review'), 'Work order: Bug register review');
   assert.equal(t('Bug register review', 'zode'), 'Bug register review');
   assert.equal(t(''), '');
+});
+
+test('finished rows: "N min ago" and how long the conversation took', () => {
+  const m = buildPanelModel(input({ work: { lines: [
+    line({ id: 'd', done: true, status: 'Done', at: NOW - min, startedAt: NOW - 15 * min }),
+    line({ id: 'x', done: true, status: 'Done', at: NOW - 2 * min, startedAt: NOW - 90 * 1000 }),
+  ], more: 0, pending: {} } }), NOW);
+  const r = Object.fromEntries(m.done.map(d => [d.id, d]));
+  assert.deepEqual([r.d.t, r.d.took], ['1 min ago', '14 min']);
+  assert.equal(r.x.took, '');
 });

@@ -28,6 +28,16 @@ function relAge(ms) {
   return `${Math.floor(ms / (60 * MIN))} h`;
 }
 
+// 'now', '1 min ago', '3 h ago': a finished row's age.
+const agoText = ms => { const a = relAge(ms); return a && a !== 'now' ? `${a} ago` : a; };
+// How long a finished conversation took: '14 min', '1 h 5 min'; '' under a minute or when unknown.
+export function tookText(line) {
+  const ms = line?.at - line?.startedAt;
+  if (!Number.isFinite(ms) || !(line.startedAt > 0) || ms < MIN || ms > 48 * 60 * MIN) return '';
+  const m = Math.floor(ms / MIN);
+  return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ''}`;
+}
+
 const str = v => (typeof v === 'string' ? v : '');
 const ageOf = (line, now) => (Number.isFinite(line.at) ? Math.max(0, now - line.at) : NaN);
 
@@ -153,7 +163,7 @@ export function buildPanelModel(input, now = Date.now()) {
           at: Number.isFinite(line.at) ? line.at : 0,
         });
       } else if (line.done) {
-        const row = { id: line.id, project: str(line.project) || 'Zode', doing: orderTitle(line), t: relAge(ageOf(line, t)) || str(line.status) };
+        const row = { id: line.id, project: str(line.project) || 'Zode', doing: orderTitle(line), t: agoText(ageOf(line, t)) || str(line.status), took: tookText(line) };
         (line.older ? earlier : done).push(row);
       }
     }

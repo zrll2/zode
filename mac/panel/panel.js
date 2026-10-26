@@ -231,7 +231,10 @@ function doneRow(x) {
   const p = el('div', 'p');
   p.append(el('b', null, x.project ?? ''));
   if (x.doing) p.append(el('span', null, x.doing));
-  row.append(p, el('span', 't', x.t ?? ''));
+  const t = el('div', 't2');
+  t.append(el('span', 'ago', x.t ?? ''));
+  if (x.took) t.append(el('span', 'took', x.took));
+  row.append(p, t);
   return row;
 }
 

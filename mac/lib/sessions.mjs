@@ -334,6 +334,7 @@ export function summarize(sessions, now = Date.now()) {
       sock: typeof session.sock === 'string' ? session.sock : '',
       group: described.light === 'red' ? 0 : described.light === 'amber' ? 1 : session.status === 'running' ? 2 : 3,
       at: Number(session.updatedAt) || 0,
+      startedAt: Number(session.createdAt) || 0,        // when the conversation began (the finished rows show how long it took)
       liveSince: Number(session.liveSince) || 0,        // when the current run began (the relay's live tracker)
       project: projectName(session),
       status: described.text,
