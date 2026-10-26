@@ -1,4 +1,13 @@
 // The menu bar panel's view model: one pure function from the app's state to the JSON-safe object
+// Work orders all read "Work order NN: what it does": markdown marks are stripped, the number is kept,
+// and an order in a worktree (-wt) that never numbered itself still gets the same lead-in.
+export function orderTitle(line) {
+  const raw = str(line?.title).replace(/^[\s#>*_`-]+/, '').trim();
+  const m = /^work\s*order\s*#?\s*([\w.-]*?)\s*(?:[:.\u2013\u2014-]\s*|\s+)(.*)$/i.exec(raw);
+  if (m) return m[1] ? `Work order ${m[1]}${m[2] ? ': ' + m[2] : ''}` : `Work order${m[2] ? ': ' + m[2] : ''}`;
+  return raw && /-wt$/.test(str(line?.project)) ? `Work order: ${raw}` : raw;
+}
+
 // the panel window draws. Nothing here touches Electron, sockets or the disk, so it is fully
 // testable; nothing here throws — missing or broken input yields the quiet empty model.
 //
@@ -139,12 +148,12 @@ export function buildPanelModel(input, now = Date.now()) {
         working.push({
           id: line.id,
           project: str(line.project) || 'Zode',
-          doing: str(line.title),
+          doing: orderTitle(line),
           since: Number.isFinite(line.liveSince) && line.liveSince > 0 ? line.liveSince : 0,
           at: Number.isFinite(line.at) ? line.at : 0,
         });
       } else if (line.done) {
-        const row = { id: line.id, project: str(line.project) || 'Zode', doing: str(line.title), t: relAge(ageOf(line, t)) || str(line.status) };
+        const row = { id: line.id, project: str(line.project) || 'Zode', doing: orderTitle(line), t: relAge(ageOf(line, t)) || str(line.status) };
         (line.older ? earlier : done).push(row);
       }
     }

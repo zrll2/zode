@@ -1,7 +1,7 @@
 // buildPanelModel for every documented state, plus the panel's pure display helpers.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildPanelModel } from '../lib/panel.mjs';
+import { buildPanelModel, orderTitle } from '../lib/panel.mjs';
 import { runFor, finishedDefaultOpen, addressSegOptions } from '../panel/helpers.mjs';
 
 const NOW = 1_800_000_000_000;
@@ -402,4 +402,13 @@ test('agoFor and clockFor: the right-hand time of a running row', async () => {
   assert.equal(clockFor(NOW - 9_000, NOW), '0:09');
   assert.equal(clockFor(undefined, NOW), '');
   assert.equal(clockFor(-5, NOW), '');
+});
+
+test('orderTitle: every work order reads "Work order NN: ..."', () => {
+  const t = (title, project = 'x-wt') => orderTitle({ title, project });
+  assert.equal(t('# Work order 01: READ-ONLY audit'), 'Work order 01: READ-ONLY audit');
+  assert.equal(t('**Work order S1 — thing'), 'Work order S1: thing');
+  assert.equal(t('Bug register review'), 'Work order: Bug register review');
+  assert.equal(t('Bug register review', 'zode'), 'Bug register review');
+  assert.equal(t(''), '');
 });
