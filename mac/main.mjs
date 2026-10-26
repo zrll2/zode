@@ -119,7 +119,7 @@ async function start() {
     const watchScript = () => app.isPackaged
       ? path.join(process.resourcesPath ?? '', 'bin', 'zode-watch.mjs')
       : path.join(devRoot() ?? path.join(import.meta.dirname, '..'), 'mac', 'bin', 'zode-watch.mjs');
-    const watchCommand = () => `ELECTRON_RUN_AS_NODE=1 "${process.execPath}" "${watchScript()}"`;
+    const watchCommand = () => `ELECTRON_RUN_AS_NODE=1 "${process.execPath}" "${watchScript()}" 2>/dev/null`;   // Electron prints a harmless codesign line to stderr
     // Install (or remove) the zode-results skill Claude Code sessions read. The events file itself
     // is fed from notifyTick whenever the setting is on.
     const syncClaudeCode = () => {
