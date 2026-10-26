@@ -2,7 +2,7 @@
 
 The app is ready to build. Everything that needs **your** accounts is listed here. Run `cd app && npm run store:check` at any time: it must say `0 error(s)`.
 
-Bundle id and package: `com.zode.app`. Change them in `app/app.json` if you publish your own build (they must be unique in each store).
+Bundle id (iOS): `sg.comex.zode`; Android package: `com.zode.app`. Change them in `app/app.json` if you publish your own build (they must be unique in each store).
 
 ## What you need once
 
@@ -23,7 +23,7 @@ npx eas-cli init            # writes extra.eas.projectId into app.json
 
 ## 2. App Store (iOS)
 
-1. **Create the app** in App Store Connect: New App, platform iOS, name `Zode for ZCode`, bundle id `com.zode.app`, SKU `zode-app`.
+1. **Create the app** in App Store Connect: New App, platform iOS, name `Zode for ZCode`, bundle id `sg.comex.zode`, SKU `zode-app`.
 2. **Fill in your review contact** in `app/store.config.json` (`apple.review`: name, email, phone). Replace every `REPLACE_ME`.
 3. **Build and upload:**
    ```bash

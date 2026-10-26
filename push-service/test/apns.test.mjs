@@ -59,7 +59,7 @@ test('apnsSend: path, auth, topic, priority, expiration and collapse id land in 
   const fake = fakeApns();
   const out = await apnsSend({
     connect: fake.connect, token: 'jwt.test', host: 'api.push.apple.com',
-    deviceToken: 'A'.repeat(64), bundleId: 'com.zode.app', body: '{"aps":{}}',
+    deviceToken: 'A'.repeat(64), bundleId: 'sg.comex.zode', body: '{"aps":{}}',
     collapseId: 'conv-1', priority: 10, timeoutMs: 500,
   });
   assert.deepEqual(out, { ok: true, status: 200, reason: null });
@@ -69,7 +69,7 @@ test('apnsSend: path, auth, topic, priority, expiration and collapse id land in 
   assert.equal(headers[':method'], 'POST');
   assert.equal(headers[':path'], `/3/device/${'A'.repeat(64)}`);
   assert.equal(headers.authorization, 'bearer jwt.test');
-  assert.equal(headers['apns-topic'], 'com.zode.app');
+  assert.equal(headers['apns-topic'], 'sg.comex.zode');
   assert.equal(headers['apns-push-type'], 'alert');
   assert.equal(headers['apns-priority'], '10');
   assert.equal(headers['apns-collapse-id'], 'conv-1');

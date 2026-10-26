@@ -21,7 +21,7 @@ The phone talks to the relay exactly as before (protocol unchanged). The relay t
 1. **Split.** `mac/`: standalone Electron app (tray, pairing window, relay, settings). `scripts/build-tap.sh`: Engine mode (no relay or tray inside, new name and bundle id). The update scripts learn the Engine path.
 2. **First-run setup** — built: the `mac/` wizard finds ZCode, builds the Engine, waits for sign-in + an open project, pairs the phone, and offers to Trash the old `Zode.app` (settings and paired phones in `~/.zode` carry over by themselves).
 3. **Updates** — built: ZCode updates via `scripts/update-zcode.sh` (rebuilds the Engine) and Zode updates itself via `electron-updater` from GitHub Releases (`zrll2/zode`), with a one-click restart from the menu.
-4. **Sign and notarize.** electron-builder, hardened runtime, entitlements, `notarytool`, `stapler`, DMG. Certificate: Developer ID Application, GOOLOO PTE LTD (JLB545UV6D). arm64 first.
+4. **Sign and notarize.** electron-builder, hardened runtime, entitlements, `notarytool`, `stapler`, DMG. Certificate: Developer ID Application, Comex Technologies Pte Ltd (XP5Q8LPH52). arm64 first.
 5. **Distribute.** GitHub Releases, README download button, Homebrew cask.
 6. **Clean up.** Remove `macapp/` and the asar patching once nothing uses them.
 
@@ -35,7 +35,7 @@ The app also installs a Claude Code skill, `~/.claude/skills/zode-results/SKILL.
 
 ## Decisions made
 - Electron (reuse the tested JavaScript; ~100 MB download is fine). A native rewrite stays possible later because the phone protocol does not change.
-- Publisher shown to users: GOOLOO PTE LTD.
+- Publisher shown to users: Comex Technologies Pte Ltd.
 - Not on the Mac App Store.
 
 ## Open risks

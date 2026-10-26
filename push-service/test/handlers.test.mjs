@@ -24,7 +24,7 @@ function testDeps(over = {}) {
     apnsSend: over.apnsSend ?? apnsSend,
     pushLimit: pushBucket(),
     registerLimit: registerBucket(),
-    topic: 'com.zode.app',
+    topic: 'sg.comex.zode',
     timeoutMs: 500,
     now: () => NOW,
     log: () => {},
@@ -223,6 +223,6 @@ test('defaultDeps: no server key means no service; the topic default comes from 
   const deps = defaultDeps(env);
   assert.equal(typeof deps.auth, 'function');
   assert.equal(typeof deps.log, 'function');
-  assert.equal(deps.topic, 'com.zode.app');
+  assert.equal(deps.topic, 'sg.comex.zode');
   assert.equal(defaultDeps({ ...env, APNS_TOPIC: 'com.other.app' }).topic, 'com.other.app');
 });

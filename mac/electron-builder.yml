@@ -1,7 +1,7 @@
 # Packaging for Zode for Mac: Developer ID signed, hardened runtime. Notarization is a separate step (scripts/release.sh).
 appId: dev.zode.mac
 productName: Zode
-copyright: Copyright © GOOLOO PTE LTD
+copyright: Copyright © Comex Technologies Pte Ltd
 publish:                             # self-update source: electron-builder writes latest-mac.yml and
   - provider: github                 # app-update.yml from this; no token here, releases are published
     owner: zrll2                     # with GH_TOKEN at release time only
@@ -41,7 +41,7 @@ mac:
   gatekeeperAssess: false
   entitlements: resources/entitlements.mac.plist
   entitlementsInherit: resources/entitlements.mac.plist
-  identity: "GOOLOO PTE LTD (JLB545UV6D)"
+  identity: "Comex Technologies Pte Ltd (XP5Q8LPH52)"
   notarize: false
   extendInfo:
     CFBundleIconName: AppIcon

@@ -9,7 +9,7 @@ const key = crypto.randomBytes(32);
 
 test('codec: a register payload roundtrips through the push id', () => {
   const codec = createCodec(key);
-  const payload = { t: 'a'.repeat(64), e: 'production', b: 'com.zode.app' };
+  const payload = { t: 'a'.repeat(64), e: 'production', b: 'sg.comex.zode' };
   const pushId = codec.encrypt(payload);
   assert.match(pushId, /^[A-Za-z0-9_-]+$/);
   assert.deepEqual(codec.decrypt(pushId), payload);

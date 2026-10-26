@@ -1,6 +1,6 @@
 #!/bin/bash
 # Build, sign, notarize and staple Zode for Mac.   bash scripts/release.sh [--no-notarize]
-# Needs: the Developer ID Application certificate in the login keychain (GOOLOO PTE LTD) and, for notarization,
+# Needs: the Developer ID Application certificate in the login keychain (Comex Technologies Pte Ltd) and, for notarization,
 # a notarytool keychain profile named "zode-notary":
 #   xcrun notarytool store-credentials zode-notary --key AuthKey_XXXX.p8 --key-id XXXX --issuer <issuer-uuid>
 set -euo pipefail

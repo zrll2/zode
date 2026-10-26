@@ -31,7 +31,7 @@ export function defaultDeps(env = process.env) {
     apnsSend,
     pushLimit: pushBucket(),
     registerLimit: registerBucket(),
-    topic: env.APNS_TOPIC || 'com.zode.app',
+    topic: env.APNS_TOPIC || 'sg.comex.zode',
     timeoutMs: 8000,
     now: Date.now,
     log: (line) => console.log(line),             // the one allowed log line: method, route, status

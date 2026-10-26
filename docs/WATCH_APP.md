@@ -79,7 +79,7 @@ Caveats: clean synthetic speech, not a noisy wrist microphone; one clip, a few r
 
 **Limits and honesty.**
 - Push is best effort. Everything still works in the app without it.
-- It adds one hosted dependency run by GOOLOO PTE LTD, and the privacy policy and App Store data disclosure must say what is stored (a device token, encrypted) and that content is not readable.
+- It adds one hosted dependency run by Comex Technologies Pte Ltd, and the privacy policy and App Store data disclosure must say what is stored (a device token, encrypted) and that content is not readable.
 - The free tier of the host and APNs cost nothing at this scale.
 - A user who builds their own copy of the app would need their own service and key.
 

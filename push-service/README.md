@@ -32,7 +32,7 @@ Abuse limits are in-memory per instance (30 pushes/min per push id with burst 10
 | `APNS_KEY` | The APNs `.p8` key as PEM text (literal newlines or `\n` escapes both work). Required for `/api/push`. |
 | `APNS_KEY_ID` | The key's id from the Apple Developer portal. |
 | `APNS_TEAM_ID` | Your Apple team id. |
-| `APNS_TOPIC` | Default APNs topic (bundle id); `com.zode.app` when unset. |
+| `APNS_TOPIC` | Default APNs topic (bundle id); `sg.comex.zode` when unset. |
 
 ## Deploy
 
