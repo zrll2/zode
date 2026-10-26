@@ -43,7 +43,7 @@ function render() {
   renderFinished(model.done ?? [], model.earlier ?? [], s);
   renderPhones(model.phoneList ?? []);
 
-  $('usage').textContent = model.usageLabel ?? '';
+  renderMonitor(model.flow);
   renderSettings(s, model.voice);
   $('version').textContent = s.version ? `Zode ${s.version}` : 'Zode';
 
@@ -159,6 +159,24 @@ function needCard(n) {
   }
   card.append(acts);
   return card;
+}
+
+// The token monitor: the last hour as an area chart (each minute a point, scaled to the hour's peak), the rate
+// now, and the average tokens and time of a work order. Nothing to show hides the whole block.
+function renderMonitor(f) {
+  const mon = $('mon');
+  mon.hidden = !f;
+  if (!f) return;
+  const n = f.series.length, top = Math.max(f.peak, 1) * 1.1;
+  const pts = f.series.map((v, i) => `${(i * 340 / Math.max(n - 1, 1)).toFixed(1)},${(94 - (v / top) * 84).toFixed(1)}`);
+  $('plotLine').setAttribute('points', pts.join(' '));
+  $('plotArea').setAttribute('points', `0,96 ${pts.join(' ')} 340,96`);
+  $('rateNum').textContent = f.rateLabel;
+  $('rate').classList.toggle('idle', f.rate === 0);
+  $('peak').textContent = f.peak ? `peak ${f.peakLabel}` : '';
+  $('stats').hidden = !(f.avgTokensLabel && f.avgTimeLabel);
+  $('avgTok').lastElementChild.textContent = f.avgTokensLabel;
+  $('avgTime').lastElementChild.textContent = f.avgTimeLabel;
 }
 
 // Running rows: pulsing dot, project, summary; on the right when it last did something and, under it,
@@ -351,7 +369,7 @@ function reportHeight() {
   try {
     const h = sheetOn
       ? document.querySelector('#sheet .hdr').offsetHeight + $('scroll').scrollHeight + 2    // the settings sheet sizes the window while it is open
-      : $('bar').offsetHeight + $('mid').scrollHeight + $('foot').offsetHeight + 2;          // + the panel's top and bottom border
+      : $('bar').offsetHeight + $('mid').scrollHeight + ($('mon').hidden ? 0 : $('mon').offsetHeight) + 2;          // + the panel's top and bottom border
     window.zode.panelResize(Math.min(MAX_HEIGHT, Math.max(1, Math.ceil(h))));
   } catch { /* the app keeps the last size */ }
 }

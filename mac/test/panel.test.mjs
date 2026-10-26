@@ -422,3 +422,13 @@ test('finished rows: "N min ago" and how long the conversation took', () => {
   assert.deepEqual([r.d.t, r.d.took], ['1 min ago', '14 min']);
   assert.equal(r.x.took, '');
 });
+
+test('flow: sanitised and labelled for the monitor; junk or missing is null', () => {
+  const m = buildPanelModel(input({ flow: { series: [0, 1500, 62_000, -5, 'x'], rate: 62_000, peak: 1, avgTokens: 285_491, avgMs: 14.4 * 60_000 } }), NOW);
+  assert.deepEqual(m.flow.series, [0, 1500, 62_000, 0, 0]);
+  assert.equal(m.flow.rateLabel, '62k');
+  assert.equal(m.flow.peakLabel, '62k');                       // the peak is never below the series
+  assert.deepEqual([m.flow.avgTokensLabel, m.flow.avgTimeLabel], ['285k', '14 min']);
+  assert.equal(buildPanelModel(input({ flow: 'junk' }), NOW).flow, null);
+  assert.equal(buildPanelModel(input(), NOW).flow, null);
+});

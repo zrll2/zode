@@ -18,6 +18,7 @@ import { panelBounds, trayImageName, isTemplate, trayTitle } from './lib/panelWi
 import { setupSteps, parseBuildProgress, friendlySetupError, kitDir } from './lib/setup.mjs';
 import { isRunning, quitApp, tapAlive, findOriginal, findEngine, findOldIntegrated, runBuild } from './lib/system.mjs';
 import { readVersion, compareVersions, checkRelease, engineRebuildScript } from './lib/updates.mjs';
+import { readFlow } from './lib/tokenflow.mjs';
 import { listSessions, listPending, readTapServers, summarize, withLiveStatus, readUsage, respondPermission, pendingToAutoAllow, AUTO_ALLOW_RESULT, stopSession, sendToSession, nudgeSession, RETRY_MESSAGE } from './lib/sessions.mjs';
 import { lineStates, notificationsFor } from './lib/notify.mjs';
 import { createEventFeed } from './lib/events.mjs';
@@ -109,6 +110,7 @@ async function start() {
     let updating = false;                              // one engine job (update or rebuild) at a time
     // What ZCode is doing right now, read from the tap sockets; the menu only ever sees the cached value.
     let work = { lines: [], more: 0, counts: { working: 0, waiting: 0, failed: 0 }, pending: {}, usage: null };
+    let flowCache = { at: 0, flow: null };             // the token monitor's numbers, recomputed at most once a minute
     let usageCache = { at: 0, usage: null };           // the last answer from the agent, good for a minute
     let notifyStates = null;                           // the previous snapshot the notification diff works from
     const notifyRunSince = new Map();                  // sessionId -> when the current run started
@@ -360,6 +362,14 @@ async function start() {
       };
     }
 
+    async function readFlowCached() {
+      if (Date.now() - flowCache.at < USAGE_TTL_MS) return flowCache.flow;
+      let flow = null;
+      try { flow = await readFlow(); } catch { flow = null; }
+      flowCache = { at: Date.now(), flow };
+      return flow;
+    }
+
     // Token usage for the footer: asked at most once a minute, and only from a refresh tick (the
     // background poll, an open panel or a menu action). A dead or silent tap keeps the last value.
     async function readUsageCached() {
@@ -409,7 +419,8 @@ async function start() {
             }
           }
           const usage = await readUsageCached();
-          work = await withMeasures({ ...summary, pending, usage });
+          const flow = await readFlowCached();
+          work = await withMeasures({ ...summary, pending, usage, flow });
           notifyTick();
           const active = work.counts.working + work.counts.waiting + work.counts.failed;
           if (active !== workActive) {
@@ -905,6 +916,7 @@ async function start() {
           phones: devices.length,
           phoneList: devices.map(d => ({ id: d.id, name: d.name, connected: d.connected === true, lastSeen: Number(d.pairedAt) || 0 })),
           usage: work.usage ?? null,
+          flow: work.flow ?? null,
           addresses,
           addressId: chosen().id,
           launchAtLogin: settings.launchAtLogin,

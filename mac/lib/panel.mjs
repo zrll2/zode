@@ -41,6 +41,22 @@ export function tookText(line) {
 const str = v => (typeof v === 'string' ? v : '');
 const ageOf = (line, now) => (Number.isFinite(line.at) ? Math.max(0, now - line.at) : NaN);
 
+// The monitor's numbers, cleaned and labelled: the last hour per minute, the rate now, the peak and the
+// average tokens and time of a work order. null when there is nothing to draw.
+const tk = n => fmtTokens(n).replace('K', 'k');
+function flowOf(f) {
+  if (!f || typeof f !== 'object' || !Array.isArray(f.series)) return null;
+  const series = f.series.slice(-60).map(v => (Number.isFinite(v) && v > 0 ? Math.round(v) : 0));
+  const num = v => (Number.isFinite(v) && v > 0 ? Math.round(v) : 0);
+  const rate = num(f.rate), peak = Math.max(num(f.peak), ...series), avgTokens = num(f.avgTokens), avgMs = num(f.avgMs);
+  const mins = Math.round(avgMs / MIN);
+  return {
+    series, rate, peak, avgTokens, avgMs,
+    rateLabel: tk(rate), peakLabel: tk(peak), avgTokensLabel: avgTokens ? tk(avgTokens) : '',
+    avgTimeLabel: !avgMs ? '' : mins < 1 ? '<1 min' : mins < 60 ? `${mins} min` : `${Math.floor(mins / 60)} h${mins % 60 ? ` ${mins % 60} min` : ''}`,
+  };
+}
+
 // 1,500 -> 1.5K, 172,000,000 -> 172M, 5,810,000,000 -> 5.8B: at most one decimal, no trailing .0.
 function fmtTokens(n) {
   if (n < 1000) return String(n);
@@ -188,6 +204,7 @@ export function buildPanelModel(input, now = Date.now()) {
 
     const n = needs.length;
     const w = working.length;
+    const flow = flowOf(s.flow);
     const self = s.selfUpdate && typeof s.selfUpdate === 'object' ? s.selfUpdate : {};
     return {
       glyph: n ? 'needs' : w ? 'working' : 'idle',
@@ -201,6 +218,7 @@ export function buildPanelModel(input, now = Date.now()) {
       phoneList,
       usage: usageOk ? { today, week } : null,
       usageLabel: usageOk ? `${fmtTokens(today)} today` : null,
+      flow,
       connected,
       settings: {
         keepAwake: s.keepAwake === true,
@@ -228,7 +246,7 @@ export function buildPanelModel(input, now = Date.now()) {
       needs: [], working: [], done: [], earlier: [],
       foldFinished: false,
       phones: 0, phoneList: [],
-      usage: null, usageLabel: null,
+      usage: null, usageLabel: null, flow: null,
       connected: false,
       settings: {
         keepAwake: false, autoAllow: true, askRisky: false, notify: true, claudeCode: true, relayEnabled: false, launchAtLogin: false, foldFinished: false,
