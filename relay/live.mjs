@@ -85,7 +85,7 @@ export function createLiveStatus({ now = Date.now } = {}) {
       if (status !== 'running') return s;
       const r = sessions.get(id);
       const at = Math.max(r.since, r.lastEventAt) || 0;
-      return { ...s, status: 'running', updatedAt: Math.max(Number(s.updatedAt) || 0, at) };
+      return { ...s, status: 'running', updatedAt: Math.max(Number(s.updatedAt) || 0, at), liveSince: r.since || undefined };
     });
   }
 

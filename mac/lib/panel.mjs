@@ -4,7 +4,8 @@
 //
 // input is menuState() plus what the app adds on top: `version` (the app's own version), `voice`
 // (speech to text: the language, engine presence, model state and download progress), and on
-// every work line `at` (ms since the epoch, the session's last activity) so the panel can show ages
+// every work line `at` (ms since the epoch, the session's last activity), `title` (the conversation
+// summary) and `liveSince` (when the current run began) so the panel can show ages and durations
 // relative to `now`. work.pending stays keyed by sessionId, oldest request first, exactly as
 // refreshSessions() builds it.
 
@@ -34,8 +35,8 @@ function fmtTokens(n) {
 
 // One "needs you" card from one amber or red line. A waiting conversation with a permission request
 // shows that request (the oldest one: listPending hands them over oldest first); a waiting one with
-// only a question — or nothing we can answer — points at ZCode; a quiet turn may be stuck; a failed
-// one can be retried.
+// only a question — or nothing we can answer — is a question card. Stalled and failed carry their
+// right-hand value only: no sentences.
 function needOf(line, pending, now) {
   const base = {
     id: line.id,
@@ -43,12 +44,12 @@ function needOf(line, pending, now) {
     sessionId: line.sessionId != null ? line.sessionId : line.id,
     sock: str(line.sock),
   };
-  const waiting = relAge(ageOf(line, now));
-  if (line.light === 'red') return { ...base, kind: 'failed', ask: 'The last attempt failed.', waiting };
+  if (line.light === 'red') return { ...base, kind: 'failed', waiting: 'Failed' };
   if (line.light !== 'amber') return null;
   if (line.status === 'Waiting for you') {
     const permissions = (Array.isArray(pending) ? pending : []).filter(r => r && r.kind === 'permission');
     const oldest = permissions[0];
+    const waiting = relAge(ageOf(line, now));
     if (oldest) {
       const text = r => str(r.summary) || str(r.toolName) || 'Permission request';
       const ask = text(oldest);
@@ -65,40 +66,38 @@ function needOf(line, pending, now) {
           .some(o => o && (o.optionId === 'allow_project' || o.kind === 'allow_always')),
       };
     }
-    return { ...base, kind: 'question', ask: 'Waiting for an answer', waiting };
+    return { ...base, kind: 'question', waiting };
   }
   const m = /^Quiet for (\d+) min/.exec(str(line.status));
   const n = m ? m[1] : null;
-  return {
-    ...base, kind: 'stalled',
-    ask: n ? `Quiet for ${n} min` : 'Quiet',
-    waiting: n ? `${n} min` : waiting,
-  };
+  return { ...base, kind: 'stalled', waiting: n ? `Quiet ${n}m` : 'Quiet' };
 }
 
 // One banner at most, by precedence: setup first, then Zode's own downloaded update, then a newer
 // ZCode release online (one click updates and rebuilds, so the plain rebuild hides next to it), then
-// the engine rebuild when the original ZCode on disk is newer than the Engine copy. The setup checks
-// read the explicit fields a real menuState always carries, so junk input stays quiet instead of
-// nagging about setup.
+// the engine rebuild when the original ZCode on disk is newer than the Engine copy, then a quiet
+// "ZCode is not running" when nothing is connected. No detail lines: title, dot and button only.
 function bannerOf(s) {
   const engine = s.engine && typeof s.engine === 'object' ? s.engine : null;
   const engineMissing = !!engine && !str(engine.path);
   const setupUndone = s.tapAlive === false && s.setupDone === false;
   if (engineMissing || setupUndone) {
-    return { kind: 'setup', title: 'Finish setting up', button: 'Set up' };
+    return { kind: 'setup', title: 'Finish setting up', button: 'Set up', dot: 'amber' };
   }
   const self = s.selfUpdate;
   if (self && self.phase === 'ready') {
-    return { kind: 'update', title: str(self.version) ? `Zode ${self.version} is ready` : 'A Zode update is ready', button: 'Restart' };
+    return { kind: 'update', title: str(self.version) ? `Zode ${self.version} is ready` : 'A Zode update is ready', button: 'Restart', dot: 'amber' };
   }
   const release = s.release;
   if (release && release.available === true) {
-    return { kind: 'zcode', title: str(release.latest) ? `ZCode ${release.latest} is available` : 'A new ZCode is available', button: 'Update ZCode' };
+    return { kind: 'zcode', title: str(release.latest) ? `ZCode ${release.latest} is available` : 'A new ZCode is available', button: 'Update ZCode', dot: 'amber' };
   }
   const update = s.update;
   if (update && update.available === true) {
-    return { kind: 'zcode', title: str(update.originalVersion) ? `ZCode ${update.originalVersion} is installed` : 'A newer ZCode is installed', button: 'Rebuild the engine' };
+    return { kind: 'zcode', title: str(update.originalVersion) ? `ZCode ${update.originalVersion} is installed` : 'A newer ZCode is installed', button: 'Rebuild the engine', dot: 'amber' };
+  }
+  if (s.tapAlive === false) {
+    return { kind: 'down', title: 'ZCode is not running', button: 'Open ZCode', dot: 'red' };
   }
   return null;
 }
@@ -137,9 +136,15 @@ export function buildPanelModel(input, now = Date.now()) {
         const need = needOf(line, pending, t);
         if (need) needs.push(need);
       } else if (!line.done && line.light === 'green') {
-        working.push({ id: line.id, project: str(line.project) || 'Zode', doing: str(line.title).replace(/^[#>*\s-]+/, '').trim(), t: relAge(ageOf(line, t)) });
+        working.push({
+          id: line.id,
+          project: str(line.project) || 'Zode',
+          doing: str(line.title),
+          since: Number.isFinite(line.liveSince) && line.liveSince > 0 ? line.liveSince : 0,
+          at: Number.isFinite(line.at) ? line.at : 0,
+        });
       } else if (line.done) {
-        const row = { id: line.id, project: str(line.project) || 'Zode', t: str(line.status) || relAge(ageOf(line, t)) };
+        const row = { id: line.id, project: str(line.project) || 'Zode', doing: str(line.title), t: str(line.status) || relAge(ageOf(line, t)) };
         (line.older ? earlier : done).push(row);
       }
     }
@@ -155,7 +160,7 @@ export function buildPanelModel(input, now = Date.now()) {
       .slice(0, 12)
       .map(p => ({ ...p, when: p.connected ? 'Connected' : p.lastSeen != null ? `Last seen ${relAge(Math.max(0, t - p.lastSeen))}` : 'Never connected' }));
 
-    // The agent's token usage, already asked for by the app: shown as one muted line, or not at all.
+    // The agent's token usage, already asked for by the app: one muted number, or not at all.
     const usageRaw = s.usage && typeof s.usage === 'object' ? s.usage : null;
     const numTokens = v => { const n = Number(v); return Number.isFinite(n) && n >= 0 ? Math.round(n) : null; };
     const today = numTokens(usageRaw?.today);
@@ -167,20 +172,16 @@ export function buildPanelModel(input, now = Date.now()) {
     const self = s.selfUpdate && typeof s.selfUpdate === 'object' ? s.selfUpdate : {};
     return {
       glyph: n ? 'needs' : w ? 'working' : 'idle',
-      summary: {
-        title: n ? `${n} need${n > 1 ? '' : 's'} you${w ? ` · ${w} working` : ''}` : w ? `${w} working` : 'All quiet',
-        tone: n ? 'warn' : 'plain',
-        sub: !connected ? 'ZCode is not connected yet' : s.keepAwake === true ? 'Mac awake · ZCode connected' : 'ZCode connected',
-      },
       banner: bannerOf(s),
       needs,
       working,
       done,
       earlier,
+      foldFinished: s.foldFinished === true,
       phones: Number.isFinite(s.phones) && s.phones >= 0 ? Math.floor(s.phones) : 0,
       phoneList,
       usage: usageOk ? { today, week } : null,
-      usageLabel: usageOk ? `Today ${fmtTokens(today)} · 7 days ${fmtTokens(week)} tokens` : null,
+      usageLabel: usageOk ? `${fmtTokens(today)} today` : null,
       connected,
       settings: {
         keepAwake: s.keepAwake === true,
@@ -203,13 +204,11 @@ export function buildPanelModel(input, now = Date.now()) {
     // The quiet empty panel: what a fresh, disconnected, do-nothing Zode looks like.
     return {
       glyph: 'idle',
-      summary: { title: 'All quiet', tone: 'plain', sub: 'ZCode is not connected yet' },
       banner: null,
       needs: [], working: [], done: [], earlier: [],
-      phones: 0,
-      phoneList: [],
-      usage: null,
-      usageLabel: null,
+      foldFinished: false,
+      phones: 0, phoneList: [],
+      usage: null, usageLabel: null,
       connected: false,
       settings: {
         keepAwake: false, autoAllow: true, askRisky: false, notify: true, relayEnabled: false, launchAtLogin: false, foldFinished: false,

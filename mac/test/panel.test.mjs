@@ -1,12 +1,13 @@
-// buildPanelModel for every documented state.
+// buildPanelModel for every documented state, plus the panel's pure display helpers.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildPanelModel } from '../lib/panel.mjs';
+import { runFor, finishedDefaultOpen, addressSegOptions } from '../panel/helpers.mjs';
 
 const NOW = 1_800_000_000_000;
 const min = 60 * 1000;
 
-const line = over => ({ id: over?.id ?? 's1', sessionId: over?.id ?? 's1', sock: '/sock', project: 'web', status: 'Working', done: false, older: false, light: 'green', at: NOW - 3 * min, ...over });   // like real lines: id is the session id
+const line = over => ({ id: over?.id ?? 's1', sessionId: over?.id ?? 's1', sock: '/sock', project: 'web', status: 'Working', done: false, older: false, light: 'green', at: NOW - 3 * min, liveSince: 0, title: '', ...over });   // like real lines: id is the session id
 const perm = over => ({ requestId: 'r1', kind: 'permission', toolName: 'Bash', summary: 'Run: npm test', detail: 'Run: npm test', risky: false, sock: '/sock', ...over });
 const input = over => ({
   running: true, phones: 2,
@@ -21,10 +22,9 @@ const input = over => ({
   ...over,
 });
 
-test('quiet: idle glyph, All quiet, no banner, empty lists, settings pass through', () => {
+test('quiet: idle glyph, no banner, empty lists, settings pass through, no headline', () => {
   const m = buildPanelModel(input(), NOW);
   assert.equal(m.glyph, 'idle');
-  assert.deepEqual(m.summary, { title: 'All quiet', tone: 'plain', sub: 'Mac awake · ZCode connected' });
   assert.equal(m.banner, null);
   assert.deepEqual(m.needs, []);
   assert.deepEqual(m.working, []);
@@ -32,6 +32,8 @@ test('quiet: idle glyph, All quiet, no banner, empty lists, settings pass throug
   assert.deepEqual(m.earlier, []);
   assert.equal(m.phones, 2);
   assert.equal(m.connected, true);
+  assert.equal('summary' in m, false);                                // the headline is gone from the model
+  assert.equal(m.usageLabel, null);                                   // usage unknown: hidden
   assert.deepEqual(m.settings, {
     keepAwake: true, autoAllow: true, askRisky: false, notify: true, relayEnabled: true, launchAtLogin: false, foldFinished: false,
     addressId: 'lan',
@@ -56,17 +58,11 @@ test('the automatic address choice is a mode without an ip and passes through fi
   assert.deepEqual(m.settings.addresses.slice(1).map(a => a.id), ['tailscale', 'lan', 'local']);
 });
 
-test('the summary sub follows the ZCode connection and the keep-awake setting', () => {
-  assert.equal(buildPanelModel(input({ tapAlive: false }), NOW).summary.sub, 'ZCode is not connected yet');
-  assert.equal(buildPanelModel(input({ keepAwake: false }), NOW).summary.sub, 'ZCode connected');
-  assert.equal(buildPanelModel(input({ tapAlive: false, keepAwake: false }), NOW).summary.sub, 'ZCode is not connected yet');
-});
-
-test('busy: every need kind, red before amber, working rows, finished split by age', () => {
+test('busy: every need kind, red before amber, working rows with run start, finished split by age', () => {
   const m = buildPanelModel(input({
     work: {
       lines: [
-        line({ id: 'w1', status: 'Working', at: NOW - 3 * min }),
+        line({ id: 'w1', status: 'Working', at: NOW - 3 * min, liveSince: NOW - 12 * 60_000, title: 'Rewrite the pagination' }),
         line({ id: 'a1', light: 'amber', status: 'Waiting for you', at: NOW - 5 * min }),
         line({ id: 'f1', light: 'red', status: 'Failed', at: NOW - 2 * min }),
         line({ id: 'q1', light: 'amber', status: 'Waiting for you', at: NOW - 1 * min }),
@@ -88,32 +84,30 @@ test('busy: every need kind, red before amber, working rows, finished split by a
   }), NOW);
   assert.deepEqual(m.needs.map(x => x.kind), ['failed', 'ask', 'question', 'stalled']);
   assert.equal(m.needs[0].id, 'f1');
-  assert.equal(m.needs[0].ask, 'The last attempt failed.');
-  assert.equal(m.needs[0].waiting, '2 min');
+  assert.equal(m.needs[0].waiting, 'Failed');                          // no sentence: the right-hand value says it
+  assert.equal('ask' in m.needs[0], false);
   const ask = m.needs[1];
   assert.equal(ask.id, 'a1');
   assert.equal(ask.requestId, 'r-oldest');            // the oldest permission request, not the newer one
   assert.equal(ask.ask, 'Run: sudo rm -rf /tmp/x');
-  assert.equal(ask.ask !== 'Run: npm install', true);
   assert.equal(ask.risky, true);
   assert.equal(ask.waiting, '5 min');
   assert.equal(ask.sessionId, 'a1');
   assert.equal(ask.sock, '/sock');
   assert.deepEqual([ask.more, ask.same], [1, 0]);     // one other permission, none with the same command (the question does not count)
   assert.equal(m.needs[2].kind, 'question');          // the question behind the permissions wins nothing
-  assert.equal(m.needs[2].ask, 'Waiting for an answer');
+  assert.equal(m.needs[2].waiting, '1 min');
   assert.equal('requestId' in m.needs[2], false);
   assert.equal('more' in m.needs[2], false);
-  assert.equal(m.needs[3].ask, 'Quiet for 12 min');
-  assert.equal(m.needs[3].waiting, '12 min');
-  assert.deepEqual(m.working, [{ id: 'w1', project: 'web', doing: '', t: '3 min' }]);     // no summary yet: no subtitle
+  assert.equal(m.needs[3].kind, 'stalled');
+  assert.equal(m.needs[3].waiting, 'Quiet 12m');      // the right-hand value, no sentence
+  assert.equal('ask' in m.needs[3], false);
+  assert.deepEqual(m.working, [{ id: 'w1', project: 'web', doing: 'Rewrite the pagination', since: NOW - 12 * 60_000, at: NOW - 3 * min }]);
   assert.deepEqual(m.done, [
-    { id: 'd1', project: 'web', t: '3 min ago' },
-    { id: 'd2', project: 'web', t: '48 min ago' },
+    { id: 'd1', project: 'web', doing: '', t: '3 min ago' },
+    { id: 'd2', project: 'web', doing: '', t: '48 min ago' },
   ]);
-  assert.deepEqual(m.earlier, [{ id: 'e1', project: 'web', t: '2 h ago' }]);
-  assert.equal(m.summary.title, '4 need you · 1 working');
-  assert.equal(m.summary.tone, 'warn');
+  assert.deepEqual(m.earlier, [{ id: 'e1', project: 'web', doing: '', t: '2 h ago' }]);
   assert.equal(m.glyph, 'needs');
 });
 
@@ -122,7 +116,7 @@ test('a waiting session with only a question — or nothing pending — still as
     work: { lines: [line({ id: 'a', light: 'amber', status: 'Waiting for you', at: NOW - min })], pending: { a: [perm({ kind: 'question', summary: '' })] } },
   }), NOW);
   assert.equal(withQuestion.needs[0].kind, 'question');
-  assert.equal(withQuestion.needs[0].ask, 'Waiting for an answer');
+  assert.equal(withQuestion.needs[0].waiting, '1 min');
   const withNothing = buildPanelModel(input({
     work: { lines: [line({ id: 'b', light: 'amber', status: 'Waiting for you', at: NOW - min })] },
   }), NOW);
@@ -148,6 +142,46 @@ test('repeated requests: more counts the others, same counts identical commands,
       pending: { a: [perm({ requestId: '1', toolName: 'Bash' }), perm({ requestId: '2', toolName: 'Bash' })] } },
   }), NOW);
   assert.deepEqual([identified.needs[0].more, identified.needs[0].same], [1, 1]);
+});
+
+test('piled-up requests: pile, sameCount and canAlways ride on the ask need', () => {
+  const opts = [
+    { optionId: 'allow_once', kind: 'allow_once', name: 'Allow once', response: { decision: 'allow' } },
+    { optionId: 'allow_project', kind: 'allow_always', name: 'Always allow in this project', response: { decision: 'allow' } },
+  ];
+  const m = buildPanelModel(input({
+    work: { lines: [line({ id: 'a', light: 'amber', status: 'Waiting for you' })], pending: { a: [
+      perm({ requestId: 'r1', summary: 'Run: npm test', options: opts }),
+      perm({ requestId: 'r2', summary: 'Run: npm test' }),
+      perm({ requestId: 'r3', summary: 'Run: npm test', risky: true }),
+      perm({ requestId: 'r4', summary: 'Run: other' }),
+      perm({ requestId: 'q', kind: 'question', summary: '' }),               // questions are not part of the pile
+    ] } },
+  }), NOW);
+  const ask = m.needs[0];
+  assert.equal(ask.kind, 'ask');
+  assert.equal(ask.pile.length, 4);                                          // the shown one included, the question not
+  assert.deepEqual(ask.pile[0], { requestId: 'r1', sock: '/sock', risky: false });
+  assert.deepEqual(ask.pile[2], { requestId: 'r3', sock: '/sock', risky: true });
+  assert.equal(ask.sameCount, 3);                                            // the shown one plus its two identical twins
+  assert.equal(ask.canAlways, true);
+  assert.deepEqual([ask.more, ask.same], [3, 2]);                            // the counts behind the +N more line
+
+  // a single request: the pile is just itself, nothing to group, nothing to always-allow
+  const solo = buildPanelModel(input({
+    work: { lines: [line({ id: 'b', light: 'amber', status: 'Waiting for you' })], pending: { b: [perm({ requestId: 'r9', summary: 'Run: solo' })] } },
+  }), NOW);
+  assert.deepEqual(solo.needs[0].pile, [{ requestId: 'r9', sock: '/sock', risky: false }]);
+  assert.equal(solo.needs[0].sameCount, 1);
+  assert.equal(solo.needs[0].canAlways, false);
+
+  // hundreds of repeats: the pile caps at 500
+  const many = buildPanelModel(input({
+    work: { lines: [line({ id: 'h', light: 'amber', status: 'Waiting for you' })], pending: { h: Array.from({ length: 600 }, (_, i) => perm({ requestId: 'm' + i, summary: 'Run: loop' })) } },
+  }), NOW);
+  assert.equal(many.needs[0].pile.length, 500);
+  assert.equal(many.needs[0].sameCount, 500);
+  assert.equal(many.needs[0].more, 599);
 });
 
 test('phoneList: sanitised, newest activity first, capped at 12, junk ignored, a label for every state', () => {
@@ -176,15 +210,15 @@ test('phoneList: sanitised, newest activity first, capped at 12, junk ignored, a
   assert.deepEqual(buildPanelModel(input({}), NOW).phoneList, []);
 });
 
-test('usage: sanitised into {today, week} with a formatted label, or null when missing or junk', () => {
+test('usage: sanitised into {today, week} with a today-only label, or null when missing or junk', () => {
   const ok = buildPanelModel(input({ usage: { today: 172000000, week: 5810000000 } }), NOW);
   assert.deepEqual(ok.usage, { today: 172000000, week: 5810000000 });
-  assert.equal(ok.usageLabel, 'Today 172M · 7 days 5.8B tokens');
+  assert.equal(ok.usageLabel, '172M today');                             // the 7-day part is gone
   const small = buildPanelModel(input({ usage: { today: 1500, week: 999 } }), NOW);
-  assert.equal(small.usageLabel, 'Today 1.5K · 7 days 999 tokens');
+  assert.equal(small.usageLabel, '1.5K today');
   const round = buildPanelModel(input({ usage: { today: 1234.6, week: 2000000 } }), NOW);
   assert.deepEqual(round.usage, { today: 1235, week: 2000000 });
-  assert.equal(round.usageLabel, 'Today 1.2K · 7 days 2M tokens');
+  assert.equal(round.usageLabel, '1.2K today');
   assert.equal(buildPanelModel(input({ usage: null }), NOW).usage, null);
   assert.equal(buildPanelModel(input({ usage: null }), NOW).usageLabel, null);
   assert.equal(buildPanelModel(input({ usage: { today: 'x', week: -5 } }), NOW).usage, null);
@@ -192,91 +226,7 @@ test('usage: sanitised into {today, week} with a formatted label, or null when m
   assert.equal(buildPanelModel(input({}), NOW).usageLabel, null);
 });
 
-test('piled-up requests: pile, sameCount and canAlways ride on the ask need', () => {
-  const opts = [
-    { optionId: 'allow_once', kind: 'allow_once', name: 'Allow once', response: { decision: 'allow' } },
-    { optionId: 'allow_project', kind: 'allow_always', name: 'Always allow in this project', response: { decision: 'allow' } },
-  ];
-  const m = buildPanelModel(input({
-    work: { lines: [line({ id: 'a', light: 'amber', status: 'Waiting for you' })], pending: { a: [
-      perm({ requestId: 'r1', summary: 'Run: npm test', options: opts }),
-      perm({ requestId: 'r2', summary: 'Run: npm test' }),
-      perm({ requestId: 'r3', summary: 'Run: npm test', risky: true }),
-      perm({ requestId: 'r4', summary: 'Run: other' }),
-      perm({ requestId: 'q', kind: 'question', summary: '' }),               // questions are not part of the pile
-    ] } },
-  }), NOW);
-  const ask = m.needs[0];
-  assert.equal(ask.kind, 'ask');
-  assert.equal(ask.pile.length, 4);                                          // the shown one included, the question not
-  assert.deepEqual(ask.pile[0], { requestId: 'r1', sock: '/sock', risky: false });
-  assert.deepEqual(ask.pile[2], { requestId: 'r3', sock: '/sock', risky: true });
-  assert.equal(ask.sameCount, 3);                                            // the shown one plus its two identical twins
-  assert.equal(ask.canAlways, true);
-  assert.deepEqual([ask.more, ask.same], [3, 2]);                            // the S2 counts are untouched
-
-  // a single request: the pile is just itself, nothing to group, nothing to always-allow
-  const solo = buildPanelModel(input({
-    work: { lines: [line({ id: 'b', light: 'amber', status: 'Waiting for you' })], pending: { b: [perm({ requestId: 'r9', summary: 'Run: solo' })] } },
-  }), NOW);
-  assert.deepEqual(solo.needs[0].pile, [{ requestId: 'r9', sock: '/sock', risky: false }]);
-  assert.equal(solo.needs[0].sameCount, 1);
-  assert.equal(solo.needs[0].canAlways, false);
-
-  // hundreds of repeats: the pile caps at 500
-  const many = buildPanelModel(input({
-    work: { lines: [line({ id: 'h', light: 'amber', status: 'Waiting for you' })], pending: { h: Array.from({ length: 600 }, (_, i) => perm({ requestId: 'm' + i, summary: 'Run: loop' })) } },
-  }), NOW);
-  assert.equal(many.needs[0].pile.length, 500);
-  assert.equal(many.needs[0].sameCount, 500);
-  assert.equal(many.needs[0].more, 599);
-});
-
-test('the auto-allow switch rides in the settings model; a missing or invalid value means on', () => {
-  assert.equal(buildPanelModel(input({ autoAllow: true }), NOW).settings.autoAllow, true);
-  assert.equal(buildPanelModel(input({ autoAllow: false }), NOW).settings.autoAllow, false);
-  assert.equal(buildPanelModel(input({}), NOW).settings.autoAllow, true);         // the default is on: junk never flips it
-  assert.equal(buildPanelModel(input({ autoAllow: 'yes' }), NOW).settings.autoAllow, true);
-});
-
-test('the risky gate rides in the settings model; missing or invalid means off', () => {
-  assert.equal(buildPanelModel(input({ askRisky: true }), NOW).settings.askRisky, true);
-  assert.equal(buildPanelModel(input({ askRisky: false }), NOW).settings.askRisky, false);
-  assert.equal(buildPanelModel(input({}), NOW).settings.askRisky, false);
-  assert.equal(buildPanelModel(input({ askRisky: 'yes' }), NOW).settings.askRisky, false);
-});
-
-test('the notify switch rides in the settings model; a missing or invalid value means on', () => {
-  assert.equal(buildPanelModel(input({ notify: true }), NOW).settings.notify, true);
-  assert.equal(buildPanelModel(input({ notify: false }), NOW).settings.notify, false);
-  assert.equal(buildPanelModel(input({}), NOW).settings.notify, true);            // the default is on: junk never flips it
-  assert.equal(buildPanelModel(input({ notify: 'yes' }), NOW).settings.notify, true);
-});
-
-test('summary titles for every combination, plural and singular', () => {
-  const one = buildPanelModel(input({ work: { lines: [line({ id: 'a', light: 'amber', status: 'Waiting for you' })] } }), NOW);
-  assert.equal(one.summary.title, '1 needs you');
-  const two = buildPanelModel(input({
-    work: { lines: [line({ id: 'a', light: 'amber', status: 'Waiting for you' }), line({ id: 'b', light: 'amber', status: 'Waiting for you' })] },
-  }), NOW);
-  assert.equal(two.summary.title, '2 need you');
-  const mixed = buildPanelModel(input({
-    work: { lines: [line({ id: 'a', light: 'amber', status: 'Waiting for you' }), line({ id: 'w1' }), line({ id: 'w2', at: NOW - 11 * min })] },
-  }), NOW);
-  assert.equal(mixed.summary.title, '1 needs you · 2 working');
-  assert.equal(buildPanelModel(input(), NOW).summary.title, 'All quiet');
-});
-
-test('glyph: needs, then working, then idle', () => {
-  assert.equal(buildPanelModel(input({
-    work: { lines: [line({ id: 'a', light: 'amber', status: 'Waiting for you' }), line({ id: 'w' })] },
-  }), NOW).glyph, 'needs');
-  assert.equal(buildPanelModel(input({ work: { lines: [line({ id: 'w' })] } }), NOW).glyph, 'working');
-  assert.equal(buildPanelModel(input({ work: { lines: [line({ id: 'd', status: '3 min ago', done: true })] } }), NOW).glyph, 'idle');
-  assert.equal(buildPanelModel(input(), NOW).glyph, 'idle');
-});
-
-test('banner: none when there is nothing to say', () => {
+test('banner: none when everything is fine', () => {
   assert.equal(buildPanelModel(input(), NOW).banner, null);
 });
 
@@ -285,6 +235,7 @@ test('banner: the engine rebuild, when the original ZCode is newer on disk', () 
   assert.equal(m.banner.kind, 'zcode');
   assert.equal(m.banner.title, 'ZCode 3.16.2 is installed');
   assert.equal(m.banner.button, 'Rebuild the engine');
+  assert.equal(m.banner.dot, 'amber');
   assert.equal('detail' in m.banner, false);                        // titles and buttons carry it; no descriptions
 });
 
@@ -325,23 +276,68 @@ test('banner: setup beats everything — a missing engine, or ZCode not connecte
   assert.equal(noEngine.banner.button, 'Set up');
   const fresh = buildPanelModel(input({ tapAlive: false, setupDone: false, selfUpdate: { phase: 'ready', version: '1.0.2' } }), NOW);
   assert.equal(fresh.banner.kind, 'setup');
-  // connected but never set up, or set up but the engine is gone: only the real gap shows the banner
+  // connected but never set up: no setup banner (ZCode itself is fine)
   assert.equal(buildPanelModel(input({ setupDone: false }), NOW).banner, null);
-  assert.equal(buildPanelModel(input({ tapAlive: false }), NOW).banner, null);
 });
 
-test('settings.selfUpdate normalizes the updater phase', () => {
-  assert.equal(buildPanelModel(input({ selfUpdate: { phase: 'downloading', percent: 40 } }), NOW).settings.selfUpdate, 'downloading');
-  for (const phase of ['idle', 'checking', 'error']) {
-    assert.equal(buildPanelModel(input({ selfUpdate: { phase } }), NOW).settings.selfUpdate, 'idle');
-  }
+test('banner: ZCode not running shows the down row once setup is out of the way', () => {
+  const m = buildPanelModel(input({ tapAlive: false }), NOW);
+  assert.deepEqual(m.banner, { kind: 'down', title: 'ZCode is not running', button: 'Open ZCode', dot: 'red' });
+  assert.equal(buildPanelModel(input({ tapAlive: true }), NOW).banner, null);
+});
+
+test('runFor: seconds, minutes, hours and a blank when the start is unknown', () => {
+  assert.equal(runFor(NOW - 45_000, NOW), '45s');
+  assert.equal(runFor(NOW - 60_000, NOW), '1m');
+  assert.equal(runFor(NOW - 12 * 60_000, NOW), '12m');
+  assert.equal(runFor(NOW - 65 * 60_000, NOW), '1h 5m');
+  assert.equal(runFor(0, NOW), '');
+  assert.equal(runFor(undefined, NOW), '');
+  assert.equal(runFor(NOW + 5000, NOW), '0s');                        // a future start never goes negative
+});
+
+test('finishedDefaultOpen: expanded when it is the whole show, collapsed beside other work or on fold', () => {
+  const done = [{ id: 'd1' }];
+  assert.equal(finishedDefaultOpen({ done }), true);
+  assert.equal(finishedDefaultOpen({ done, working: [{ id: 'w' }] }), false);
+  assert.equal(finishedDefaultOpen({ done, needs: [{ id: 'n' }] }), false);
+  assert.equal(finishedDefaultOpen({ done, foldFinished: true }), false);
+  assert.equal(finishedDefaultOpen({}), false);                        // nothing finished: nothing to open
+});
+
+test('addressSegOptions: Automatic always; Wi-Fi and Tailscale only when the address exists', () => {
+  assert.deepEqual(addressSegOptions([
+    { id: 'auto', label: 'Automatic' },
+    { id: 'tailscale', label: 'Tailscale (100.64.0.9)' },
+    { id: 'lan', label: 'Wi-Fi / local network (192.168.1.5)' },
+    { id: 'local', label: 'This Mac only' },
+  ]), [
+    { id: 'auto', label: 'Automatic' },
+    { id: 'lan', label: 'Wi-Fi' },
+    { id: 'tailscale', label: 'Tailscale' },
+  ]);
+  assert.deepEqual(addressSegOptions([{ id: 'auto', label: 'Automatic' }, { id: 'local', label: 'This Mac only' }]),
+    [{ id: 'auto', label: 'Automatic' }]);
+  assert.deepEqual(addressSegOptions(undefined), [{ id: 'auto', label: 'Automatic' }]);
+  assert.deepEqual(addressSegOptions('junk'), [{ id: 'auto', label: 'Automatic' }]);
+});
+
+test('settings switches: the auto-allow default is on, the risky gate and notify ride along', () => {
+  assert.equal(buildPanelModel(input({ autoAllow: true }), NOW).settings.autoAllow, true);
+  assert.equal(buildPanelModel(input({ autoAllow: false }), NOW).settings.autoAllow, false);
+  assert.equal(buildPanelModel(input({}), NOW).settings.autoAllow, true);         // the default is on: junk never flips it
+  assert.equal(buildPanelModel(input({ autoAllow: 'yes' }), NOW).settings.autoAllow, true);
+  assert.equal(buildPanelModel(input({ askRisky: true }), NOW).settings.askRisky, true);
+  assert.equal(buildPanelModel(input({}), NOW).settings.askRisky, false);         // missing or invalid means off
+  assert.equal(buildPanelModel(input({ notify: false }), NOW).settings.notify, false);
+  assert.equal(buildPanelModel(input({ notify: 'yes' }), NOW).settings.notify, true);
 });
 
 test('ages without a usable clock stay empty instead of throwing', () => {
   const m = buildPanelModel(input({
     work: { lines: [line({ at: 'not a number' }), line({ at: Number.MAX_SAFE_INTEGER })] },
   }), NOW);
-  assert.deepEqual(m.working.map(x => x.t), ['', 'now']);   // a future stamp (clock skew) counts as now
+  assert.deepEqual(m.working.map(x => x.at), [0, Number.MAX_SAFE_INTEGER]);   // a future stamp counts as now
   assert.deepEqual(m.needs, []);
   const junkNow = buildPanelModel(input({ work: { lines: [line()] } }), 'not a time');
   assert.equal(junkNow.glyph, 'working');

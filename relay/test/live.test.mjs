@@ -21,7 +21,7 @@ test('prompt_started marks the session running and bumps its time; prompt_comple
   const row = listed('s1');
   live.observe(started('s1'));
   const [run] = live.apply([row]);
-  assert.deepEqual(run, { ...row, status: 'running', updatedAt: T0 });         // updatedAt = the turn's start: the quiet rule reads real activity
+  assert.deepEqual(run, { ...row, status: 'running', updatedAt: T0, liveSince: T0 });   // updatedAt = the turn's start; liveSince feeds the panel's duration
   assert.notEqual(run, row);                                                   // a copy; the list's object is untouched
 
   c.move(4_000);

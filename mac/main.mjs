@@ -1050,6 +1050,7 @@ async function start() {
         if (p.kind === 'setup') showSetupWindow();
         else if (p.kind === 'update') actions.installSelfUpdate();
         else if (p.kind === 'engine') actions.rebuildEngine();
+        else if (p.kind === 'down') handlePanelAction('openZcode');    // ZCode is not running: open it
         else if (p.kind === 'zcode') {                 // which zcode banner is showing decides the action
           if (release?.available === true) actions.updateZcode();
           else if (update?.available === true) actions.rebuildEngine();

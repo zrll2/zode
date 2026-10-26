@@ -334,6 +334,7 @@ export function summarize(sessions, now = Date.now()) {
       sock: typeof session.sock === 'string' ? session.sock : '',
       group: described.light === 'red' ? 0 : described.light === 'amber' ? 1 : session.status === 'running' ? 2 : 3,
       at: Number(session.updatedAt) || 0,
+      liveSince: Number(session.liveSince) || 0,        // when the current run began (the relay's live tracker)
       project: projectName(session),
       status: described.text,
       done: described.done === true,
@@ -343,7 +344,7 @@ export function summarize(sessions, now = Date.now()) {
   }
   rows.sort((a, b) => a.group - b.group || b.at - a.at);
   return {
-    lines: rows.slice(0, MAX_LINES).map(({ id, sessionId, sock, project, status, done, older, light }) => ({ id, sessionId, sock, project, status, done, older, light })),
+    lines: rows.slice(0, MAX_LINES).map(({ id, sessionId, sock, project, status, done, older, light, liveSince }) => ({ id, sessionId, sock, project, status, done, older, light, liveSince })),
     more: Math.max(0, rows.length - MAX_LINES),
     finished: rows.filter(r => r.done).length,
     counts,

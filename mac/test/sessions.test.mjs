@@ -59,6 +59,17 @@ test('summarize: failed, waiting, working, done — each group newest first, eve
   assert.deepEqual([s.lines[5].project, s.lines[5].status], ['zode', 'Working']);
 });
 
+test('summarize: the live run start rides on the line for the panel duration', () => {
+  const s = summarize([
+    session({ sessionId: 'r1', liveSince: NOW - 12 * min }),
+    session({ sessionId: 'r2' }),                                    // no run start: 0, the panel falls back to the age
+  ], NOW);
+  const r1 = s.lines.find(l => l.sessionId === 'r1');
+  const r2 = s.lines.find(l => l.sessionId === 'r2');
+  assert.equal(r1.liveSince, NOW - 12 * min);
+  assert.equal(r2.liveSince, 0);
+});
+
 test('summarize: project from the workspace path, No workspace when empty, junk input shows nothing', () => {
   const s = summarize([
     session({ sessionId: 'p1', workspace: { workspacePath: '/a/b/', workspaceKey: '' } }),
