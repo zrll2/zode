@@ -33,8 +33,39 @@ export function findOriginal({ home = HOME, fs: fsMod = fs } = {}) {
   return firstExisting(['/Applications/ZCode.app', path.join(home, 'Applications', 'ZCode.app')], fsMod);
 }
 
-export function findEngine({ home = HOME, fs: fsMod = fs } = {}) {
-  return firstExisting(['/Applications/ZCode Engine.app', path.join(home, 'Applications', 'ZCode Engine.app')], fsMod);
+// The Engine lives where only Zode looks: ~/Library/Application Support/Zode/engine.noindex/ZCode.app (no
+// Launchpad icon, no Spotlight hit). The old places, /Applications and ~/Applications, are still found so
+// an engine from an older Zode keeps working until migrateEngine() moves it.
+export const enginePathFor = (home = HOME) => path.join(home, 'Library', 'Application Support', 'Zode', 'engine.noindex', 'ZCode.app');
+const legacyEngines = (home = HOME, apps = '/Applications') => [path.join(apps, 'ZCode Engine.app'), path.join(home, 'Applications', 'ZCode Engine.app')];
+
+export function findEngine({ home = HOME, apps = '/Applications', fs: fsMod = fs } = {}) {
+  return firstExisting([enginePathFor(home), ...legacyEngines(home, apps)], fsMod);
+}
+
+// Move an engine from an older Zode into the private folder, renamed "ZCode", and re-sign it (ad hoc, the
+// way build-tap.sh does) since the rename edits its Info.plist. Resolves the new path, or null when there
+// was nothing to move, it is running, or a step failed (the old engine then stays where it is and works).
+export function migrateEngine({ home = HOME, apps = '/Applications', fs: fsMod = fs, run = execFile } = {}) {
+  return new Promise(resolve => {
+    try {
+      const dest = enginePathFor(home);
+      if (exists(dest, fsMod)) return resolve(null);
+      const old = legacyEngines(home, apps).find(p => exists(p, fsMod));
+      if (!old) return resolve(null);
+      isRunning(old, run).then(running => {
+        if (running) return resolve(null);
+        try {
+          fsMod.mkdirSync(path.dirname(dest), { recursive: true });
+          fsMod.renameSync(old, dest);
+        } catch { return resolve(null); }
+        const plist = path.join(dest, 'Contents', 'Info.plist');
+        run('/usr/libexec/PlistBuddy', ['-c', 'Set :CFBundleDisplayName ZCode', plist], () => {
+          run('/usr/bin/codesign', ['--force', '--deep', '-s', '-', dest], { timeout: 60000 }, () => resolve(dest));
+        });
+      }).catch(() => resolve(null));
+    } catch { resolve(null); }
+  });
 }
 
 // The old integrated copy is recognizable by the boot.cjs the old installer left inside it.
@@ -108,14 +139,14 @@ export async function tapAlive({ home = HOME, fs: fsMod = fs } = {}) {
 
 // Run the Engine build (bash <kit>/scripts/build-tap.sh) and stream its output lines to onLine.
 // Resolves { ok: true } or { ok: false, error }; the error carries the last output lines.
-export function runBuild({ kit, dest, source, onLine, spawn: spawnFn = spawn } = {}) {
+export function runBuild({ kit, dest, source, script = 'build-tap.sh', args = [], extraEnv = {}, onLine, spawn: spawnFn = spawn } = {}) {
   return new Promise(resolve => {
     let child;
     try {
-      const env = { ...process.env, ZODE_ENGINE: '1' };
+      const env = { ...process.env, ZODE_ENGINE: '1', ...extraEnv };
       if (dest) env.ZODE_TAP_APP = String(dest);
       if (source) env.ZCODE_APP = String(source);
-      child = spawnFn('/bin/bash', [path.join(String(kit ?? ''), 'scripts', 'build-tap.sh')], { env });
+      child = spawnFn('/bin/bash', [path.join(String(kit ?? ''), 'scripts', script), ...args], { env });
     } catch (err) { return resolve({ ok: false, error: err?.message ?? String(err) }); }
     let buf = '';
     let all = '';

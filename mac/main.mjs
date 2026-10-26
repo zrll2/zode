@@ -16,7 +16,7 @@ import { buildMenuTemplate } from './lib/menu.mjs';
 import { buildPanelModel } from './lib/panel.mjs';
 import { panelBounds, trayImageName, isTemplate, trayTitle } from './lib/panelWindow.mjs';
 import { setupSteps, parseBuildProgress, friendlySetupError, kitDir } from './lib/setup.mjs';
-import { isRunning, quitApp, tapAlive, findOriginal, findEngine, findOldIntegrated, runBuild } from './lib/system.mjs';
+import { isRunning, quitApp, tapAlive, findOriginal, findEngine, findOldIntegrated, runBuild, migrateEngine, enginePathFor } from './lib/system.mjs';
 import { readVersion, compareVersions, checkRelease, engineRebuildScript } from './lib/updates.mjs';
 import { readFlow } from './lib/tokenflow.mjs';
 import { listSessions, listPending, readTapServers, summarize, withLiveStatus, readUsage, respondPermission, pendingToAutoAllow, AUTO_ALLOW_RESULT, stopSession, sendToSession, nudgeSession, RETRY_MESSAGE } from './lib/sessions.mjs';
@@ -285,8 +285,12 @@ async function start() {
       if (updateCheck) return updateCheck;
       updateCheck = (async () => {
         try {
+          if (enginePath && !standalone()) {                         // an engine from an older Zode: move it as soon as it is not running
+            const moved = await migrateEngine().catch(() => null);
+            if (moved) { enginePath = moved; appendLog(`zode: moved the engine to ${moved}`); refresh(); }
+          }
           const [origV, engineV] = await Promise.all([
-            readVersion(originalPath),
+            standalone() ? Promise.resolve(null) : readVersion(originalPath),     // standalone: the original is not ours to follow
             enginePath ? readVersion(enginePath) : Promise.resolve(null),
           ]);
           const next = { available: !!(origV && engineV && compareVersions(origV, engineV) > 0), originalVersion: origV, engineVersion: engineV };
@@ -306,7 +310,7 @@ async function start() {
     // hours, never twice at once; the tray click only ever reads the cached value.
     function checkReleaseOnce() {
       if (releaseCheck) return releaseCheck;
-      releaseCheck = checkRelease({ repo: kit, env: { ...process.env, ZCODE_APP: originalPath, ZODE_APP: enginePath } })
+      releaseCheck = checkRelease({ repo: kit, env: { ...process.env, ZCODE_APP: originalPath, ZODE_APP: enginePath, ...(standalone() ? { ZODE_STANDALONE: '1' } : {}) } })
         .then(next => {
           if (next) {
             const changed = ['available', 'latest', 'installed'].some(k => next[k] !== release[k]);
@@ -598,7 +602,9 @@ async function start() {
         const { response } = await dialog.showMessageBox({
           type: 'warning', buttons: ['Update', 'Cancel'], defaultId: 0, cancelId: 1,
           message: `Update ZCode to ${latest}?`,
-          detail: 'Zode downloads the same release ZCode would, updates ZCode and rebuilds the Engine. This takes a few minutes, and any running ZCode tasks will stop. Zode itself stays running. Continue?',
+          detail: standalone()
+            ? 'Zode downloads the new release, checks its signature and rebuilds ZCode. This takes a few minutes, and any running ZCode tasks will stop. Zode itself stays running. Continue?'
+            : 'Zode downloads the same release ZCode would, updates ZCode and rebuilds the Engine. This takes a few minutes, and any running ZCode tasks will stop. Zode itself stays running. Continue?',
         });
         if (response !== 0) return;
         const engineTarget = enginePath || await findEngine().catch(() => null);
@@ -610,7 +616,7 @@ async function start() {
         updating = true;
         fs.mkdirSync(path.dirname(UPDATE_LOG), { recursive: true });
         const logFd = fs.openSync(UPDATE_LOG, 'a');
-        const child = spawn('/bin/bash', [script, '--yes'], { detached: true, stdio: ['ignore', logFd, logFd], env: { ...process.env, ZCODE_APP: originalPath, ZODE_APP: engineTarget, ZODE_ENGINE: '1' } });
+        const child = spawn('/bin/bash', [script, '--yes'], { detached: true, stdio: ['ignore', logFd, logFd], env: { ...process.env, ZCODE_APP: originalPath, ZODE_APP: engineTarget, ZODE_ENGINE: '1', ...(standalone() ? { ZODE_STANDALONE: '1' } : {}) } });
         child.on('error', err => appendLog(`zode: update: ${err?.stack || err}`));
         child.unref();
         fs.closeSync(logFd);
@@ -621,7 +627,7 @@ async function start() {
           try {
             if (code === 0) {
               enginePath = await findEngine().catch(() => null);
-              const newVersion = await readVersion(originalPath);
+              const newVersion = await readVersion(standalone() ? enginePath : originalPath);
               say({ type: 'info', message: `ZCode is now ${newVersion || release.latest || 'up to date'}`, detail: 'The Engine was rebuilt from it and reopened.' });
               appendLog(`zode: update finished; ZCode is now ${newVersion ?? 'unknown'}`);
               checkUpdate();
@@ -1138,13 +1144,11 @@ async function start() {
       try { if (setupWindow && !setupWindow.isDestroyed()) setupWindow.webContents.send('zode:setupEvent', data); } catch { /* window gone */ }
     }
 
-    // Same placement rule as build-tap.sh: /Applications when writable, the home folder otherwise.
-    function engineDest() {
-      try {
-        fs.accessSync('/Applications', fs.constants.W_OK);
-        return '/Applications/ZCode Engine.app';
-      } catch { return path.join(HOME, 'Applications', 'ZCode Engine.app'); }
-    }
+    // The Engine lives in Zode's own folder (no Launchpad icon): one visible app. Same place as build-tap.sh.
+    const engineDest = () => enginePathFor(HOME);
+    // Zode owns ZCode once the Engine sits there: updates download the release themselves and never touch
+    // /Applications/ZCode.app. An engine from an older Zode (still in /Applications) keeps the old flow.
+    const standalone = () => !!enginePath && path.resolve(enginePath) === path.resolve(enginePathFor(HOME));
 
     async function setupSnapshot() {
       try {
@@ -1198,9 +1202,13 @@ async function start() {
           sendSetupEvent({ type: 'buildDone', ok: false, error: build.error });
           return { started: false, error: build.error };
         }
+        // No ZCode on this Mac? Zode fetches the newest release itself (checked against ZCode's signature) and
+        // builds the Engine from it; with ZCode installed it just copies that, which needs no download.
+        const fetchIt = !foundOriginal && fs.existsSync(path.join(kit, 'scripts', 'update-zcode.sh'));
         const result = await runBuild({
           kit,
           dest: engineDest(),
+          ...(fetchIt ? { script: 'update-zcode.sh', args: ['--yes'], extraEnv: { ZODE_STANDALONE: '1', ZODE_APP: engineDest(), ZODE_NO_OPEN: '1', ZODE_NO_NOTIFY: '1' } } : {}),
           onLine: line => {
             build.lines.push(line);
             if (build.lines.length > 500) build.lines.splice(0, build.lines.length - 500);
@@ -1324,6 +1332,7 @@ async function start() {
 
     // The old integrated copy holds the phone connection for itself (same settings, same paired
     // phones, same port). Ask before the relay starts, so the user never sees a port error first.
+    try { const moved = await migrateEngine(); if (moved) appendLog(`zode: moved the engine to ${moved}`); } catch (err) { appendLog(`zode: engine move: ${err?.stack || err}`); }
     enginePath = await findEngine();
     originalPath = await findOriginal();
     try {

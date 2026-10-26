@@ -2,12 +2,14 @@
 
 Status: planned. Today the phone relay, the menu bar icon and the pairing window live inside a patched copy of ZCode (`Zode.app`). This plan moves them into their own app, **Zode for Mac**, signed with a Developer ID certificate and notarized by Apple, distributed as a direct download (not the Mac App Store: the store's sandbox forbids patching another app and reading `~/.zcode-tap`, and Zode.app is a modified copy of someone else's product).
 
-## Two apps
-| | Zode (new) | ZCode Engine (built on your Mac) |
+## One app you open, one it keeps
+You only see Zode. The Engine is a private copy of ZCode that Zode builds and keeps in its own folder (no Launchpad icon, no Spotlight hit), and opens from the Z button. Zode downloads and checks new ZCode releases itself, so the original ZCode.app is not needed (and never touched).
+
+| | Zode | The Engine (built on your Mac) |
 |---|---|---|
 | What | menu bar app: relay, pairing, phones, setup, updates | your own ZCode, copied, with a small wrapper that exposes the agent on a local socket |
 | Bundle id | `dev.zode.mac` | `dev.zode.engine` |
-| Path | `/Applications/Zode.app` | `/Applications/ZCode Engine.app` |
+| Path | `/Applications/Zode.app` | `~/Library/Application Support/Zode/engine.noindex/ZCode.app` |
 | Made by | us (Electron, Developer ID, notarized) | `scripts/build-tap.sh` on the user's Mac, ad-hoc signed; we never ship ZCode's code |
 | Needs ZCode running | no: relay and pairing keep running when the ZCode window is closed | yes: it is the app you use ZCode in |
 

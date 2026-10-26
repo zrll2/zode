@@ -60,18 +60,9 @@ function renderSteps(s) {
 function renderBody(id, s) {
   const body = $('stepBody');
   body.textContent = '';
-  if (id === 'find') renderFind(body);
-  else if (id === 'prepare') renderPrepare(body, s);
+  if (id === 'prepare') renderPrepare(body, s);
   else if (id === 'login') renderLogin(body, s);
   else renderPhone(body, s);
-}
-
-function renderFind(body) {
-  body.append(el('p', null, 'Install ZCode first.'));
-  const row = el('div', 'row');
-  row.append(btn('Get ZCode', () => { window.zode.setupOpenDownload(); }, true));
-  row.append(btn('Check again', () => load()));
-  body.append(row);
 }
 
 function renderPrepare(body, s) {

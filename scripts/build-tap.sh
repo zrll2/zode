@@ -3,7 +3,7 @@
 # The original ZCode is not touched. Nothing from ZCode is stored in this repository.
 #   ZCODE_APP      source app   (default /Applications/ZCode.app)
 #   ZODE_TAP_APP   destination (default /Applications/Zode.app, or ~/Applications if /Applications is not writable)
-#   ZODE_ENGINE=1  Engine mode: build "ZCode Engine.app" (bundle id dev.zode.engine) with only the
+#   ZODE_ENGINE=1  Engine mode: build the Engine, a ZCode.app copy (bundle id dev.zode.engine) in ~/Library/Application Support/Zode/engine.noindex with only the
 #                  socket wrapper — no relay, no tray, no asar patch (the standalone Zode menu bar
 #                  app in mac/ runs the relay itself). Keeps the ZCode icon, never deletes a Zode.app.
 set -euo pipefail
@@ -11,7 +11,8 @@ ENGINE=0
 if [ "${ZODE_ENGINE:-}" = "1" ]; then ENGINE=1; fi
 SRC="${ZCODE_APP:-/Applications/ZCode.app}"
 if [ "$ENGINE" -eq 1 ]; then
-  if [ -w /Applications ]; then DEFAULT_DST="/Applications/ZCode Engine.app"; else DEFAULT_DST="$HOME/Applications/ZCode Engine.app"; fi
+  # Zode keeps the Engine out of Launchpad and Finder's Applications: one visible app, Zode. ".noindex" keeps Spotlight out too.
+  DEFAULT_DST="$HOME/Library/Application Support/Zode/engine.noindex/ZCode.app"
 else
   if [ -w /Applications ]; then DEFAULT_DST="/Applications/Zode.app"; else DEFAULT_DST="$HOME/Applications/Zode.app"; fi
 fi
@@ -36,7 +37,7 @@ xattr -cr "$DST"
 # Leave CFBundleName as it is: Electron uses it to find its helper processes, and the app crashes on launch without it.
 PLIST="$DST/Contents/Info.plist"
 if [ "$ENGINE" -eq 1 ]; then
-  /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName ZCode Engine" "$PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string ZCode Engine" "$PLIST"
+  /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName ZCode" "$PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string ZCode" "$PLIST"
   # Own bundle id, so the Dock does not merge the Engine with the original ZCode.
   /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier dev.zode.engine" "$PLIST"
   # Engine mode keeps the original ZCode icon files (icon.icns / icon.png): it still is ZCode.

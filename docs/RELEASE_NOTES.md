@@ -1,5 +1,10 @@
 # Zode for Mac
 
+## 1.5.0
+- **One app.** ZCode no longer shows up as a second and third app. Zode keeps its own private copy of ZCode in its own folder (no Launchpad icon, no Spotlight hit) and opens it from the Z button. Zode downloads new ZCode releases itself, checks their signature and rebuilds, so you do not need the original ZCode.app any more, and Zode never touches it. An engine from an older Zode moves to the new place the next time it is not running.
+- A token monitor at the bottom of the panel: tokens per minute over the last hour, with the average tokens and time of a work order.
+- Finished rows say "1 min ago" and how long each took.
+
 ## 1.4.5
 - **Running work stays running.** A long test or build that goes quiet for minutes no longer slips into "finished". A conversation counts as running until ZCode says its turn ended, and ZCode's own activity keeps it alive.
 - **Rounded icon** that matches other macOS apps.

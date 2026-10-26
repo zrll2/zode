@@ -13,6 +13,10 @@
 #                      (~/Applications when /Applications is not writable), else an old integrated
 #                      Zode.app (one with Contents/Resources/zode/boot.cjs), else the plain Zode.app
 #                      default — same path rule as scripts/build-tap.sh
+#   ZODE_STANDALONE=1  Zode owns ZCode: there is no original ZCode.app to update. The newest release is
+#                      downloaded, verified against ZCode's pinned Team ID and used to build the Engine
+#                      (ZODE_APP, default ~/Library/Application Support/Zode/engine.noindex/ZCode.app)
+#                      directly. "Installed" means the Engine's version. /Applications/ZCode.app is never touched.
 #   ZODE_NO_OPEN=1     do not reopen the copy at the end (for tests)
 #   ZODE_NO_NOTIFY=1   no macOS failure notification
 #
@@ -21,7 +25,12 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 ORIG_APP="${ZCODE_APP:-/Applications/ZCode.app}"
-if [ -n "${ZODE_APP:-}" ]; then ZODE_APP_PATH="$ZODE_APP"; else
+STANDALONE="${ZODE_STANDALONE:-0}"
+PINNED_TEAM="8A5X4JJ39T"      # ZCode's Developer ID Team ID: a download must be signed by it
+STANDALONE_APP="$HOME/Library/Application Support/Zode/engine.noindex/ZCode.app"
+if [ -n "${ZODE_APP:-}" ]; then ZODE_APP_PATH="$ZODE_APP"
+elif [ "$STANDALONE" = "1" ]; then ZODE_APP_PATH="$STANDALONE_APP"
+else
   if [ -d "/Applications/ZCode Engine.app" ]; then ZODE_APP_PATH="/Applications/ZCode Engine.app"
   elif [ -d "$HOME/Applications/ZCode Engine.app" ]; then ZODE_APP_PATH="$HOME/Applications/ZCode Engine.app"
   elif [ -d "/Applications/Zode.app" ] && [ -f "/Applications/Zode.app/Contents/Resources/zode/boot.cjs" ]; then ZODE_APP_PATH="/Applications/Zode.app"
@@ -214,8 +223,8 @@ cleanup() {  # temp folders only: the download stays for --retry resume, the bac
 }
 
 read_installed() {
-  INSTALLED="$(app_version "$ORIG_APP")"
   ZODE_VER="$(app_version "$ZODE_APP_PATH")"
+  if [ "$STANDALONE" = "1" ]; then INSTALLED="$ZODE_VER"; else INSTALLED="$(app_version "$ORIG_APP")"; fi
 }
 
 print_check() {
@@ -297,7 +306,7 @@ verify_step() {  # step 3: nothing outside ~/.zode/updates is touched here
     fail 3 "Gatekeeper (spctl) rejected the downloaded app"
   fi
   new_team="$(app_team_id "$NEW_APP")"
-  want_team="$(app_team_id "$ORIG_APP")"
+  if [ "$STANDALONE" = "1" ]; then want_team="$PINNED_TEAM"; else want_team="$(app_team_id "$ORIG_APP")"; fi
   if [ -z "$new_team" ] || [ -z "$want_team" ] || [ "$new_team" != "$want_team" ]; then
     rm -f "$ZIP_PATH"
     fail 3 "Team ID mismatch (download: ${new_team:-none}, installed: ${want_team:-none})"
@@ -306,10 +315,10 @@ verify_step() {  # step 3: nothing outside ~/.zode/updates is touched here
 
 quit_step() {  # step 4: any surviving process breaks the swap
   echo "[4/7] Quitting ZCode and ${TARGET_LABEL%.app}"
-  quit_app "dev.zcode.app" "$ORIG_APP/"
+  if [ "$STANDALONE" != "1" ]; then quit_app "dev.zcode.app" "$ORIG_APP/"; fi
   quit_app "$ZODE_APP_ID" "$ZODE_APP_PATH/"     # bundle id read from the target's Info.plist
   # The Zode menu bar app (bundle id dev.zode.mac) is deliberately not quit: its relay keeps running.
-  if pgrep -f "$ORIG_APP/" >/dev/null 2>&1; then
+  if [ "$STANDALONE" != "1" ] && pgrep -f "$ORIG_APP/" >/dev/null 2>&1; then
     fail 4 "ZCode is still running ($ORIG_APP); quit it and rerun"
   fi
   if pgrep -f "$ZODE_APP_PATH/" >/dev/null 2>&1; then
@@ -326,6 +335,7 @@ restore_backup() {  # restore_backup <step> <reason>: put the old app back, then
 }
 
 replace_step() {  # step 5
+  if [ "$STANDALONE" = "1" ]; then echo "[5/7] Keeping the verified download for the Engine build"; return 0; fi
   local parent bak
   parent="$(dirname "$ORIG_APP")"
   echo "[5/7] Replacing $ORIG_APP with $LATEST"
@@ -354,7 +364,8 @@ rebuild_zode() {  # build into a temp folder first, so a failed build never remo
   BUILD_TMP="$(mktemp -d "$UPDATES_DIR/rebuild.XXXXXXXX")" || fail 6 "could not create a temp folder"
   tmp_app="$BUILD_TMP/$(basename "$ZODE_APP_PATH")"
   if [ "$IS_ENGINE" -eq 1 ]; then
-    if ! ZODE_TAP_APP="$tmp_app" ZODE_ENGINE=1 bash "$REPO/scripts/build-tap.sh"; then rc=1; fi
+    local src="$ORIG_APP"; if [ "$STANDALONE" = "1" ] && [ -n "${NEW_APP:-}" ]; then src="$NEW_APP"; fi
+    if ! ZCODE_APP="$src" ZODE_TAP_APP="$tmp_app" ZODE_ENGINE=1 bash "$REPO/scripts/build-tap.sh"; then rc=1; fi
   else
     if ! ZODE_TAP_APP="$tmp_app" bash "$REPO/scripts/build-tap.sh"; then rc=1; fi
   fi
@@ -369,6 +380,7 @@ rebuild_zode() {  # build into a temp folder first, so a failed build never remo
     rm -rf "$BUILD_TMP"; BUILD_TMP=""
     fail 6 "could not move the old $TARGET_LABEL aside"
   fi
+  mkdir -p "$(dirname "$ZODE_APP_PATH")"
   if ! mv "$tmp_app" "$ZODE_APP_PATH"; then
     if [ -e "$old" ] && [ ! -e "$ZODE_APP_PATH" ]; then mv "$old" "$ZODE_APP_PATH" 2>/dev/null || true; fi
     rm -rf "$BUILD_TMP"; BUILD_TMP=""
@@ -424,7 +436,7 @@ up_to_date_flow() {  # the original is current; still refresh the copy when it l
 # (bundle id dev.zode.mac) is never a target here and is never quit by the update.
 ZODE_APP_ID="$(app_bundle_id "$ZODE_APP_PATH")"
 IS_ENGINE=0
-if [ "$ZODE_APP_ID" = "dev.zode.engine" ]; then IS_ENGINE=1; fi
+if [ "$ZODE_APP_ID" = "dev.zode.engine" ] || [ "$STANDALONE" = "1" ]; then IS_ENGINE=1; fi
 if [ "$IS_ENGINE" -eq 1 ]; then TARGET_LABEL="ZCode Engine.app"; else TARGET_LABEL="Zode.app"; fi
 
 main() {
@@ -432,7 +444,7 @@ main() {
   cd /
   if [ "$CHECK" -eq 0 ]; then
     if [ -n "$WAIT_PID" ]; then wait_for_pid; fi
-    recover_backup
+    if [ "$STANDALONE" != "1" ]; then recover_backup; fi
   fi
   read_installed
   read_manifest
@@ -440,10 +452,10 @@ main() {
     print_check
     exit 0
   fi
-  if [ -z "$INSTALLED" ]; then
+  if [ -z "$INSTALLED" ] && [ "$STANDALONE" != "1" ]; then
     fail 1 "ZCode not found at $ORIG_APP (install it first, or point ZCODE_APP at it)"
   fi
-  echo "[1/7] Installed ZCode is $INSTALLED; the latest release is $LATEST"
+  echo "[1/7] Installed ZCode is ${INSTALLED:-none}; the latest release is $LATEST"
   if ! version_gt "$LATEST" "$INSTALLED"; then
     up_to_date_flow
     exit 0

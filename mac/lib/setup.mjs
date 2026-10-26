@@ -3,8 +3,7 @@
 import path from 'node:path';
 
 const STEPS = [
-  { id: 'find', title: 'ZCode is installed', key: 'originalExists' },
-  { id: 'prepare', title: 'Make the ZCode Engine', key: 'engineExists' },
+  { id: 'prepare', title: 'Get ZCode ready', key: 'engineExists' },
   { id: 'login', title: 'Open ZCode and sign in', key: 'tapAlive' },
   { id: 'phone', title: 'Pair your phone', key: 'setupDone' },
 ];
@@ -26,6 +25,8 @@ export function setupSteps(facts) {
 // A build-tap.sh output line → friendly label + percent for the progress bar. Anything else is null.
 export function parseBuildProgress(line) {
   const t = typeof line === 'string' ? line : '';
+  if (t.includes('Downloading ZCode')) return { label: 'Downloading ZCode', percent: 8 };
+  if (t.includes('Verifying')) return { label: 'Checking the download', percent: 30 };
   if (t.includes('Copying')) return { label: 'Copying ZCode (this takes a minute)', percent: 10 };
   if (t.includes('Engine mode')) return { label: 'Setting things up', percent: 70 };
   if (t.includes('Signing')) return { label: 'Almost done', percent: 85 };

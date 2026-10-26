@@ -8,25 +8,26 @@ const states = (list) => list.map(s => s.state);
 
 test('setupSteps: the first unfinished step is current, the rest todo', () => {
   const t = setupSteps(facts());
-  assert.deepEqual(t.map(s => s.id), ['find', 'prepare', 'login', 'phone']);
-  assert.deepEqual(states(t), ['current', 'todo', 'todo', 'todo']);
-  assert.deepEqual(states(setupSteps(facts({ originalExists: true }))), ['done', 'current', 'todo', 'todo']);
-  assert.deepEqual(states(setupSteps(facts({ originalExists: true, engineExists: true }))), ['done', 'done', 'current', 'todo']);
-  assert.deepEqual(states(setupSteps(facts({ originalExists: true, engineExists: true, tapAlive: true }))), ['done', 'done', 'done', 'current']);
-  assert.deepEqual(states(setupSteps(facts({ originalExists: true, engineExists: true, tapAlive: true, setupDone: true }))), ['done', 'done', 'done', 'done']);
+  assert.deepEqual(t.map(s => s.id), ['prepare', 'login', 'phone']);
+  assert.deepEqual(states(t), ['current', 'todo', 'todo']);
+  assert.deepEqual(states(setupSteps(facts({ engineExists: true }))), ['done', 'current', 'todo']);
+  assert.deepEqual(states(setupSteps(facts({ engineExists: true, tapAlive: true }))), ['done', 'done', 'current']);
+  assert.deepEqual(states(setupSteps(facts({ engineExists: true, tapAlive: true, setupDone: true }))), ['done', 'done', 'done']);
 });
 
 test('setupSteps: a connected ZCode without Done still shows the phone step', () => {
-  assert.deepEqual(states(setupSteps(facts({ originalExists: true, engineExists: true, tapAlive: true, setupDone: false }))), ['done', 'done', 'done', 'current']);
+  assert.deepEqual(states(setupSteps(facts({ engineExists: true, tapAlive: true, setupDone: false }))), ['done', 'done', 'current']);
 });
 
 test('setupSteps: garbage facts never throw and count as nothing done', () => {
   for (const bad of [null, undefined, 'x', 42]) {
-    assert.deepEqual(states(setupSteps(bad)), ['current', 'todo', 'todo', 'todo']);
+    assert.deepEqual(states(setupSteps(bad)), ['current', 'todo', 'todo']);
   }
 });
 
-test('parseBuildProgress maps the four build-tap lines and nothing else', () => {
+test('parseBuildProgress maps the build and download lines and nothing else', () => {
+  assert.deepEqual(parseBuildProgress('[2/7] Downloading ZCode 3.16.3 (400 MB)'), { label: 'Downloading ZCode', percent: 8 });
+  assert.deepEqual(parseBuildProgress('[3/7] Verifying the download (version, signature, Team ID)'), { label: 'Checking the download', percent: 30 });
   assert.deepEqual(parseBuildProgress('Copying ZCode.app (806M) to /Applications/ZCode Engine.app ...'), { label: 'Copying ZCode (this takes a minute)', percent: 10 });
   assert.deepEqual(parseBuildProgress('Engine mode: no relay integration inside the app (the standalone Zode app runs it).'), { label: 'Setting things up', percent: 70 });
   assert.deepEqual(parseBuildProgress('Signing (ad hoc) ...'), { label: 'Almost done', percent: 85 });
