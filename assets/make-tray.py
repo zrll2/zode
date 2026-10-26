@@ -27,7 +27,7 @@ def glyph(px):
         d.rounded_rectangle([s * 2.0, s * y, s * 20.0, s * (y + h)], radius=s * h / 2, fill=(0, 0, 0, 255))
     return im.resize((px, px), Image.LANCZOS)
 
-for px, name in ((22, 'trayTemplate.png'), (44, 'trayTemplate@2x.png'), (66, 'trayTemplate@3x.png')):
+for px, name in ((18, 'trayTemplate.png'), (36, 'trayTemplate@2x.png'), (54, 'trayTemplate@3x.png')):   # 18 pt: a small Z in the menu bar
     glyph(px).save(os.path.join(OUT, name))
 print('wrote', OUT)
 
@@ -35,7 +35,7 @@ print('wrote', OUT)
 # macapp/assets/trayWorking{Light,Dark}[@2x|@3x].png (green dot), trayNeeds{Light,Dark}[...] (amber dot).
 # "Light" is for a light menu bar (dark glyph), "Dark" for a dark menu bar (white glyph).
 DOTS = {'Working': (47, 157, 98), 'Needs': (217, 146, 27)}
-for px, suffix in ((22, ''), (44, '@2x'), (66, '@3x')):
+for px, suffix in ((18, ''), (36, '@2x'), (54, '@3x')):
     base = glyph(px)
     for bar, fg in (('Light', (0, 0, 0)), ('Dark', (255, 255, 255))):
         tinted = Image.new('RGBA', base.size, fg + (0,))
@@ -46,7 +46,7 @@ for px, suffix in ((22, ''), (44, '@2x'), (66, '@3x')):
             under = Image.new('RGBA', base.size, (0, 0, 0, 0)); under.putalpha(rim)
             under.alpha_composite(tinted); tinted = under
         for name, rgb in DOTS.items():
-            k = px / 22
+            k = px / 22                                          # the design grid is 22 units wide
             hi = Image.new('L', (px * SS, px * SS), 0)
             hd = ImageDraw.Draw(hi)
             cx, cy, r = 18.0 * k * SS, 4.0 * k * SS, 3.3 * k * SS

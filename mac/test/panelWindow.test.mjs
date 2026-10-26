@@ -54,14 +54,14 @@ test('trayImageName and isTemplate for every glyph and both bar appearances', ()
   // idle is the quiet template image on both bars; macOS tints it itself
   assert.equal(trayImageName({ glyph: 'idle', dark: false }), 'trayTemplate.png');
   assert.equal(trayImageName({ glyph: 'idle', dark: true }), 'trayTemplate.png');
-  // working is the same template glyph: the number of running conversations is the tray title instead
-  assert.equal(trayImageName({ glyph: 'working', dark: false }), 'trayTemplate.png');
-  assert.equal(trayImageName({ glyph: 'working', dark: true }), 'trayTemplate.png');
+  // working and needs carry the status light (a colored dot, white glyph); the count is the tray title
+  assert.equal(trayImageName({ glyph: 'working', dark: false }), 'trayWorkingDark.png');
+  assert.equal(trayImageName({ glyph: 'working', dark: true }), 'trayWorkingDark.png');
   assert.equal(trayImageName({ glyph: 'needs', dark: false }), 'trayNeedsDark.png');
   assert.equal(trayImageName({ glyph: 'needs', dark: true }), 'trayNeedsDark.png');
   assert.equal(trayImageName({ glyph: 'weird', dark: false }), 'trayTemplate.png');   // junk glyph: the quiet icon
   assert.ok(isTemplate('idle'));
-  assert.ok(isTemplate('working'));
+  assert.equal(isTemplate('working'), false);
   assert.equal(isTemplate('needs'), false);
   assert.ok(isTemplate('weird'));
 });
