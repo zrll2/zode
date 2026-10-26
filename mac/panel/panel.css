@@ -60,9 +60,6 @@ body{color:var(--ink);font-family:var(--font);overflow:hidden}
 .tick{width:14px;height:14px;color:var(--good);justify-self:center}
 .more{display:block;width:100%;text-align:left;font:inherit;font-size:12px;color:var(--muted);background:transparent;border:0;padding:6px 8px 8px 34px;cursor:pointer;border-radius:8px}
 .more:hover{color:var(--ink)}
-.quietstate{padding:18px 16px 14px;text-align:left}
-.quietstate b{display:block;font-size:14px;margin-bottom:2px}
-.quietstate span{color:var(--muted);font-size:12.5px}
 .banner{margin:2px 10px 6px;border-radius:10px;padding:10px 12px;background:var(--panel-2);border:1px solid var(--line);display:flex;gap:10px;align-items:center;font-size:12.5px}
 .banner div{flex:1;min-width:0}
 .banner b{display:block;font-size:13px}

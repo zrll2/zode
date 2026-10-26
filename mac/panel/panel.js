@@ -190,12 +190,7 @@ function renderDone(done, earlier, s) {
   const root = $('done');
   root.textContent = '';
   const total = done.length + earlier.length;
-  if (!total) {
-    const q = el('div', 'quietstate');
-    q.append(el('b', null, 'Nothing has finished lately'), el('span', null, 'New work shows up here.'));
-    root.append(q);
-    return;
-  }
+  if (!total) return;                                          // nothing finished: show nothing
   const open = finishedOpen ?? s.foldFinished !== true;
   const sec = el('div', 'sec');
   const h3 = el('h3');
