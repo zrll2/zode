@@ -1,5 +1,11 @@
 # Zode for Mac
 
+## 1.4.5
+- **Running work stays running.** A long test or build that goes quiet for minutes no longer slips into "finished". A conversation counts as running until ZCode says its turn ended, and ZCode's own activity keeps it alive.
+- **Rounded icon** that matches other macOS apps.
+- Work orders show one title format, "Work order NN: …".
+- Settings opens at its full height, and the voice language choice shows what is selected.
+
 ## 1.4.1
 - **Tell Claude Code.** Zode now tells Claude Code when a ZCode conversation finishes, fails, needs an answer or looks stuck, so a Claude Code session that delegated the work notices right away instead of being checked by hand. One switch in Settings (on by default) installs a small Claude Code skill and turns the feed on; turning it off removes the skill. Nothing but the project name and conversation title is shared, and only on your Mac.
 
@@ -7,7 +13,6 @@
 - **A redesigned panel.** One queue with no headings: what needs you first, then what is running with how long each run has lasted, then a single "finished" row that opens in place. The top bar holds your phones, refresh and settings; the footer shows today's token use and Open Zode.
 - **A smaller menu bar icon** with a status light (green while work runs, amber when something needs you) and the number of running conversations beside it.
 - Settings is grouped, with switches and segmented choices instead of long labels.
-- Notifications reach your phone: sealed end to end, they need the new phone build.
 
 ## 1.3.1
 - **Notifications.** A macOS notification when a conversation finishes, fails, needs an answer or looks stuck. One switch in Settings (on by default), short bursts are grouped, and nothing about your commands or files is shown.

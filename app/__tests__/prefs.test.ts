@@ -29,11 +29,21 @@ it("defaults every field", async () => {
     showWorkOrders: false,
     archivedIds: [],
     showArchived: false,
+    pushEnabled: false,
+    pushPromptShown: false,
+    pushId: null,
   });
 });
 
 it("round-trips saved prefs including archived ids", async () => {
-  const prefs = { showWorkOrders: true, archivedIds: ["abcd1234"], showArchived: true };
+  const prefs = {
+    showWorkOrders: true,
+    archivedIds: ["abcd1234"],
+    showArchived: true,
+    pushEnabled: true,
+    pushPromptShown: true,
+    pushId: "push-1",
+  };
   await savePrefs(prefs);
   expect(mockedSet).toHaveBeenCalledWith(PREFS_KEY, JSON.stringify(prefs));
   await expect(loadPrefs()).resolves.toEqual(prefs);
@@ -45,6 +55,9 @@ it("loads an old format without the new fields with defaults", async () => {
     showWorkOrders: true,
     archivedIds: [],
     showArchived: false,
+    pushEnabled: false,
+    pushPromptShown: false,
+    pushId: null,
   });
 });
 
@@ -54,6 +67,9 @@ it("gives defaults on corrupt JSON", async () => {
     showWorkOrders: false,
     archivedIds: [],
     showArchived: false,
+    pushEnabled: false,
+    pushPromptShown: false,
+    pushId: null,
   });
 });
 
@@ -63,7 +79,10 @@ it("gives defaults when the store itself fails", async () => {
     showWorkOrders: false,
     archivedIds: [],
     showArchived: false,
+    pushEnabled: false,
+    pushPromptShown: false,
+    pushId: null,
   });
-  await expect(savePrefs({ showWorkOrders: true, archivedIds: [], showArchived: false }))
+  await expect(savePrefs({ showWorkOrders: true, archivedIds: [], showArchived: false, pushEnabled: false, pushPromptShown: false, pushId: null }))
     .resolves.toBeUndefined();
 });

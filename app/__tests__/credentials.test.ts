@@ -1,5 +1,5 @@
 import * as SecureStore from "expo-secure-store";
-import { loadCredentials, saveCredentials } from "../src/storage";
+import { loadCredentials, loadPushKey, saveCredentials, savePushKey } from "../src/storage";
 
 jest.mock("expo-secure-store", () => ({
   getItemAsync: jest.fn(),
@@ -87,4 +87,35 @@ it("returns null for records without the required fields", async () => {
   await expect(loadCredentials()).resolves.toBeNull();
   mockedGet.mockRejectedValue(new Error("keychain unavailable"));
   await expect(loadCredentials()).resolves.toBeNull();
+});
+
+describe("push key sibling record", () => {
+  it("keeps the push key with the credentials when the pairing offers one", async () => {
+    store[KEY] = JSON.stringify({
+      wsUrl: "ws://a:1",
+      wsUrls: ["ws://a:1"],
+      pushKey: "cHVzaC1rZXktMzItYnl0ZXM",
+      token: "tok",
+      deviceId: "dev_1",
+    });
+    await expect(loadCredentials()).resolves.toMatchObject({
+      pushKey: "cHVzaC1rZXktMzItYnl0ZXM",
+    });
+  });
+
+  it("leaves pushKey undefined on old records (push unavailable until re-pair)", async () => {
+    store[KEY] = JSON.stringify({ wsUrl: "ws://a:1", token: "tok", deviceId: "dev_1" });
+    const creds = await loadCredentials();
+    expect(creds?.pushKey).toBeUndefined();
+  });
+
+  it("round-trips the sibling record for the extension", async () => {
+    await savePushKey("cHVzaC1rZXktMzItYnl0ZXM");
+    expect(mockedSet).toHaveBeenCalledWith(
+      "zode.push.key.v1",
+      "cHVzaC1rZXktMzItYnl0ZXM",
+      expect.objectContaining({ accessGroup: "JLB545UV6D.com.zode.app.shared" }),
+    );
+    await expect(loadPushKey()).resolves.toBe("cHVzaC1rZXktMzItYnl0ZXM");
+  });
 });

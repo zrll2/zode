@@ -67,7 +67,7 @@ Caveats: clean synthetic speech, not a noisy wrist microphone; one clip, a few r
 3. The phone gives the push id and secret to your Mac's relay over the existing authenticated connection.
 4. When something happens (an approval is asked, a question, a failure, a conversation stalls), the relay sends `POST /push { pushId, auth, kind, sealed }` to the service, which decrypts the token and calls APNs.
 
-**Privacy.** The notification text is **end-to-end encrypted** between the Mac and the phone with a key made at pairing. The push carries only ciphertext (`mutable-content`); a Notification Service Extension on the phone decrypts it and shows "bossy: Run npm install". The service and Apple see the push id, the kind and a size, never the command or the conversation.
+**Privacy.** The notification text is **end-to-end encrypted** between the Mac and the phone with a key made at pairing. The push carries only ciphertext (`mutable-content`); a Notification Service Extension on the phone decrypts it and shows "shop: Run npm install". The service and Apple see the push id, the kind and a size, never the command or the conversation.
 
 **What the notification can do.** Actions on the phone and the watch: **Allow once**, **Deny**, and **Reply** (a text-input action: dictate on the watch, and the words go to that conversation). The action handler runs in the background and sends the answer to the relay, so it needs the relay to be reachable (same Wi-Fi or Tailscale); otherwise it opens the app.
 

@@ -11,6 +11,9 @@
       "buildNumber": "1",
       "supportsTablet": false,
       "requireFullScreen": false,
+      "entitlements": {
+        "keychain-access-groups": ["$(AppIdentifierPrefix)com.zode.app.shared"]
+      },
       "config": {
         "usesNonExemptEncryption": false
       },
@@ -19,6 +22,7 @@
           "NSAllowsLocalNetworking": true
         },
         "LSApplicationQueriesSchemes": ["tailscale"],
+        "UIBackgroundModes": ["remote-notification"],
         "NSLocalNetworkUsageDescription": "Zode connects to the relay that runs on your Mac, over your local or private network.",
         "NSCameraUsageDescription": "Zode scans the pairing QR code shown by the Mac, and lets you attach photos you take to a message.",
         "NSMicrophoneUsageDescription": "Zode uses the microphone only when you tap the mic, to turn your voice into a message. The audio goes to your own Mac and is not kept.",
@@ -90,6 +94,12 @@
       ],
       "expo-document-picker",
       "expo-secure-store",
+      [
+        "expo-notifications",
+        {
+          "enableBackgroundRemoteNotifications": true
+        }
+      ],
       [
         "expo-splash-screen",
         {

@@ -11,7 +11,14 @@ import {
 } from "@expo-google-fonts/source-serif-4";
 import { RelayProvider } from "../src/useRelay";
 import { useWatchBridge } from "../src/watchBridge";
+import { ensureNotificationCategories, registerPushTasks } from "../src/pushActions";
 import { FontsLoadedProvider, useTheme } from "../src/theme";
+
+// Push glue (PS3): the foreground handler, the in-app response listener, the
+// background action task and the action categories. Registered once at module
+// scope so background tasks find them even after a cold start.
+registerPushTasks();
+void ensureNotificationCategories().catch(() => {});
 
 export default function RootLayout() {
   const [fontsLoaded] = useFonts({

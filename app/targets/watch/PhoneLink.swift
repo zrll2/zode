@@ -132,7 +132,7 @@ final class PhoneLink: NSObject, ObservableObject, WCSessionDelegate {
             AVSampleRateKey: 16_000.0,
             AVNumberOfChannelsKey: 1,
             AVEncoderAudioQualityKey: AVAudioQuality.medium.rawValue,
-            AVEncoderBitRateKey: 24_000,
+            AVEncoderBitRateKey: 48_000,
         ]
         guard let recorder = try? AVAudioRecorder(url: url, settings: settings) else {
             step = .error("Could not start the microphone. Try again.")
@@ -463,8 +463,8 @@ final class PhoneLink: NSObject, ObservableObject, WCSessionDelegate {
     // MARK: constants and state
 
     static let maxSeconds = 55
-    // About 12 s of 24 kbps AAC; longer clips use a file transfer.
-    static let maxBase64Characters = 60_000
+    // About 14 s of 48 kbps AAC; longer clips use a file transfer.
+    static let maxBase64Characters = 80_000
 
     private var audioRecorder: AVAudioRecorder?
     private var recordTimer: Timer?

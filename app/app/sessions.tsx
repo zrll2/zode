@@ -42,6 +42,12 @@ import { Text } from "../src/ui/Text";
 import { UndoToast } from "../src/ui/UndoToast";
 import { UsageSheet } from "../src/ui/UsageSheet";
 import { buildMenuItems } from "../src/ui/menu";
+import { Sheet } from "../src/ui/Sheet";
+import { Pill } from "../src/ui/Pill";
+import {
+  pushRowLabel,
+  usePushRegistration,
+} from "../src/pushRegistration";
 
 // App version comes from app.json (expo.version) for the sheet title.
 const APP_VERSION = Constants.expoConfig?.version;
@@ -134,7 +140,22 @@ export default function SessionsScreen() {
     showWorkOrders: false,
     archivedIds: [],
     showArchived: false,
+    pushEnabled: false,
+    pushPromptShown: false,
+    pushId: null,
   });
+  const { pushState, enableFromMenu, disableFromMenu } = usePushRegistration();
+  const [pushPromptVisible, setPushPromptVisible] = useState(false);
+  const promptOfferedRef = useRef(false);
+
+  // The first-run prompt appears once, after the first successful connection
+  // (never in demo mode, never after either choice was made).
+  useEffect(() => {
+    if (demo || status !== "ready" || prefs.pushPromptShown) return;
+    if (promptOfferedRef.current) return;
+    promptOfferedRef.current = true;
+    setPushPromptVisible(true);
+  }, [demo, status, prefs.pushPromptShown]);
 
   // Ask-first answering is only offered against a current relay (P2/P3).
   const approvalsActive = status === "ready" && relaySupports(relayProtocol, "askFirst");
@@ -257,13 +278,28 @@ export default function SessionsScreen() {
     })();
   }, []);
 
-  const updatePrefs = useCallback((patch: Partial<Prefs>) => {
-    setPrefs((current) => {
-      const next = { ...current, ...patch };
-      void savePrefs(next);
-      return next;
-    });
-  }, []);
+  const updatePrefs = useCallback(
+    (patch: Partial<Prefs>) => {
+      // Load-modify-save so prefs written elsewhere (push registration) are
+      // never clobbered by a stale in-memory copy.
+      void (async () => {
+        const stored = await loadPrefs();
+        const next = { ...stored, ...patch };
+        await savePrefs(next);
+        setPrefs(next);
+      })();
+    },
+    [],
+  );
+
+  const dismissPushPrompt = useCallback(
+    (turnOn: boolean) => {
+      updatePrefs({ pushPromptShown: true });
+      setPushPromptVisible(false);
+      if (turnOn) enableFromMenu();
+    },
+    [updatePrefs, enableFromMenu],
+  );
 
   const toggleWorkOrders = useCallback(() => {
     updatePrefs({ showWorkOrders: !prefs.showWorkOrders });
@@ -331,6 +367,7 @@ export default function SessionsScreen() {
         key: "archived",
         label: prefs.showArchived ? "Hide archived" : "Show archived",
       },
+      { key: "push", label: pushRowLabel(pushState) },
       { key: "usage", label: "Usage" },
       ...buildMenuItems({ demo }),
     ];
@@ -346,6 +383,21 @@ export default function SessionsScreen() {
           break;
         case "archived":
           updatePrefs({ showArchived: !prefs.showArchived });
+          break;
+        case "push":
+          if (pushState === "enabled") {
+            Alert.alert("Turn off notifications?", undefined, [
+              { text: "Cancel", style: "cancel" },
+              { text: "Turn off", style: "destructive", onPress: disableFromMenu },
+            ]);
+          } else if (pushState === "unavailable") {
+            Alert.alert("Pair again to turn on notifications", undefined, [
+              { text: "Cancel", style: "cancel" },
+              { text: "Pair again", onPress: () => router.replace("/pair") },
+            ]);
+          } else {
+            enableFromMenu();
+          }
           break;
         case "usage":
           setUsageVisible(true);
@@ -386,7 +438,7 @@ export default function SessionsScreen() {
         })),
       );
     }
-  }, [demo, prefs.showWorkOrders, prefs.showArchived, updatePrefs, toggleWorkOrders, confirmUnpair, confirmExitDemo]);
+  }, [demo, prefs.showWorkOrders, prefs.showArchived, updatePrefs, toggleWorkOrders, confirmUnpair, confirmExitDemo, pushState, enableFromMenu, disableFromMenu]);
 
   const fetchAccountUsage = useCallback(
     (range: "7d" | "30d" | "all") => rpc("usage/stats", buildUsageStatsParams(range)),
@@ -824,6 +876,16 @@ export default function SessionsScreen() {
         }
       />
 
+      <Sheet visible={pushPromptVisible} onClose={() => dismissPushPrompt(false)}>
+        <Text variant="display" style={{ fontSize: 22, lineHeight: 28 }}>
+          Get notified when ZCode needs you
+        </Text>
+        <View style={styles.pushPromptActions}>
+          <Pill label="Not now" variant="quiet" onPress={() => dismissPushPrompt(false)} />
+          <Pill label="Turn on" onPress={() => dismissPushPrompt(true)} />
+        </View>
+      </Sheet>
+
       <UsageSheet
         visible={usageVisible}
         onClose={() => setUsageVisible(false)}
@@ -889,6 +951,7 @@ const styles = StyleSheet.create({
   hintTitle: { fontSize: 15, lineHeight: 20, fontWeight: "700" },
   hintBody: { fontSize: 13, lineHeight: 18 },
   hintActions: { flexDirection: "row", gap: 8, marginTop: 6 },
+  pushPromptActions: { flexDirection: "row", gap: 12, marginTop: 8 },
   centerPane: {
     flex: 1,
     alignItems: "center",

@@ -207,10 +207,10 @@ select{font:inherit;font-size:12px;background:var(--panel-2);color:var(--ink);bo
   function seed(s){
     var base={needs:[],working:[],done:[],earlier:[],banner:null,phones:2,connected:true};
     if(s==='busy'){base.needs=[
-        {id:'n1',project:'bossy',kind:'ask',ask:'Run: npm install --save-dev vitest',waiting:'2 min'},
-        {id:'n2',project:'jarvis',kind:'stalled',ask:'No activity for 12 min. It may be stuck.',waiting:'12 min'}];
+        {id:'n1',project:'shop',kind:'ask',ask:'Run: npm install --save-dev vitest',waiting:'2 min'},
+        {id:'n2',project:'chat',kind:'stalled',ask:'No activity for 12 min. It may be stuck.',waiting:'12 min'}];
       base.working=[{project:'zode-update-wt',doing:'Editing 3 files',t:'4 min'},{project:'huici-srv-wt',doing:'Running tests',t:'11 min'}];
-      base.done=[{project:'petkit',t:'2 min ago'},{project:'gooloo-admin-dash-wt',t:'9 min ago'},{project:'comex-zode-page-wt',t:'31 min ago'},{project:'huici-deploy-wt',t:'48 min ago'}];
+      base.done=[{project:'petkit',t:'2 min ago'},{project:'acme-admin-dash-wt',t:'9 min ago'},{project:'comex-zode-page-wt',t:'31 min ago'},{project:'huici-deploy-wt',t:'48 min ago'}];
       base.earlier=[{project:'huici-media-wt',t:'2 h ago'},{project:'pa-brain-extract-wt',t:'3 h ago'}];}
     if(s==='quiet'){base.done=[{project:'petkit',t:'18 min ago'},{project:'huici-deploy-wt',t:'40 min ago'}];base.earlier=[{project:'huici-media-wt',t:'2 h ago'}];}
     if(s==='setup'){base.connected=false;base.phones=0;base.banner={t:'Finish setting up',d:'Zode needs its own copy of ZCode before your phone can connect.',b:'Set up'};}

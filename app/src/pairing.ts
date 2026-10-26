@@ -10,6 +10,7 @@ export interface PairResult {
   token: string;
   wsUrl: string;
   wsUrls: string[]; // every address the pairing offered, ws normalised
+  pushKey?: string; // 32 bytes, base64url; absent on relays without push
 }
 
 const URL_RE = /^(ws|wss|http|https):\/\//i;
@@ -137,14 +138,14 @@ function toWsUrl(url: string): string {
   return url.replace(/^http/i, "ws").replace(/\/+$/, "");
 }
 
-// POST {url}/pair with {code, name} -> {id, token}. The token is only
-// returned here; callers store it and never log it.
+// POST {url}/pair with {code, name} -> {id, token, pushKey?}. The token and
+// push key are only returned here; callers store them and never log them.
 async function pairOnce(
   url: string,
   payload: PairingPayload,
   deviceName: string,
   fetchImpl: typeof fetch,
-): Promise<{ id: string; token: string }> {
+): Promise<{ id: string; token: string; pushKey?: string }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), PAIR_ATTEMPT_TIMEOUT_MS);
   try {
@@ -167,7 +168,8 @@ async function pairOnce(
     const id = typeof data?.id === "string" ? data.id : "";
     const token = typeof data?.token === "string" ? data.token : "";
     if (!id || !token) throw new Error("The relay returned an unexpected pairing response.");
-    return { id, token };
+    const pushKey = typeof data?.pushKey === "string" && data.pushKey ? data.pushKey : undefined;
+    return { id, token, pushKey };
   } catch (e: any) {
     if (e?.name === "AbortError") {
       throw new Error("Pairing timed out. Check that this phone can reach the Mac.");
@@ -189,7 +191,7 @@ export async function pair(
   let lastError: unknown = null;
   for (const url of candidates) {
     try {
-      const { id, token } = await pairOnce(url, payload, deviceName, fetchImpl);
+      const { id, token, pushKey } = await pairOnce(url, payload, deviceName, fetchImpl);
       const seen = new Set<string>();
       const wsUrls: string[] = [];
       for (const entry of candidates) {
@@ -198,7 +200,7 @@ export async function pair(
         seen.add(ws);
         wsUrls.push(ws);
       }
-      return { id, token, wsUrl: toWsUrl(url), wsUrls };
+      return { id, token, wsUrl: toWsUrl(url), wsUrls, pushKey };
     } catch (e: unknown) {
       lastError = e;
     }

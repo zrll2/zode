@@ -1,6 +1,10 @@
 import * as SecureStore from "expo-secure-store";
+import { PUSH_KEYCHAIN_GROUP } from "./config";
 
 const KEY = "zcode.relay.credentials.v1";
+// Sibling record for the push key so the notification extension (separate
+// order) can read it through the shared keychain access group.
+const PUSH_KEY = "zode.push.key.v1";
 
 const WS_URLS_CAP = 8;
 
@@ -11,6 +15,9 @@ export interface Credentials {
   wsUrls: string[];
   // The address that last delivered a ready frame; tried first.
   lastGood?: string;
+  // 32-byte push key, base64url; undefined on pairings made before push
+  // existed (push stays unavailable until the user pairs again).
+  pushKey?: string;
   token: string;
   deviceId: string;
 }
@@ -39,7 +46,35 @@ function normalizeCredentials(parsed: any): Credentials | null {
   }
   const lastGood =
     typeof parsed.lastGood === "string" && seen.has(parsed.lastGood) ? parsed.lastGood : undefined;
-  return { wsUrl: parsed.wsUrl, wsUrls, lastGood, token: parsed.token, deviceId: parsed.deviceId };
+  const pushKey =
+    typeof parsed.pushKey === "string" && parsed.pushKey ? parsed.pushKey : undefined;
+  return {
+    wsUrl: parsed.wsUrl,
+    wsUrls,
+    lastGood,
+    pushKey,
+    token: parsed.token,
+    deviceId: parsed.deviceId,
+  };
+}
+
+// The push key is stored twice: with the credentials (for the app) and in a
+// sibling record under the shared access group (for the notification
+// extension). The access group can fail where entitlements are missing
+// (e.g. simulator builds); the credentials copy still works, so failures are
+// swallowed here.
+export async function savePushKey(pushKey: string): Promise<void> {
+  try {
+    await SecureStore.setItemAsync(PUSH_KEY, pushKey, { accessGroup: PUSH_KEYCHAIN_GROUP });
+  } catch {}
+}
+
+export async function loadPushKey(): Promise<string | null> {
+  try {
+    return await SecureStore.getItemAsync(PUSH_KEY, { accessGroup: PUSH_KEYCHAIN_GROUP });
+  } catch {
+    return null;
+  }
 }
 
 export async function saveCredentials(credentials: Credentials): Promise<void> {
@@ -74,6 +109,10 @@ export interface Prefs {
   showWorkOrders: boolean;
   archivedIds: string[];
   showArchived: boolean;
+  // Push notifications (PS3): the user's choice and the registered slot.
+  pushEnabled: boolean;
+  pushPromptShown: boolean;
+  pushId: string | null;
 }
 
 function normalizePrefs(raw: unknown): Prefs {
@@ -81,6 +120,9 @@ function normalizePrefs(raw: unknown): Prefs {
     showWorkOrders?: unknown;
     archivedIds?: unknown;
     showArchived?: unknown;
+    pushEnabled?: unknown;
+    pushPromptShown?: unknown;
+    pushId?: unknown;
   };
   return {
     showWorkOrders: value.showWorkOrders === true,
@@ -90,6 +132,9 @@ function normalizePrefs(raw: unknown): Prefs {
           .filter((entry): entry is string => typeof entry === "string")
           .slice(0, ARCHIVE_CAP)
       : [],
+    pushEnabled: value.pushEnabled === true,
+    pushPromptShown: value.pushPromptShown === true,
+    pushId: typeof value.pushId === "string" && value.pushId ? value.pushId : null,
   };
 }
 
