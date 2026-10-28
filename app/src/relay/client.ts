@@ -59,6 +59,9 @@ const EVENT_BUFFER_LIMIT = 500;
 const HEAD_START_MS = 2_500;
 const STAGGER_MS = 300;
 const URLS_CAP = 8;
+// A connection up this long counts as healthy: the next drop backs off from
+// the beginning again.
+const STABLE_MS = 10_000;
 
 export class RelayClient {
   status: RelayStatus = "closed";
@@ -87,6 +90,9 @@ export class RelayClient {
   private launchedCount = 0;
   private lastSeq: number | null = null;
   private attempts = 0;
+  // Fires STABLE_MS into a live connection and resets the attempt counter;
+  // a drop before that leaves the backoff climbing.
+  private stabilityTimer: ReturnType<typeof setTimeout> | null = null;
   private stopped = true;
   private connectPromise: Promise<void> | null = null;
 
@@ -292,6 +298,7 @@ export class RelayClient {
       this.reconnectTimer = null;
     }
     this.retryAt = null;
+    this.disarmStability();
     if (this.connectGuard) {
       clearTimeout(this.connectGuard);
       this.connectGuard = null;
@@ -374,7 +381,7 @@ export class RelayClient {
 
   private handleRacerClose(socket: RelaySocket, code?: number) {
     if (socket === this.socket) {
-      // The winner dropped after ready: roll straight into a new race.
+      // The winner dropped after ready: back off like any other drop.
       this.handleClose(code);
       return;
     }
@@ -408,6 +415,14 @@ export class RelayClient {
       this.setStatus("closed");
       return;
     }
+    this.scheduleReconnect();
+  }
+
+  // The one reconnect path: exponential backoff before the next race. A
+  // connection that stayed up STABLE_MS already reset the attempt counter
+  // (armStability); rapid flapping climbs.
+  private scheduleReconnect() {
+    this.disarmStability();
     const delay = nextDelay(this.attempts);
     this.attempts += 1;
     this.retryAt = Date.now() + delay;
@@ -417,6 +432,23 @@ export class RelayClient {
       this.retryAt = null;
       if (!this.stopped) this.openSocket();
     }, delay);
+  }
+
+  // The connection reached ready: once it survives STABLE_MS the reconnect
+  // backoff restarts from zero.
+  private armStability() {
+    this.disarmStability();
+    this.stabilityTimer = setTimeout(() => {
+      this.stabilityTimer = null;
+      this.attempts = 0;
+    }, STABLE_MS);
+  }
+
+  private disarmStability() {
+    if (this.stabilityTimer) {
+      clearTimeout(this.stabilityTimer);
+      this.stabilityTimer = null;
+    }
   }
 
   private handleClose(code?: number) {
@@ -439,7 +471,7 @@ export class RelayClient {
       this.setStatus("closed");
       return;
     }
-    this.openSocket();
+    this.scheduleReconnect();
   }
 
   // The first ready ends the race: the winner stays, every other socket is
@@ -482,8 +514,11 @@ export class RelayClient {
     if (!frame || typeof frame.type !== "string") return;
 
     if (frame.type === "ready") {
+      // A loser's late ready (frame already in flight when it lost the race)
+      // must not steal a settled race.
+      if (this.raceSettled && socket !== this.socket) return;
       if (this.socket !== socket) this.settleRace(socket);
-      this.attempts = 0;
+      this.armStability();
       const protocol = (frame as { protocol?: unknown }).protocol;
       this.relayProtocolValue = typeof protocol === "number" ? protocol : undefined;
       const features = (frame as { features?: unknown }).features;

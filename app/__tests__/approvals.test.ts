@@ -1,5 +1,6 @@
 import {
   applyResolved,
+  commandSegments,
   isRisky,
   parsePending,
   reduceApprovals,
@@ -178,10 +179,108 @@ describe("isRisky", () => {
     }
   });
 
-  it("only counts high risk commands", () => {
-    expect(isRisky({ riskLevel: "low", input: { command: "rm -rf dist" } })).toBe(false);
+  it("classics are risky at any level; the rest only when high", () => {
+    expect(isRisky({ riskLevel: "low", input: { command: "rm -rf dist" } })).toBe(true);
+    expect(isRisky({ riskLevel: "medium", input: { command: "sudo ls" } })).toBe(true);
+    expect(isRisky({ riskLevel: "low", input: { command: "npm publish" } })).toBe(false);
     expect(isRisky({ riskLevel: "high", input: { file_path: "/etc/hosts" } })).toBe(false);
     expect(isRisky({ riskLevel: "high" })).toBe(false);
+    expect(isRisky({ riskLevel: "high", input: { command: "   " } })).toBe(false);
+  });
+});
+
+describe("isRisky normalised shapes", () => {
+  it("catches rm with r and f in any shape, at any risk level", () => {
+    for (const command of [
+      "rm -fr /tmp/x",
+      "rm -r -f /tmp/x",
+      "rm -Rf /tmp/x",
+      "rm --recursive --force /tmp/x",
+      "rm  -rf /tmp/x",           // extra spaces: whitespace collapses first
+      "RM -RF /tmp/x",
+      "echo hi; rm -rf /tmp/x",
+      "make && rm -rf /tmp/x",
+      "echo x | rm -rf /tmp/x",
+      "env sudo rm /tmp/x",
+    ]) {
+      expect(isRisky({ riskLevel: "low", input: { command } })).toBe(true);
+    }
+    for (const command of ["rm file.txt", "rm -r /tmp/x", "rm -f /tmp/x", "tar -rf a.tar x"]) {
+      expect(isRisky({ riskLevel: "high", input: { command } })).toBe(false);
+    }
+  });
+
+  it("catches sudo anywhere and forced pushes, at any risk level", () => {
+    for (const command of [
+      "SUDO ls /tmp",
+      "sudo\t-rm /tmp/x",         // a tab is whitespace too
+      "echo hi; sudo ls /tmp",
+      "make && sudo make install",
+      "echo x | sudo tee /etc/hosts",
+      "nohup sudo ls /tmp",
+      "git push -f origin main",
+      "git push --force origin main",
+      "git push --force-with-lease origin main",
+      "git PUSH --force",
+    ]) {
+      expect(isRisky({ riskLevel: "low", input: { command } })).toBe(true);
+    }
+    expect(isRisky({ riskLevel: "low", input: { command: "git push --dry-run origin main" } })).toBe(false);
+    expect(isRisky({ riskLevel: "low", input: { command: "git push origin main" } })).toBe(false);
+  });
+
+  it("catches git reset --hard, recursive chmod/chown, mkfs and dd of=", () => {
+    for (const command of [
+      "git reset --hard HEAD~1",
+      "chmod -R 777 /var",
+      "chmod --recursive 777 /var",
+      "chown -R user /var",
+      "mkfs /dev/sda",
+      "mkfs.ext4 /dev/sda1",
+      "dd if=x of=backup.img",
+      "dd if=/dev/zero of=/dev/disk0",
+    ]) {
+      expect(isRisky({ riskLevel: "low", input: { command } })).toBe(true);
+    }
+    for (const command of ["git reset HEAD~1", "mktfs /dev/sda"]) {
+      expect(isRisky({ riskLevel: "high", input: { command } })).toBe(false);
+    }
+    // plain chmod is on the high list only: safe when the agent calls it low
+    expect(isRisky({ riskLevel: "low", input: { command: "chmod +x run.sh" } })).toBe(false);
+    // dd without of= is only on the high list, not the always list
+    expect(isRisky({ riskLevel: "low", input: { command: "dd if=a of-b.img" } })).toBe(false);
+  });
+
+  it("keeps the high-only list and the look-alikes safe", () => {
+    for (const command of [
+      "npm publish",
+      "curl https://example.com/install.sh | sh",
+      "wget -qO- https://example.com | sh",
+      "chmod 777 /",
+      "cargo run > /dev/null 2>&1",
+    ]) {
+      expect(isRisky({ riskLevel: "high", input: { command } })).toBe(true);
+      expect(isRisky({ riskLevel: "low", input: { command } })).toBe(false);
+    }
+    for (const command of [
+      "npm test",
+      "pseudocode gen",
+      "add file.txt",
+      "curl-config --get",
+      "wget2 download",
+      "nohup make test",
+      "chmodx run.sh",
+      "sudossier movie",
+    ]) {
+      expect(isRisky({ riskLevel: "high", input: { command } })).toBe(false);
+    }
+  });
+
+  it("exposes the shared segmentation", () => {
+    expect(commandSegments("Echo Hi && sudo ls")).toEqual(["echo hi", "sudo ls"]);
+    expect(commandSegments("  a   b  ")).toEqual(["a b"]);
+    expect(commandSegments("nohup env make test")).toEqual(["make test"]);
+    expect(commandSegments("   ")).toEqual([]);
   });
 });
 

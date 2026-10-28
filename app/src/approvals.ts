@@ -20,11 +20,6 @@ export interface ApprovalRequest {
 
 const SUMMARY_MAX = 80;
 
-const RISKY_SUBSTRINGS = ["rm -rf", "git push", "npm publish", "> /dev/"];
-// Word boundaries keep look-alikes ("pseudocode", "add file", "curl-config",
-// "wget2") from matching; mkfs matches as a whole word so mkfs.ext4 counts.
-const RISKY_WORDS = /\b(?:sudo|chmod|chown|dd|curl|wget)\s|\bmkfs\b/;
-
 function str(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
@@ -37,14 +32,100 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-// Risky only when the relay already flagged the request high AND the command
-// itself is on the destructive list.
+// Risky-command classification, a copy of relay/risk.mjs — keep the two in
+// step. Matching runs on a normalised shape, never the raw text: lowercase,
+// collapsed whitespace, split on the shell separators ; && || |, and the
+// wrapper words env/command/nohup/time stripped from the front. That is what
+// makes `rm -fr`, `rm -r -f`, `env sudo` and `sudo` after a separator count,
+// while look-alikes ("pseudocode", "curl-config", "wget2", "add") still do not.
+const WRAPPERS = new Set(["env", "command", "nohup", "time"]);
+
+const flagLetters = (token: string): string => token.replace(/-/g, "");
+
+// -> ["sudo ls", ...]: lowercase, whitespace collapsed, split on ; && || |,
+// wrappers stripped.
+export function commandSegments(command: string): string[] {
+  return command
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .split(/ *(?:&&|\|\||[;|]) */)
+    .map((segment) => segment.trim())
+    .filter(Boolean)
+    .map((segment) => {
+      const words = segment.split(" ");
+      while (words.length && WRAPPERS.has(words[0])) words.shift();
+      return words.join(" ");
+    })
+    .filter(Boolean);
+}
+
+// The classics: destructive whatever the agent thinks the risk is. Checked
+// per segment.
+function alwaysRisky(segment: string): boolean {
+  const w = segment.split(" ");
+  return w.some((token, i) => {
+    if (token === "sudo") return true;
+    if (token === "rm") {
+      // both r and f, any order, combined or separate (-fr, -r -f, -Rf,
+      // --recursive --force)
+      let r = false;
+      let f = false;
+      for (let j = i + 1; j < w.length; j++) {
+        if (!w[j].startsWith("-")) continue;
+        if (flagLetters(w[j]).includes("r")) r = true;
+        if (flagLetters(w[j]).includes("f")) f = true;
+      }
+      return r && f;
+    }
+    if (token === "git" && w[i + 1] === "push") {
+      // -f, --force, --force-with-lease
+      for (let j = i + 2; j < w.length; j++) {
+        if (!w[j].startsWith("-")) continue;
+        const body = w[j].replace(/^-+/, "");
+        if (body.includes("force")) return true;
+        if (!w[j].startsWith("--") && body.includes("f")) return true;
+      }
+      return false;
+    }
+    if (token === "git" && w[i + 1] === "reset" && w.includes("--hard")) return true;
+    if (
+      (token === "chmod" || token === "chown") &&
+      w.slice(i + 1).some((t) => /^-{1,2}r/.test(t))
+    ) {
+      return true;
+    }
+    if (/^mkfs(\.|$)/.test(token)) return true;
+    if (token === "dd" && w.slice(i + 1).some((t) => t.startsWith("of="))) return true;
+    return false;
+  });
+}
+
+// Destructive enough that the agent's own high flag must make a human look.
+function highRisky(segment: string): boolean {
+  const w = segment.split(" ");
+  if (w[0] === "git" && w[1] === "push") return true;
+  if (w[0] === "npm" && w[1] === "publish") return true;
+  if (
+    w[0] === "curl" ||
+    w[0] === "wget" ||
+    w[0] === "chmod" ||
+    w[0] === "chown" ||
+    w[0] === "dd"
+  ) {
+    return true;
+  }
+  return />>?\s*\/dev\//.test(segment);
+}
+
+// Risky when the command is on the destructive list whatever the agent
+// thinks, or the agent flagged it high AND the command needs a human look.
 export function isRisky(params: Record<string, unknown>): boolean {
-  if (params.riskLevel !== "high") return false;
   const input = isRecord(params.input) ? params.input : {};
   const command = str(input.command);
-  if (!command) return false;
-  return RISKY_SUBSTRINGS.some((part) => command.includes(part)) || RISKY_WORDS.test(command);
+  if (!command.trim()) return false;
+  const segments = commandSegments(command);
+  if (segments.some(alwaysRisky)) return true;
+  return params.riskLevel === "high" && segments.some(highRisky);
 }
 
 function fileName(path: string): string {
