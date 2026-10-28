@@ -20,6 +20,7 @@ const HOME = os.homedir();
 const CODE_TTL_MS = 5 * 60 * 1000;
 const REPLAY_MAX = 5000;
 const STATUS_DEBOUNCE_MS = 250;
+const RPC_TIMEOUT_MS = 30_000;            // one deadline for every request that waits on an upstream, the relay's or a phone's
 // iOS closes a WebSocket on a frame above 1 MiB (URLSessionWebSocketTask default). Keep every frame well below that.
 const MAX_FRAME = 800_000;
 
@@ -140,6 +141,7 @@ export function createRelay(opts = {}) {
   // before its push goes out — a desktop answer or an auto-allow inside that window cancels it.
   const pusher = opts.push === false ? null : (opts.push || createPusher({ log: (...a) => log.log(...a), now: Date.now }));
   const pushDelayMs = Number.isFinite(opts.pushDelayMs) ? Math.max(0, opts.pushDelayMs) : 1500;
+  const rpcTimeoutMs = Number.isFinite(opts.rpcTimeoutMs) ? Math.max(1, opts.rpcTimeoutMs) : RPC_TIMEOUT_MS;   // tests shorten it; the deadline stays one for everything
   const log = opts.log ?? console;
   const stt = opts.stt ?? null;               // the host's speech engine ({transcribe, status, defaultLanguage}); absent -> voice-off
   const sttLimiter = createLimiter();         // per device: one transcribe in flight, at most 20 per minute
@@ -194,7 +196,7 @@ export function createRelay(opts = {}) {
     for (const [pid, meta] of live) {
       if (upstream.has(pid)) continue;
       const sock = net.connect(meta.sock); const u = { meta, sock, buf: '' }; upstream.set(pid, u); emitStatus();
-      sock.on('data', d => { u.buf += d; let i; while ((i = u.buf.indexOf('\n')) >= 0) { const l = u.buf.slice(0, i); u.buf = u.buf.slice(i + 1); if (l.trim()) fromUpstream(pid, l); } });
+      sock.on('data', d => { u.buf += d; let i; while ((i = u.buf.indexOf('\n')) >= 0) { const l = u.buf.slice(0, i); u.buf = u.buf.slice(i + 1); if (l.trim()) fromUpstream(pid, l).catch(() => {}); } });
       sock.on('close', () => {
         upstream.delete(pid); emitStatus();
         for (const k of pendingReq.keys()) if (k.startsWith(pid + ':')) pendingReq.delete(k);
@@ -202,7 +204,11 @@ export function createRelay(opts = {}) {
         for (const k of [...pendingPushSeen]) if (k.startsWith(pid + ':')) pendingPushSeen.delete(k);
         for (const [k, t] of pendingPushTimers) if (k.startsWith(pid + ':')) { clearTimeout(t); pendingPushTimers.delete(k); }
         syncPending();
-        for (const [rid, r] of routes) if (r.internalCall && r.pid === pid) { routes.delete(rid); clearTimeout(r.timer); r.reject(new Error('upstream closed')); }
+        for (const [rid, r] of routes) if (r.pid === pid) {              // every route waiting on this upstream dies with it
+          routes.delete(rid); clearTimeout(r.timer);
+          if (r.internalCall) r.reject(new Error('upstream closed'));
+          else if (r.client) send(r.client, { type: 'rpc-result', id: r.clientId, server: pid, error: { code: -32013, message: 'the ZCode server closed before answering' } });
+        }
       });
       sock.on('error', () => {});
       const sid = ++relayId; routes.set(sid, { internal: true, pid });       // ask the wrapper what is already pending
@@ -271,7 +277,7 @@ export function createRelay(opts = {}) {
     } catch { /* the next round tries again */ }
   }
 
-  function fromUpstream(pid, line) {
+  async function fromUpstream(pid, line) {
     let m; try { m = JSON.parse(line); } catch { return; }
     live.observe(m);                                                // every line feeds the running tracker; it ignores what is not session traffic
     if (m.id !== undefined && !m.method) {                          // reply
@@ -287,7 +293,7 @@ export function createRelay(opts = {}) {
       delete m.tapReply; m.id = r.clientId;
       // The agent reports updatedAt = now for every conversation it has loaded; ZCode's database has the real time.
       if (r.method === 'session/list' && Array.isArray(m.result?.sessions)) {
-        m.result.sessions = withRealActivity(m.result.sessions);
+        m.result.sessions = await withRealActivity(m.result.sessions);   // async: a slow database waits off the event loop, the stream keeps moving
         m.result.sessions = live.apply(m.result.sessions);          // the live verdict wins, after the real times
       }
       return send(r.client, { type: 'rpc-result', server: pid, ...fitForMobile(r.method, m) });
@@ -332,12 +338,24 @@ export function createRelay(opts = {}) {
   function callUpstream(u, method, params) {
     return new Promise((resolve, reject) => {
       const id = ++relayId;
-      const timer = setTimeout(() => { if (routes.delete(id)) reject(new Error(`${method} timed out`)); }, 30_000);
+      const timer = setTimeout(() => { if (routes.delete(id)) reject(new Error(`${method} timed out`)); }, rpcTimeoutMs);
       timer.unref?.();
       routes.set(id, { internalCall: true, pid: u.meta.pid, resolve, reject, timer });
       try { u.sock.write(JSON.stringify({ id, method, params }) + '\n'); }
       catch (err) { clearTimeout(timer); routes.delete(id); reject(err); }
     });
+  }
+
+  // A phone-facing request gets the same deadline as the relay's internal calls: when the timer fires —
+  // or the upstream closes first — the phone gets one clear error and the route dies.
+  function clientRoute(c, clientId, pid, method) {
+    const id = ++relayId;
+    const timer = setTimeout(() => {
+      if (routes.delete(id)) send(c, { type: 'rpc-result', id: clientId, server: pid, error: { code: -32013, message: 'the request timed out upstream' } });
+    }, rpcTimeoutMs);
+    timer.unref?.();
+    routes.set(id, { client: c, clientId, pid, method, timer });
+    return id;
   }
 
   // ---- pairing / devices -------------------------------------------------------
@@ -600,10 +618,10 @@ export function createRelay(opts = {}) {
           if (!u || !p) return fail('request is not pending (already answered?)');
           if (p.method !== 'interaction/requestPermission') return fail('only permission requests can be answered from mobile');
           if (!DECISIONS.has(m.decision)) return fail('decision must be allow or deny');
-          const id = ++relayId; routes.set(id, { client: c, clientId: m.rid, pid: m.server });
+          const id = clientRoute(c, m.rid, m.server, 'tap/respond');
           log.log(`respond ${c.device.id} ${m.decision} ${p.params?.toolName ?? '?'} -> ${m.server}`);
           try { u.sock.write(JSON.stringify({ id, method: 'tap/respond', params: { id: m.id, result: { decision: m.decision, ...(typeof m.reason === 'string' ? { reason: m.reason.slice(0, 500) } : {}) } } }) + '\n'); }
-          catch { routes.delete(id); fail('the server just went away'); }   // a dead socket must not throw out of the message handler
+          catch { clearTimeout(routes.get(id)?.timer); routes.delete(id); fail('the server just went away'); }   // a dead socket must not throw out of the message handler
           return;
         }
         if (m.type === 'resume') { for (const e of replay) if (e.seq > (m.since ?? 0)) send(c, { type: 'event', ...e }); return; }
@@ -616,7 +634,7 @@ export function createRelay(opts = {}) {
           if (!u) return send(c, { type: 'rpc-result', id: m.id, error: { code: -32002, message: 'no ZCode server (is Zode.app running?)' } });
           if (m.method === 'attachment/upload') return uploadAttachment(c, m, u);        // multi-step: resume, begin, chunks, commit
           if (m.method === 'session/send' && Array.isArray(m.params?.attachments) && m.params.attachments.length) return sendWithAttachments(c, m, u);
-          const id = ++relayId; routes.set(id, { client: c, clientId: m.id, pid: u.meta.pid, method: m.method });
+          const id = clientRoute(c, m.id, u.meta.pid, m.method);
           const cmd = COMMANDS[m.method];
           if (cmd) {                                                      // rename goes out as the agent's one command shape
             log.log(`${cmd.verb} ${c.device.id} ${m.params.sessionId}`);
@@ -670,6 +688,7 @@ export function createRelay(opts = {}) {
     if (pt) clearInterval(pt);
     for (const u of upstream.values()) u.sock.destroy();
     upstream.clear();
+    for (const r of routes.values()) clearTimeout(r.timer);
     routes.clear(); pendingReq.clear(); live.setPending([]);
     for (const c of [...clients]) { try { c.ws.close(1001, 'relay stopping'); } catch {} }
     clients.clear();
