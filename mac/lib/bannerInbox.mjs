@@ -73,5 +73,9 @@ export function startBannerInbox({ dir, onBanner, fs: nodeFs = fs, now = Date.no
     watcher.on?.('error', () => {});
   } catch { /* without fs.watch the startup scan already ran; tools retry with fresh files */ }
 
-  return { stop() { try { watcher?.close(); } catch { /* already closed */ } } };
+  // fs.watch can miss events; a slow rescan catches whatever it dropped (`seen` stops double delivery).
+  const sweep = setInterval(scan, 1500);
+  sweep.unref?.();
+
+  return { stop() { clearInterval(sweep); try { watcher?.close(); } catch { /* already closed */ } } };
 }
