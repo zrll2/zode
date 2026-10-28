@@ -508,6 +508,48 @@ test('autoAllow survives an upstream that dies mid-flight', async () => {
   }
 });
 
+test('a phone rpc whose upstream never answers is failed after the timeout, once', async () => {
+  const port = await freePort();
+  const up = fakeUpstream();
+  const relay = createRelay({ port, stateDir: path.join(up.home, 'state'), tapDir: up.tapDir, rpcTimeoutMs: 120, log: silent });
+  await relay.start();
+  try {
+    await waitFor(() => relay.status().upstreams === 1);
+    const { token } = await (await pair(port, relay.createPairing().code, 'phone')).json();
+    const { ws } = await authed(`ws://127.0.0.1:${port}`, token);
+
+    ws.send(JSON.stringify({ type: 'rpc', id: 61, method: 'session/read', params: { sessionId: 'sess_slow' } }));
+    await waitFor(() => up.received.length === 1);                       // forwarded upstream, which never answers
+    const res = await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === 61);
+    assert.equal(res.error.code, -32013);
+    assert.match(res.error.message, /timed out/);
+    await sleep(150);
+    assert.equal(up.received.length, 1);                                 // no retry, no further traffic
+    ws.close();
+  } finally { await relay.stop(); await up.close(); }
+});
+
+test('an upstream closing fails the phone routes waiting on it', async () => {
+  const port = await freePort();
+  const up = fakeUpstream();
+  const relay = createRelay({ port, stateDir: path.join(up.home, 'state'), tapDir: up.tapDir, rpcTimeoutMs: 5000, log: silent });
+  await relay.start();
+  try {
+    await waitFor(() => relay.status().upstreams === 1);
+    const { token } = await (await pair(port, relay.createPairing().code, 'phone')).json();
+    const { ws } = await authed(`ws://127.0.0.1:${port}`, token);
+
+    ws.send(JSON.stringify({ type: 'rpc', id: 62, method: 'session/read', params: { sessionId: 'sess_dying' } }));
+    await waitFor(() => up.received.length === 1);                       // pending, no answer yet
+    await up.close();                                                    // the upstream socket dies mid-flight
+    const res = await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === 62);
+    assert.equal(res.error.code, -32013);
+    assert.match(res.error.message, /closed/);
+    assert.equal(relay.status().upstreams, 0);
+    ws.close();
+  } finally { await relay.stop(); await up.close(); }
+});
+
 test('askRisky keeps the destructive ones waiting while auto-allow handles the rest', async () => {
   const port = await freePort();
   const up = fakeUpstream();
