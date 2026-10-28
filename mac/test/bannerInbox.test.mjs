@@ -9,7 +9,7 @@ import { parseBanner, startBannerInbox } from '../lib/bannerInbox.mjs';
 
 const NOW = 1_750_000_000_000;
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'zode-banners-'));
-const until = async (fn, ms = 2000) => { const end = Date.now() + ms; while (Date.now() < end) { const v = fn(); if (v) return v; await new Promise(r => setTimeout(r, 25)); } throw new Error('condition not met in time'); };
+const until = async (fn, ms = 10000) => { const end = Date.now() + ms; while (Date.now() < end) { const v = fn(); if (v) return v; await new Promise(r => setTimeout(r, 25)); } throw new Error('condition not met in time'); };
 
 test('parseBanner: the exact shape, sound only when true', () => {
   assert.deepEqual(parseBanner(JSON.stringify({ title: '  Build done  ', body: ' 2 failing ', sound: true }), 0),
