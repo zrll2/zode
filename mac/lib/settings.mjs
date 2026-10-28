@@ -42,3 +42,18 @@ export function saveSettings(file, settings = {}) {
   }
   return s;
 }
+
+// The Permissions control's three choices, derived from the two stored booleans. Ask: the user
+// answers everything; Auto: everything allowed; Careful: allowed, but the destructive ones wait.
+export function presetOf({ autoAllow, askRisky } = {}) {
+  if (autoAllow !== true) return 'ask';
+  return askRisky === true ? 'careful' : 'auto';
+}
+
+// Set the two booleans from a preset name. An unknown name changes nothing and returns false.
+export function applyPreset(settings, name) {
+  if (name !== 'ask' && name !== 'auto' && name !== 'careful') return false;
+  settings.autoAllow = name !== 'ask';
+  settings.askRisky = name === 'careful';
+  return true;
+}

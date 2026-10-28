@@ -17,6 +17,7 @@ export function orderTitle(line) {
 // summary) and `liveSince` (when the current run began) so the panel can show ages and durations
 // relative to `now`. work.pending stays keyed by sessionId, oldest request first, exactly as
 // refreshSessions() builds it.
+import { presetOf } from './settings.mjs';
 
 const MIN = 60 * 1000;
 
@@ -224,6 +225,7 @@ export function buildPanelModel(input, now = Date.now()) {
         keepAwake: s.keepAwake === true,
         autoAllow: s.autoAllow !== false,                     // the setting defaults on: missing or junk means on
         askRisky: s.askRisky === true,
+        preset: presetOf({ autoAllow: s.autoAllow !== false, askRisky: s.askRisky === true }),
         notify: s.notify !== false,                           // the setting defaults on: missing or junk means on
         claudeCode: s.claudeCode !== false,                   // the setting defaults on: missing or junk means on
         relayEnabled: s.running === true,
@@ -249,7 +251,7 @@ export function buildPanelModel(input, now = Date.now()) {
       usage: null, usageLabel: null, flow: null,
       connected: false,
       settings: {
-        keepAwake: false, autoAllow: true, askRisky: false, notify: true, claudeCode: true, relayEnabled: false, launchAtLogin: false, foldFinished: false,
+        keepAwake: false, autoAllow: true, askRisky: false, preset: 'auto', notify: true, claudeCode: true, relayEnabled: false, launchAtLogin: false, foldFinished: false,
         addressId: '', addresses: [], version: '', selfUpdate: 'idle',
       },
       voice: voiceOf(null),

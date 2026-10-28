@@ -48,12 +48,32 @@ function clockFor(since, now) {
   return h > 0 ? `${h}:${two(m)}:${two(sec)}` : `${m}:${two(sec)}`;
 }
 
+// One approvals-history row, drawn: the summary (or tool) on the left, the status word, who
+// answered and the age on the right, plus the risky flag. Junk input stays a quiet pending row.
+function approvalRowOf(r, now = Date.now()) {
+  const outcome = ['allowed', 'rejected', 'pending', 'cancelled', 'unavailable'].includes(r?.outcome) ? r.outcome : 'pending';
+  const status = { allowed: 'Allowed', rejected: 'Denied', pending: 'Pending', cancelled: 'Cancelled', unavailable: 'Failed' }[outcome];
+  const device = typeof r?.device === 'string' && r.device ? r.device : '';
+  const source = r?.by === 'auto' ? '· auto'
+    : r?.by === 'phone' ? `· phone${device ? ` ${device}` : ''}`
+    : r?.by === 'panel' ? '· Mac' : '';
+  const at = Number.isFinite(r?.at) && r.at > 0 ? r.at : (Number.isFinite(r?.askedAt) ? r.askedAt : 0);
+  return {
+    title: (typeof r?.summary === 'string' && r.summary) || (typeof r?.tool === 'string' && r.tool) || '',
+    status,
+    source,
+    ago: agoFor(at, Number.isFinite(now) ? now : Date.now()),
+    risky: r?.risky === true,
+  };
+}
+
 if (typeof window !== 'undefined') {
   window.agoFor = agoFor;
   window.clockFor = clockFor;
   window.runFor = runFor;
   window.finishedDefaultOpen = finishedDefaultOpen;
   window.addressSegOptions = addressSegOptions;
+  window.approvalRowOf = approvalRowOf;
 }
 
-export { runFor, agoFor, clockFor, finishedDefaultOpen, addressSegOptions };
+export { runFor, agoFor, clockFor, finishedDefaultOpen, addressSegOptions, approvalRowOf };

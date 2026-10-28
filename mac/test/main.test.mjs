@@ -60,3 +60,17 @@ test('mac/preload.cjs exposes approvalLog to the panel', () => {
   const preload = fs.readFileSync(path.join(root, 'preload.cjs'), 'utf8');
   assert.match(preload, /approvalLog: \(\) => ipcRenderer\.invoke\(['"]zode:approvalLog['"]\)/);
 });
+
+test('mac/main.mjs takes setPreset and rejects junk; the old two-switch toggles are gone', async () => {
+  let esbuild;
+  try { esbuild = (await import('esbuild')).default ?? (await import('esbuild')); } catch { return; }   // dev dependency not installed
+  const result = await esbuild.build({
+    entryPoints: [path.join(root, 'main.mjs')], bundle: true, platform: 'node', format: 'esm',
+    external: ['electron', 'electron-updater', 'qrcode', 'ws'], write: false, logLevel: 'silent',
+  });
+  const js = result.outputFiles[0].text;
+  assert.match(js, /name === ["']setPreset["']/);
+  assert.match(js, /applyPreset\(settings, p\.value\)/);                       // junk names return false and change nothing
+  assert.doesNotMatch(js, /toggleAutoAllow|toggleAskRisky/);                   // the two switches are gone, presets only
+  assert.doesNotMatch(js, /p\.key === ["']autoAllow["']|p\.key === ["']askRisky["']/);
+});

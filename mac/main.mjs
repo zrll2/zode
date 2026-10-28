@@ -12,7 +12,7 @@ import QRCode from 'qrcode';
 import { createRelay } from '../relay/service.mjs';
 import { createAuditLog } from '../relay/audit.mjs';
 import { detectAddresses, defaultAddress, autoAddresses } from './lib/addresses.mjs';
-import { loadSettings, saveSettings } from './lib/settings.mjs';
+import { loadSettings, saveSettings, applyPreset } from './lib/settings.mjs';
 import { buildMenuTemplate } from './lib/menu.mjs';
 import { buildPanelModel } from './lib/panel.mjs';
 import { panelBounds, trayImageName, isTemplate, trayTitle } from './lib/panelWindow.mjs';
@@ -886,8 +886,6 @@ async function start() {
       toggleFoldFinished: () => { settings.foldFinished = !settings.foldFinished; save(); pushPanel(); },
       toggleLaunchAtLogin: () => { settings.launchAtLogin = !settings.launchAtLogin; save(); app.setLoginItemSettings({ openAtLogin: settings.launchAtLogin }); refresh(); },
       toggleKeepAwake: () => { settings.keepAwake = !(settings.keepAwake === true); save(); updatePowerBlocker(); refresh(); },
-      toggleAutoAllow: () => { settings.autoAllow = !(settings.autoAllow === true); save(); refresh(); },   // the relay reads the flag per request, so this applies at once
-      toggleAskRisky: () => { settings.askRisky = !(settings.askRisky === true); save(); refresh(); },
       toggleNotify: () => { settings.notify = !(settings.notify === true); save(); refresh(); },
       toggleClaudeCode: () => { settings.claudeCode = !(settings.claudeCode === true); save(); syncClaudeCode(); refresh(); },
       setup: () => showSetupWindow(),
@@ -1142,12 +1140,12 @@ async function start() {
         actions.openEngine();
       } else if (name === 'refresh') {
         actions.refreshWork();
+      } else if (name === 'setPreset') {
+        if (applyPreset(settings, p.value)) { save(); refresh(); }     // the relay reads the flag per request, so this applies at once
       } else if (name === 'toggle') {
         if (p.key === 'keepAwake') actions.toggleKeepAwake();
         else if (p.key === 'relayEnabled') actions.toggleRelay();
         else if (p.key === 'launchAtLogin') actions.toggleLaunchAtLogin();
-        else if (p.key === 'autoAllow') actions.toggleAutoAllow();
-        else if (p.key === 'askRisky') actions.toggleAskRisky();
         else if (p.key === 'notify') actions.toggleNotify();
         else if (p.key === 'claudeCode') actions.toggleClaudeCode();
       } else if (name === 'removePhone') {
