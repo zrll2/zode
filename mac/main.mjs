@@ -23,6 +23,7 @@ import { listSessions, listPending, readTapServers, summarize, withLiveStatus, r
 import { lineStates, notificationsFor } from './lib/notify.mjs';
 import { createEventFeed } from './lib/events.mjs';
 import { installSkill, removeSkill } from './lib/claudeCode.mjs';
+import { startBannerInbox } from './lib/bannerInbox.mjs';
 import { createSelfUpdater } from './lib/selfupdate.mjs';
 import { createStt } from './lib/stt.mjs';
 import { buildPrompt } from './lib/vocab.mjs';
@@ -133,6 +134,22 @@ async function start() {
           appendLog('zode: Claude Code skill removed');
         }
       } catch (err) { appendLog(`zode: claude code skill: ${err?.stack || err}`); }
+    };
+    // The banner inbox: tools drop JSON banners into ~/.zode/banners/ and Zode shows them as its own
+    // notifications (so banners carry Zode's logo). Starts once, near the rest of the push surface.
+    let bannerInbox = null;
+    const showDropBanner = (banner) => {
+      try {
+        if (settings.notify === false || Notification.isSupported?.() !== true) return;
+        const n = new Notification({ title: banner.title || 'Zode', body: banner.body, silent: !banner.sound });
+        n.show();
+      } catch (err) { appendLog(`zode: banner: ${err?.stack || err}`); }
+    };
+    const startBannerInboxOnce = () => {
+      try {
+        bannerInbox = startBannerInbox({ dir: path.join(HOME, '.zode', 'banners'), onBanner: showDropBanner });
+        appendLog('zode: banner inbox watching ~/.zode/banners');
+      } catch (err) { appendLog(`zode: banner inbox: ${err?.stack || err}`); }
     };
     let workActive = 0;                                // the active count last logged, so a change logs once
     let workRefresh = null;
@@ -1328,7 +1345,7 @@ async function start() {
 
     app.setLoginItemSettings({ openAtLogin: settings.launchAtLogin });
     app.on('second-instance', () => showPairWindow());              // a second launch asks this one to show the pairing window
-    app.on('before-quit', () => { quitting = true; relay?.stop().catch(() => {}); });
+    app.on('before-quit', () => { quitting = true; relay?.stop().catch(() => {}); bannerInbox?.stop(); });
 
     // The old integrated copy holds the phone connection for itself (same settings, same paired
     // phones, same port). Ask before the relay starts, so the user never sees a port error first.
@@ -1353,6 +1370,7 @@ async function start() {
 
     await applyRelay();
     syncClaudeCode();                                 // refresh (or remove) the Claude Code skill for this launch
+    startBannerInboxOnce();
 
     checkUpdate();
     setInterval(checkUpdate, UPDATE_CHECK_MS);
