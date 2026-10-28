@@ -1,5 +1,10 @@
 # Zode for Mac
 
+## 1.5.5
+- **One Permissions choice.** The two switches for automatic approval are now a single control in Settings: Ask, Auto (the default) or Careful (automatic, except risky commands).
+- **Approvals history.** Settings lists the last 30 permission requests: what was asked, whether it was allowed or denied, and whether Zode, your phone or the Mac answered. If ZCode cannot be reached, a request is never allowed by accident.
+- The token rate no longer sits on top of the chart, and a banner dropped by Claude Code is no longer lost if macOS misses the file event.
+
 ## 1.5.4
 - **Phone push works end to end.** The push service now handles Apple's answers correctly, and the phone keeps its push key and id across restarts. Pair your phone again once to turn it on.
 - Approving from the panel always acts on the request ZCode is really waiting on, and settings are saved safely even if the app quits mid-write.
