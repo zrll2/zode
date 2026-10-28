@@ -41,7 +41,7 @@ test('register: a valid phone gets a working push id and secret; junk gets 400',
   const deps = testDeps();
   const out = await register(deps);
   assert.deepEqual(out, { status: 200, body: { pushId: out.body.pushId, secret: out.body.secret } });
-  assert.deepEqual(deps.codec.decrypt(out.body.pushId), { t: 'a'.repeat(64), e: 'production' });
+  assert.deepEqual(deps.codec.decrypt(out.body.pushId), { t: 'a'.repeat(64), e: 'production', b: 'sg.comex.zode' });
   assert.equal(out.body.secret, deps.auth(out.body.pushId));
 
   for (const bad of [
@@ -53,9 +53,6 @@ test('register: a valid phone gets a working push id and secret; junk gets 400',
     { deviceToken: 'a'.repeat(64), env: 'development' },                // unknown env
     { deviceToken: 'a'.repeat(64), env: 1 },
     { deviceToken: 42, env: 'production' },
-    { deviceToken: 'a'.repeat(64), env: 'production', bundleId: 7 },    // bundle id must be a string
-    { deviceToken: 'a'.repeat(64), env: 'production', bundleId: '' },
-    { deviceToken: 'a'.repeat(64), env: 'production', bundleId: 'b'.repeat(201) },
   ]) {
     assert.deepEqual(await handleRegister(bad, deps), { status: 400, body: { error: 'bad-request' } }, JSON.stringify(bad).slice(0, 40));
   }
@@ -92,12 +89,27 @@ test('push: kind done drops the sound and drops to priority 5', async () => {
   assert.equal(JSON.parse(body).aps.sound, undefined);
 });
 
-test('push: the registered bundle id wins over the default topic', async () => {
+test('register: a client-supplied bundle id is accepted but never used; the payload always carries the server topic', async () => {
+  const deps = testDeps();
+  const reg = await register(deps, { bundleId: 'com.example.custom' });       // accepted for compatibility...
+  assert.equal(reg.status, 200);
+  assert.deepEqual(deps.codec.decrypt(reg.body.pushId), { t: 'a'.repeat(64), e: 'production', b: 'sg.comex.zode' });
+  for (const junk of [7, '', 'b'.repeat(201), { evil: true }]) {              // ...and never validated either
+    assert.equal((await register(deps, { bundleId: junk })).status, 200, JSON.stringify(junk));
+  }
+});
+
+test('push: the apns-topic is always the server topic, even for a push id carrying a foreign bundle id', async () => {
   const fake = fakeApns({ status: 200 });
   const deps = testDeps({ fakeApns: fake });
   const reg = await register(deps, { bundleId: 'com.example.custom' });
   await handlePush({ pushId: reg.body.pushId, auth: reg.body.secret, kind: 'ask', sealed: 'AAA' }, deps);
-  assert.equal(fake.calls[0].headers['apns-topic'], 'com.example.custom');
+  assert.equal(fake.calls[0].headers['apns-topic'], 'sg.comex.zode');
+
+  // a legacy push id minted before the fix may carry an attacker-chosen topic; it is ignored too
+  const legacy = deps.codec.encrypt({ t: 'a'.repeat(64), e: 'production', b: 'com.evil.app' });
+  await handlePush({ pushId: legacy, auth: deps.auth(legacy), kind: 'ask', sealed: 'AAA' }, deps);
+  assert.equal(fake.calls[1].headers['apns-topic'], 'sg.comex.zode');
 });
 
 test('push: auth and push id are checked before anything else; a tampered id is 400', async () => {
@@ -156,6 +168,27 @@ test('limits: 30/min per push id with burst 10, and 20 registrations per hour pe
   const regDeps = testDeps();
   for (let i = 0; i < 20; i++) assert.equal((await register(regDeps)).status, 200);
   assert.deepEqual(await register(regDeps), { status: 429, body: { error: 'rate-limited' } });
+});
+
+test('ipOf: the platform header wins, then the last x-forwarded-for entry, then the socket address', () => {
+  assert.equal(ipOf({ headers: { 'x-vercel-forwarded-for': '203.0.113.9', 'x-forwarded-for': '1.1.1.1, 8.8.8.8' } }), '203.0.113.9');
+  assert.equal(ipOf({ headers: { 'x-vercel-forwarded-for': '  ' } }), 'unknown');            // present but empty: not trusted
+  assert.equal(ipOf({ headers: { 'x-forwarded-for': '1.1.1.1, 8.8.8.8' } }), '8.8.8.8');     // last, never the first
+  assert.equal(ipOf({ headers: { 'x-forwarded-for': '  8.8.8.8  ' } }), '8.8.8.8');          // trimmed
+  assert.equal(ipOf({ headers: {}, socket: { remoteAddress: '10.0.0.1' } }), '10.0.0.1');
+  assert.equal(ipOf({ headers: {} }), 'unknown');
+  assert.equal(ipOf(undefined), 'unknown');
+});
+
+test('register: the rate limit follows the real client ip, so spoofed x-forwarded-for entries cannot reset it', async () => {
+  const deps = testDeps();
+  const registerFrom = (headers) =>
+    handleRegister({ deviceToken: 'a'.repeat(64), env: 'production' }, { ...deps, ip: ipOf({ headers }) });
+  for (let i = 0; i < 20; i++) {                                             // a fresh fake first hop every request
+    assert.equal((await registerFrom({ 'x-forwarded-for': `${100 + i}.0.0.1, 198.51.100.7` })).status, 200, `spoof ${i}`);
+  }
+  assert.deepEqual(await registerFrom({ 'x-forwarded-for': '199.0.0.1, 198.51.100.7' }), { status: 429, body: { error: 'rate-limited' } });
+  assert.equal((await registerFrom({ 'x-vercel-forwarded-for': '203.0.113.5' })).status, 200);   // the platform header is its own bucket
 });
 
 test('payload cap: the 4 KB ceiling is enforced on the built payload', () => {
@@ -225,4 +258,22 @@ test('defaultDeps: no server key means no service; the topic default comes from 
   assert.equal(typeof deps.log, 'function');
   assert.equal(deps.topic, 'sg.comex.zode');
   assert.equal(defaultDeps({ ...env, APNS_TOPIC: 'com.other.app' }).topic, 'com.other.app');
+});
+
+test('defaultDeps: a full push through the real deps with a realistic env goes out and does not throw', async () => {
+  const pair = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' });   // exactly what APNS_KEY holds in prod
+  const pem = pair.privateKey.export({ type: 'sec1', format: 'pem' });
+  const fake = fakeApns({ status: 200 });
+  const dd = defaultDeps({
+    PUSH_SERVER_KEY: crypto.randomBytes(32).toString('base64'),
+    APNS_KEY: pem, APNS_KEY_ID: 'KID123', APNS_TEAM_ID: 'TEAMXYZ',
+  });
+  dd.connect = fake.connect;                                                     // stand in for node:http2
+  const reg = await handleRegister({ deviceToken: 'a'.repeat(64), env: 'production' }, { ...dd, ip: '198.51.100.7' });
+  const out = await handlePush({ pushId: reg.body.pushId, auth: reg.body.secret, kind: 'ask', sealed: 'AAA' }, dd);
+  assert.deepEqual(out, { status: 200, body: { ok: true } });
+  assert.equal(fake.calls.length, 1);
+  assert.equal(fake.calls[0].headers['apns-topic'], 'sg.comex.zode');
+  const [h] = fake.calls[0].headers.authorization.replace(/^bearer /, '').split('.');
+  assert.deepEqual(JSON.parse(Buffer.from(h, 'base64url').toString('utf8')), { alg: 'ES256', kid: 'KID123' });  // the real token source signed it
 });

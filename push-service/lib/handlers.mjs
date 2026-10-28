@@ -62,21 +62,26 @@ export async function serveApi({ req, res, route, method, deps, run }) {
 }
 
 export function ipOf(req) {
+  // x-vercel-forwarded-for is set by the edge, so the client cannot forge it. A raw
+  // x-forwarded-for chain is client-written; only its last entry (the nearest proxy's claim) is
+  // even remotely trustworthy — never the first, which anyone can set.
+  const platform = String(req?.headers?.['x-vercel-forwarded-for'] ?? '').split(',')[0].trim();
+  if (platform) return platform;
   const raw = req?.headers?.['x-forwarded-for'] ?? req?.socket?.remoteAddress ?? 'unknown';
-  return String(raw).split(',')[0].trim() || 'unknown';
+  const parts = String(raw).split(',');
+  return parts[parts.length - 1].trim() || 'unknown';
 }
 
-// POST /api/register { deviceToken, env, bundleId? } -> { pushId, secret }
+// POST /api/register { deviceToken, env, bundleId? } -> { pushId, secret }. A client-supplied
+// bundleId is accepted for compatibility but never used: the APNs topic is server policy
+// (env.APNS_TOPIC, default sg.comex.zode), so no caller can aim alerts at another app.
 export async function handleRegister(input, deps) {
   const now = deps.now?.() ?? Date.now();
   if (!deps.registerLimit.take(deps.ip ?? 'unknown', now)) return { status: 429, body: { error: 'rate-limited' } };
   const b = input ?? {};
   if (!isHexToken(b.deviceToken)) return { status: 400, body: { error: 'bad-request' } };
   if (b.env !== 'production' && b.env !== 'sandbox') return { status: 400, body: { error: 'bad-request' } };
-  if (b.bundleId !== undefined && (typeof b.bundleId !== 'string' || b.bundleId.length < 1 || b.bundleId.length > 200)) {
-    return { status: 400, body: { error: 'bad-request' } };
-  }
-  const pushId = deps.codec.encrypt({ t: b.deviceToken, e: b.env, ...(b.bundleId !== undefined ? { b: b.bundleId } : {}) });
+  const pushId = deps.codec.encrypt({ t: b.deviceToken, e: b.env, b: deps.topic });
   return { status: 200, body: { pushId, secret: deps.auth(pushId) } };
 }
 
@@ -128,7 +133,7 @@ export async function handlePush(input, deps) {
     token: deps.tokenSource(),
     host: payload.e === 'sandbox' ? 'api.sandbox.push.apple.com' : 'api.push.apple.com',
     deviceToken: payload.t,
-    bundleId: typeof payload.b === 'string' && payload.b ? payload.b : deps.topic,
+    bundleId: deps.topic,                                     // never payload.b: the topic is server policy
     body,
     collapseId: b.collapseId,
     priority: b.kind === 'done' ? 5 : 10,

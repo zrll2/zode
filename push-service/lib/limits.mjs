@@ -1,14 +1,17 @@
 // Abuse limits. Honest caveat: serverless instances are short lived and run side by side, so these
 // in-memory buckets are per instance and vanish on every deploy or scale-out — best effort only.
 // The hard caps that always apply are the 8 KB body and APNs' own feedback.
-const MAX_KEYS = 10000;                       // forget cold keys before the map can grow without bound
+const MAX_KEYS = 10000;                       // when full, the oldest keys are evicted so the map cannot grow without bound
 
 // A token bucket: `capacity` is the burst, `perMs` the steady refill rate. take() is false when dry.
 export function createBucket({ capacity, perMs }) {
   const buckets = new Map();
   const take = function take(key, now = Date.now()) {
-    if (buckets.size > MAX_KEYS) {
-      for (const [k, b] of buckets) if (now - b.at > 3_600_000) buckets.delete(k);
+    if (buckets.size >= MAX_KEYS && !buckets.has(key)) {
+      for (const k of buckets.keys()) {         // a Map iterates oldest-inserted first: drop from the front
+        buckets.delete(k);
+        if (buckets.size < MAX_KEYS) break;
+      }
     }
     let b = buckets.get(key);
     if (!b) buckets.set(key, b = { tokens: capacity, at: now });
