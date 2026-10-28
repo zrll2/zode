@@ -143,6 +143,7 @@ export function createRelay(opts = {}) {
   const pushDelayMs = Number.isFinite(opts.pushDelayMs) ? Math.max(0, opts.pushDelayMs) : 1500;
   const rpcTimeoutMs = Number.isFinite(opts.rpcTimeoutMs) ? Math.max(1, opts.rpcTimeoutMs) : RPC_TIMEOUT_MS;   // tests shorten it; the deadline stays one for everything
   const log = opts.log ?? console;
+  const audit = opts.audit ?? null;           // the approval audit log (relay/audit.mjs); absent -> no bookkeeping
   const stt = opts.stt ?? null;               // the host's speech engine ({transcribe, status, defaultLanguage}); absent -> voice-off
   const sttLimiter = createLimiter();         // per device: one transcribe in flight, at most 20 per minute
   const DEVICES = path.join(stateDir, 'devices.json');
@@ -225,6 +226,15 @@ export function createRelay(opts = {}) {
     try { u.sock.write(JSON.stringify({ id, method: 'tap/pending', params: {} }) + '\n'); } catch {}
   }
 
+  // One asked row per permission request that becomes pending here (the log ignores repeats), before
+  // auto-allow gets its say. Only permissions: questions are not approvals.
+  function auditAsk(pid, entry) {
+    if (!audit || !entry || typeof entry !== 'object' || entry.method !== 'interaction/requestPermission') return;
+    try {
+      audit.asked({ id: `${pid}:${entry.id}`, tool: entry.params?.toolName, summary: summarizeRequest(entry.params).text, risky: isRiskyRequest(entry.params), sessionId: entry.params?.sessionId });
+    } catch { /* the log never blocks an answer */ }
+  }
+
   // Auto-allow, when the host turned it on: answer a permission request the moment the relay knows
   // it and strike it from the pending list (the wrapper's tap/resolved follows anyway). Questions
   // are never answered here — they need a human. One answer per request even if a reconcile lists
@@ -243,7 +253,8 @@ export function createRelay(opts = {}) {
     if (!u) return;
     try {
       u.sock.write(JSON.stringify({ id: ++relayId, method: 'tap/respond', params: { id: entry.id, result: { decision: 'allow', reason: 'Approved automatically by Zode' } } }) + '\n');
-    } catch { return; }
+    } catch { audit?.decided({ id: key, outcome: 'unavailable', by: 'none' }); return; }   // a dead socket never allows anything
+    audit?.decided({ id: key, outcome: 'allowed', by: 'auto' });
     autoAnswered.add(key);
     pendingReq.delete(key);
     log.log(`auto-allowed ${typeof entry.params?.toolName === 'string' && entry.params.toolName ? entry.params.toolName : 'request'} -> ${pid}`);
@@ -265,13 +276,17 @@ export function createRelay(opts = {}) {
         listed.add(String(p.id));
         if (pendingReq.has(key) || autoAnswered.has(key)) continue;     // known, or already answered by us
         pendingReq.set(key, { server: pid, ...p, seenAt: now });
+        auditAsk(pid, p);
         autoAllowRequest(pid, p);                                       // may answer and remove it again
       }
       const cutoff = now - 5_000;
       for (const [key, p] of pendingReq) {
         if (p.server !== pid || listed.has(String(key.slice(String(pid).length + 1)))) continue;
         const at = Number.isFinite(p.at) && p.at > 1e12 ? p.at : p.seenAt ?? now;   // when the request really became known
-        if (at < cutoff) pendingReq.delete(key);
+        if (at < cutoff) {
+          if (audit && p.method === 'interaction/requestPermission') audit.decided({ id: key, outcome: 'cancelled', by: 'none' });   // vanished with no answer
+          pendingReq.delete(key);
+        }
       }
       syncPending();
     } catch { /* the next round tries again */ }
@@ -303,6 +318,7 @@ export function createRelay(opts = {}) {
       const now = Date.now();
       if (!autoAnswered.has(`${pid}:${m.id}`)) {                        // an already-answered repeat stays out
         pendingReq.set(`${pid}:${m.id}`, { server: pid, id: m.id, method: m.method, params: m.params, at: now, seenAt: now });
+        auditAsk(pid, m);
         autoAllowRequest(pid, m);                                       // may answer and remove it again
         if (pendingReq.has(`${pid}:${m.id}`)) schedulePendingPush(pid, m);   // still pending: the phone hears about it
       }
@@ -310,10 +326,13 @@ export function createRelay(opts = {}) {
     }
     if (m.method === 'tap/resolved') {
       const key = `${pid}:${m.params?.id}`;
+      const known = pendingReq.get(key);
       pendingPushSeen.delete(key);                                      // answered: the scheduled push cancels itself
       const timer = pendingPushTimers.get(key);
       if (timer) { clearTimeout(timer); pendingPushTimers.delete(key); }
       pendingReq.delete(key); syncPending();
+      // Gone without this relay answering: cancelled — unless a decision already won the id, which the log keeps.
+      if (audit && known?.method === 'interaction/requestPermission') audit.decided({ id: key, outcome: 'cancelled', by: 'none' });
     }
     const e = { seq: ++seq, server: pid, msg: m };
     replay.push(e); if (replay.length > REPLAY_MAX) replay.shift();
@@ -621,7 +640,8 @@ export function createRelay(opts = {}) {
           const id = clientRoute(c, m.rid, m.server, 'tap/respond');
           log.log(`respond ${c.device.id} ${m.decision} ${p.params?.toolName ?? '?'} -> ${m.server}`);
           try { u.sock.write(JSON.stringify({ id, method: 'tap/respond', params: { id: m.id, result: { decision: m.decision, ...(typeof m.reason === 'string' ? { reason: m.reason.slice(0, 500) } : {}) } } }) + '\n'); }
-          catch { clearTimeout(routes.get(id)?.timer); routes.delete(id); fail('the server just went away'); }   // a dead socket must not throw out of the message handler
+          catch { clearTimeout(routes.get(id)?.timer); routes.delete(id); fail('the server just went away'); audit?.decided({ id: key, outcome: 'unavailable', by: 'none' }); return; }   // a dead socket must not throw out of the message handler
+          audit?.decided({ id: key, outcome: m.decision === 'deny' ? 'rejected' : 'allowed', by: 'phone', ...(typeof c.device?.name === 'string' && c.device.name ? { device: c.device.name } : {}) });
           return;
         }
         if (m.type === 'resume') { for (const e of replay) if (e.seq > (m.since ?? 0)) send(c, { type: 'event', ...e }); return; }

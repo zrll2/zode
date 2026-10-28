@@ -10,6 +10,7 @@ import updaterPkg from 'electron-updater';
 const { autoUpdater } = updaterPkg;
 import QRCode from 'qrcode';
 import { createRelay } from '../relay/service.mjs';
+import { createAuditLog } from '../relay/audit.mjs';
 import { detectAddresses, defaultAddress, autoAddresses } from './lib/addresses.mjs';
 import { loadSettings, saveSettings } from './lib/settings.mjs';
 import { buildMenuTemplate } from './lib/menu.mjs';
@@ -31,6 +32,7 @@ import { voiceHint } from './lib/voiceHint.mjs';
 
 const HOME = os.homedir();
 const SETTINGS_FILE = path.join(HOME, '.zode', 'settings.json');
+const AUDIT_FILE = path.join(HOME, '.zode', 'approvals.jsonl');
 const LOG_FILE = path.join(HOME, '.zode', 'mac-app.log');
 const DOWNLOAD_URL = 'https://zcode.z.ai';
 const UPDATE_LOG = path.join(HOME, '.zode', 'update.log');
@@ -171,6 +173,7 @@ async function start() {
     };
     const publicUrlsFor = (list = addresses) => hostIps(list).map(ip => `ws://${ip}:${settings.port}`);
     const save = () => { settings = saveSettings(SETTINGS_FILE, settings); };
+    const audit = createAuditLog({ file: AUDIT_FILE });   // the approval audit log, shared by the relay and every answer below
     const relayLog = {
       log: (...a) => appendLog('relay: ' + a.join(' ')),
       warn: (...a) => appendLog('relay warn: ' + a.join(' ')),
@@ -275,7 +278,7 @@ async function start() {
       if (settings.relayEnabled) {
         const ips = hostIps();                                    // concrete addresses only, never 0.0.0.0
         relayHostSig = ips.join(',');
-        relay = createRelay({ hosts: ips, port: settings.port, publicUrls: publicUrlsFor(), autoAllow: () => settings.autoAllow === true, askRisky: () => settings.askRisky === true, log: relayLog, stt: sttAdapter });
+        relay = createRelay({ hosts: ips, port: settings.port, publicUrls: publicUrlsFor(), autoAllow: () => settings.autoAllow === true, askRisky: () => settings.askRisky === true, log: relayLog, stt: sttAdapter, audit });
         relay.on('status', refresh);
         try { await relay.start(); } catch (err) { error = startError(err); }
       }
@@ -431,7 +434,9 @@ async function start() {
           const autoAllowList = pendingToAutoAllow(Object.values(pending).flat(), settings.autoAllow === true && !(relay && relay.status().running), settings.askRisky === true);
           if (autoAllowList.length) {
             for (const request of autoAllowList) {
-              try { await respondPermission({ sock: request.sock, requestId: request.requestId, response: AUTO_ALLOW_RESULT }); } catch { /* gone is fine */ }
+              auditAsked(request.sock, request.requestId, request);
+              try { await respondPermission({ sock: request.sock, requestId: request.requestId, response: AUTO_ALLOW_RESULT }); auditDecided(request.sock, request.requestId, 'allowed', 'auto'); }
+              catch { auditDecided(request.sock, request.requestId, 'unavailable'); }
             }
             appendLog(`zode: auto-allowed ${autoAllowList.length} permission request${autoAllowList.length === 1 ? '' : 's'} without the relay`);
             for (const request of autoAllowList) {
@@ -752,15 +757,29 @@ async function start() {
     // What the user sees for a pending request, for grouping a pile of identical ones.
     const displayOf = r => (typeof r?.summary === 'string' && r.summary) || (typeof r?.toolName === 'string' && r.toolName) || 'Permission request';
 
+    // The audit trail for answers given right here: an asked row for anything we answer that the log
+    // does not have yet (it ignores repeats), and a decided row per answer. Ids pair the request
+    // with the socket it lives on, the same shape the relay uses.
+    const auditAsked = (sock, requestId, p = {}) => {
+      try {
+        audit.asked({ id: `${sock}:${requestId}`, tool: p.toolName, summary: p.summary || p.toolName || 'Permission request', risky: p.risky === true, sessionId: p.sessionId });
+      } catch { /* the log never blocks an answer */ }
+    };
+    const auditDecided = (sock, requestId, outcome, by = 'panel') => {
+      try { audit.decided({ id: `${sock}:${requestId}`, outcome, by: outcome === 'unavailable' ? 'none' : by }); } catch { /* never throws */ }
+    };
+
     // Answer a whole pile of pending permission requests: four at a time, and one refusal — or a
     // request that is already gone — never stops the rest. Nothing throws; the caller caps at 600
     // and logs one line with the count. The commands themselves are never logged.
-    async function answerPile(list, build) {
+    async function answerPile(list, build, outcome) {
       const queue = [...list].slice(0, 600);
       const worker = async () => {
         while (queue.length) {
           const job = queue.shift();
-          try { await respondPermission({ sock: job.sock, requestId: job.requestId, ...build(job) }); } catch { /* gone is fine */ }
+          auditAsked(job.sock, job.requestId, job, job.detail);
+          try { await respondPermission({ sock: job.sock, requestId: job.requestId, ...build(job) }); auditDecided(job.sock, job.requestId, outcome); }
+          catch { auditDecided(job.sock, job.requestId, 'unavailable'); }
         }
       };
       await Promise.all([worker(), worker(), worker(), worker()]);
@@ -783,14 +802,22 @@ async function start() {
             type: 'warning', buttons: ['Allow', 'Cancel'], defaultId: 0, cancelId: 1,
             message: 'Allow this command?', detail: String(p?.detail || text || ''),
           }).then(({ response }) => response === 0) : null,
-          run: async () => { await respondPermission({ sock, requestId, decision: 'allow', reason: 'Approved from the menu bar' }); return null; },
+          run: async () => {
+            auditAsked(sock, requestId, p ?? { summary: text, risky: risky === true });
+            try { await respondPermission({ sock, requestId, decision: 'allow', reason: 'Approved from the menu bar' }); auditDecided(sock, requestId, 'allowed'); return null; }
+            catch (err) { auditDecided(sock, requestId, 'unavailable'); throw err; }
+          },
         });
       },
       deny: (requestId, sock) => {
         const p = findPending(requestId);
         runWorkAction({
           what: 'denied', project: p ? projectOf(p.sessionId) : 'ZCode',
-          run: async () => { await respondPermission({ sock, requestId, decision: 'deny', reason: 'Denied from the menu bar' }); return null; },
+          run: async () => {
+            auditAsked(sock, requestId, p ?? {});
+            try { await respondPermission({ sock, requestId, decision: 'deny', reason: 'Denied from the menu bar' }); auditDecided(sock, requestId, 'rejected'); return null; }
+            catch (err) { auditDecided(sock, requestId, 'unavailable'); throw err; }
+          },
         });
       },
       nudge: (sessionId, sock) => runWorkAction({ what: 'nudged', project: projectOf(sessionId), run: () => nudgeSession({ sock, sessionId }) }),
@@ -811,7 +838,7 @@ async function start() {
           what: `approved ${pile.length} permission request${pile.length === 1 ? '' : 's'}`,
           project: projectOf(pile[0].requestId),
           confirm: risky.length ? () => confirmOverPanel({ message: `Allow these ${pile.length} requests?`, detail: String(risky[0].detail || '') }) : null,
-          run: () => answerPile(pile, () => ({ decision: 'allow', reason: 'Approved from the menu bar' })),
+          run: () => answerPile(pile, () => ({ decision: 'allow', reason: 'Approved from the menu bar' }), 'allowed'),
         });
       },
       denyMany: requests => {
@@ -823,7 +850,7 @@ async function start() {
         runWorkAction({
           what: `denied ${pile.length} permission request${pile.length === 1 ? '' : 's'}`,
           project: projectOf(pile[0].requestId),
-          run: () => answerPile(pile, () => ({ decision: 'deny', reason: 'Denied from the menu bar' })),
+          run: () => answerPile(pile, () => ({ decision: 'deny', reason: 'Denied from the menu bar' }), 'rejected'),
         });
       },
       // Always allow this here: the shown request gets ZCode's own allow_project response (so the
@@ -853,7 +880,7 @@ async function start() {
           what: `always allowed here and approved ${jobs.length} permission request${jobs.length === 1 ? '' : 's'}`,
           project: projectOf(requestId),
           confirm: risky.length ? () => confirmOverPanel({ message: `Allow these ${jobs.length} requests?`, detail: risky[0].detail }) : null,
-          run: () => answerPile(jobs, j => j.build),
+          run: () => answerPile(jobs, j => j.build, 'allowed'),
         });
       },
       toggleFoldFinished: () => { settings.foldFinished = !settings.foldFinished; save(); pushPanel(); },
@@ -931,6 +958,7 @@ async function start() {
     ipcMain.handle('zode:copy', (_e, text) => { try { clipboard.writeText(String(text ?? '')); return true; } catch (err) { appendLog(`zode: copy: ${err?.stack || err}`); return false; } });
     ipcMain.handle('zode:listDevices', () => { try { return relay ? relay.listDevices() : []; } catch (err) { appendLog(`zode: listDevices: ${err?.stack || err}`); return []; } });
     ipcMain.handle('zode:revoke', (_e, id) => { try { const ok = relay ? relay.revokeDevice(String(id)) : false; refresh(); return ok; } catch (err) { appendLog(`zode: revoke: ${err?.stack || err}`); return false; } });
+    ipcMain.handle('zode:approvalLog', () => { try { return audit.recent(30); } catch (err) { appendLog(`zode: approvalLog: ${err?.stack || err}`); return []; } });
 
     // ---- the menu bar panel --------------------------------------------------------------------
     // A small popover under the tray icon; the native menu stays as the right-click fallback. The
