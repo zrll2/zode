@@ -122,8 +122,13 @@ final class PhoneLink: NSObject, ObservableObject, WCSessionDelegate {
 
     private func beginRecording() {
         let audioSession = AVAudioSession.sharedInstance()
-        try? audioSession.setCategory(.record, mode: .default)
-        try? audioSession.setActive(true)
+        do {
+            try audioSession.setCategory(.record, mode: .default)
+            try audioSession.setActive(true)
+        } catch {
+            step = .error("Could not start the microphone. Try again.")
+            return
+        }
 
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("zode-clip-\(UUID().uuidString).m4a")
@@ -134,12 +139,12 @@ final class PhoneLink: NSObject, ObservableObject, WCSessionDelegate {
             AVEncoderAudioQualityKey: AVAudioQuality.medium.rawValue,
             AVEncoderBitRateKey: 48_000,
         ]
-        guard let recorder = try? AVAudioRecorder(url: url, settings: settings) else {
+        guard let recorder = try? AVAudioRecorder(url: url, settings: settings), recorder.record() else {
+            try? audioSession.setActive(false)
             step = .error("Could not start the microphone. Try again.")
             return
         }
         audioRecorder = recorder
-        recorder.record()
         elapsed = 0
         step = .recording
 
@@ -211,15 +216,17 @@ final class PhoneLink: NSObject, ObservableObject, WCSessionDelegate {
         // file instead, and the transcript arrives as a separate message.
         if session.isReachable {
             guard let data = try? Data(contentsOf: fileURL) else {
+                removeClip(at: fileURL)
                 step = .error("Could not read the recording. Try again.")
                 return
             }
             let base64 = data.base64EncodedString()
-            // WatchConnectivity rejects large messages (WCErrorCodePayloadTooLarge); a long clip goes
-            // by file transfer, which has no such limit.
+            // WatchConnectivity rejects messages over about 65 KB
+            // (WCErrorCodePayloadTooLarge); a longer clip goes by file
+            // transfer, which has no such limit.
             guard base64.count <= Self.maxBase64Characters else {
                 transferClip(fileURL: fileURL, id: id, sessionId: sessionId, format: format)
-                startTranscriptTimer()
+                startTranscriptTimer(seconds: Self.fileTransferTimeoutSeconds)
                 return
             }
             session.sendMessage(
@@ -233,13 +240,15 @@ final class PhoneLink: NSObject, ObservableObject, WCSessionDelegate {
                 ],
                 replyHandler: { [weak self] reply in
                     DispatchQueue.main.async {
+                        self?.removeClip(at: fileURL)
                         self?.handleTranscript(reply)
                     }
                 },
                 errorHandler: { [weak self] _ in
                     DispatchQueue.main.async {
                         // The message did not get through: queue the file once.
-                        // The transcript then arrives as a separate message.
+                        // The transcript then arrives as a separate message, and
+                        // didFinish deletes the clip when the transfer completes.
                         guard let self, self.pendingAudioId == id else { return }
                         self.transferClip(
                             fileURL: fileURL,
@@ -247,15 +256,23 @@ final class PhoneLink: NSObject, ObservableObject, WCSessionDelegate {
                             sessionId: sessionId,
                             format: format
                         )
+                        self.startTranscriptTimer(seconds: Self.fileTransferTimeoutSeconds)
                     }
                 }
             )
-            startTranscriptTimer()
+            startTranscriptTimer(seconds: Self.messageTimeoutSeconds)
             return
         }
 
         transferClip(fileURL: fileURL, id: id, sessionId: sessionId, format: format)
-        startTranscriptTimer()
+        startTranscriptTimer(seconds: Self.fileTransferTimeoutSeconds)
+    }
+
+    // Recorded clips carry this name prefix; only those are ours to delete (a
+    // DEBUG test clip lives in the bundle and must stay).
+    private func removeClip(at url: URL) {
+        guard url.lastPathComponent.hasPrefix("zode-clip-") else { return }
+        try? FileManager.default.removeItem(at: url)
     }
 
     private func transferClip(fileURL: URL, id: String, sessionId: String, format: String) {
@@ -269,9 +286,9 @@ final class PhoneLink: NSObject, ObservableObject, WCSessionDelegate {
         ])
     }
 
-    private func startTranscriptTimer() {
+    private func startTranscriptTimer(seconds: TimeInterval) {
         transcriptTimer?.invalidate()
-        transcriptTimer = Timer.scheduledTimer(withTimeInterval: 25, repeats: false) { [weak self] _ in
+        transcriptTimer = Timer.scheduledTimer(withTimeInterval: seconds, repeats: false) { [weak self] _ in
             guard let self, self.step == .transcribing else { return }
             self.pendingAudioId = nil
             self.step = .error("Your Mac did not answer. Try again.")
@@ -283,18 +300,19 @@ final class PhoneLink: NSObject, ObservableObject, WCSessionDelegate {
         transcriptTimer = nil
     }
 
-    // The transcript screen: Send hands the text to the conversation.
+    // The transcript screen: Send hands the text to the conversation. The Sent
+    // screen waits for the phone's ok acknowledgement.
     func confirmSend() {
         guard case .confirm(let text) = step else { return }
-        WKInterfaceDevice.current().play(.success)
-        step = .sent
+        awaitingSentAck = true
         sendPrompt(text)
-        scheduleSentReset()
     }
 
-    // Quick replies go out at once: haptic, then a one-line confirmation.
+    // Quick replies go out at once: haptic, then a one-line confirmation. Their
+    // ack must not switch to the Sent screen.
     func sendQuickReply(_ word: String) {
         WKInterfaceDevice.current().play(.click)
+        awaitingSentAck = false
         sendPrompt(word)
         quickReplyNote = "Sent \u{201C}\(word)\u{201D}"
         quickReplyTimer?.invalidate()
@@ -337,6 +355,8 @@ final class PhoneLink: NSObject, ObservableObject, WCSessionDelegate {
     }
 
     func goHome() {
+        pendingAudioId = nil
+        stopTranscriptTimer()
         step = .idle
     }
 
@@ -376,19 +396,20 @@ final class PhoneLink: NSObject, ObservableObject, WCSessionDelegate {
                     self.selectedSessionId = defaultId
                 }
             }
+            // Only a real snapshot carries a rows array; result and transcript
+            // replies must not blank the session list.
+            guard let items = snapshot["sessions"] as? [[String: Any]] else { return }
             var parsed: [WatchSessionRow] = []
-            if let items = snapshot["sessions"] as? [[String: Any]] {
-                for item in items.prefix(5) {
-                    guard let id = item["id"] as? String else { continue }
-                    parsed.append(
-                        WatchSessionRow(
-                            id: id,
-                            project: item["project"] as? String ?? "",
-                            title: item["title"] as? String ?? "",
-                            state: item["state"] as? String ?? "idle"
-                        )
+            for item in items.prefix(5) {
+                guard let id = item["id"] as? String else { continue }
+                parsed.append(
+                    WatchSessionRow(
+                        id: id,
+                        project: item["project"] as? String ?? "",
+                        title: item["title"] as? String ?? "",
+                        state: item["state"] as? String ?? "idle"
                     )
-                }
+                )
             }
             self.rows = parsed
         }
@@ -408,8 +429,10 @@ final class PhoneLink: NSObject, ObservableObject, WCSessionDelegate {
     private func handleResult(_ message: [String: Any]) {
         guard let id = message["id"] as? String, id == pendingPromptId else { return }
         pendingPromptId = nil
+        let showsSent = awaitingSentAck
+        awaitingSentAck = false
         if (message["ok"] as? Bool) == true {
-            if step != .sent {
+            if showsSent {
                 markSent()
             }
         } else {
@@ -448,23 +471,43 @@ final class PhoneLink: NSObject, ObservableObject, WCSessionDelegate {
 
     func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
         DispatchQueue.main.async {
-            switch message["type"] as? String {
-            case "transcript":
-                self.handleTranscript(message)
-            case "result":
-                self.handleResult(message)
-            default:
-                break
-            }
-            self.absorb(snapshot: message)
+            self.handleIncoming(message)
         }
+    }
+
+    // The phone's transferUserInfo fallback (offline replies) rides the same
+    // handling as messages.
+    func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any]) {
+        DispatchQueue.main.async {
+            self.handleIncoming(userInfo)
+        }
+    }
+
+    // A file transfer finished either way: the recorded clip is no longer needed.
+    func session(_ session: WCSession, didFinish fileTransfer: WCSessionFileTransfer) {
+        removeClip(at: fileTransfer.file.fileURL)
+    }
+
+    private func handleIncoming(_ message: [String: Any]) {
+        switch message["type"] as? String {
+        case "transcript":
+            self.handleTranscript(message)
+        case "result":
+            self.handleResult(message)
+        default:
+            break
+        }
+        self.absorb(snapshot: message)
     }
 
     // MARK: constants and state
 
     static let maxSeconds = 55
-    // About 14 s of 48 kbps AAC; longer clips use a file transfer.
-    static let maxBase64Characters = 80_000
+    // Stay under WatchConnectivity's ~65 KB message limit; clips above it go
+    // straight to a file transfer.
+    static let maxBase64Characters = 60_000
+    static let messageTimeoutSeconds: TimeInterval = 25
+    static let fileTransferTimeoutSeconds: TimeInterval = 90
 
     private var audioRecorder: AVAudioRecorder?
     private var recordTimer: Timer?
@@ -473,6 +516,8 @@ final class PhoneLink: NSObject, ObservableObject, WCSessionDelegate {
     private var quickReplyTimer: Timer?
     private var pendingAudioId: String?
     private var pendingPromptId: String?
+    // Confirmed sends flip to the Sent screen on the phone's ok; quick replies don't.
+    private var awaitingSentAck = false
     // The prompt happens on the first mic tap, never at launch.
     private var micPermissionRequested = false
     private var micPermissionGranted = false
