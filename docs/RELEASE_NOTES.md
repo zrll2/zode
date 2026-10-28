@@ -1,5 +1,16 @@
 # Zode for Mac
 
+## 1.5.4
+- **Phone push works end to end.** The push service now handles Apple's answers correctly, and the phone keeps its push key and id across restarts. Pair your phone again once to turn it on.
+- Approving from the panel always acts on the request ZCode is really waiting on, and settings are saved safely even if the app quits mid-write.
+- A phone gets the notification even while the panel is open on the Mac.
+- Risky-command checks on the Mac and the phone now catch more spellings of `rm`, `sudo` and `git` forms.
+- The relay answers phone requests within a fixed time, and attachment names are always safe file names.
+
+## 1.5.3
+- Zode finds its private ZCode engine more reliably and no longer mistakes similarly named apps for it.
+- Smaller fixes from a full code audit of the relay, panel and watch bridge.
+
 ## 1.5.2
 - Signed and notarized by Comex Technologies Pte Ltd, the publisher from now on. **Because the signing identity changed, Zode 1.5.1 and older cannot update to this version by themselves: download this DMG once and replace the old app.** Updates after this one work as usual.
 - The phone app's connection screen is an icon, a few words and a button, with no paragraph.
