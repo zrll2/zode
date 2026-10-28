@@ -77,6 +77,12 @@ export async function loadPushKey(): Promise<string | null> {
   }
 }
 
+export async function clearPushKey(): Promise<void> {
+  try {
+    await SecureStore.deleteItemAsync(PUSH_KEY, { accessGroup: PUSH_KEYCHAIN_GROUP });
+  } catch {}
+}
+
 export async function saveCredentials(credentials: Credentials): Promise<void> {
   try {
     await SecureStore.setItemAsync(KEY, JSON.stringify(credentials));
@@ -93,10 +99,13 @@ export async function loadCredentials(): Promise<Credentials | null> {
   }
 }
 
+// Forgetting also drops the extension's sibling record: unpair removes both
+// copies of the push key.
 export async function clearCredentials(): Promise<void> {
   try {
     await SecureStore.deleteItemAsync(KEY);
   } catch {}
+  await clearPushKey();
 }
 
 // UI preferences (not secret): JSON in SecureStore, defaults on any error.
