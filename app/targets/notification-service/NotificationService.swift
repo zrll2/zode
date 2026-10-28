@@ -37,8 +37,9 @@ enum PushKeyStore {
 }
 
 // Decrypts the sealed payload of a push before iOS shows it. On any failure
-// the unchanged placeholder content is delivered — the extension never shows
-// an error and never crashes.
+// a neutral placeholder (Zode / Open Zode, no custom sound) is delivered —
+// never the push's own text. The extension never shows an error and never
+// crashes.
 final class NotificationService: UNNotificationServiceExtension {
     private var contentHandler: ((UNNotificationContent) -> Void)?
     private var content: UNMutableNotificationContent?
@@ -50,7 +51,11 @@ final class NotificationService: UNNotificationServiceExtension {
         self.contentHandler = contentHandler
 
         guard let mutable = request.content.mutableCopy() as? UNMutableNotificationContent else {
-            contentHandler(request.content)
+            // Unreachable in practice; still never show unverified sender text.
+            let neutral = UNMutableNotificationContent()
+            neutral.title = "Zode"
+            neutral.body = "Open Zode"
+            contentHandler(neutral)
             return
         }
         content = mutable
@@ -67,8 +72,14 @@ final class NotificationService: UNNotificationServiceExtension {
             // userInfo and categoryIdentifier are kept untouched: the app
             // still needs `k`/`s` to answer actions, and the category drives
             // the Allow/Deny/Reply buttons.
-            content = mutable
+        } else {
+            // Not ours or tampered: show only the neutral placeholder, never
+            // the push's own text, and no custom sound.
+            mutable.title = "Zode"
+            mutable.body = "Open Zode"
+            mutable.sound = nil
         }
+        content = mutable
 
         contentHandler(content ?? request.content)
     }

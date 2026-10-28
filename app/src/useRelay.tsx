@@ -36,8 +36,9 @@ interface RelayContextValue {
   // Protocol the relay announced in its ready frame; undefined means an
   // older Zode on the Mac (treated as protocol 1). See src/compat.ts.
   relayProtocol: number | undefined;
-  // Optional features the relay announced (V3): { stt: true } enables voice.
-  relayFeatures: { stt: boolean };
+  // Optional features the relay announced (V3/PS3): stt enables voice, push
+  // enables remote notifications.
+  relayFeatures: { stt: boolean; push: boolean };
   // Ask-first permission requests waiting right now (see src/approvals.ts).
   pendingApprovals: ApprovalRequest[];
   // The address the current connection actually uses, for diagnostics.
@@ -65,7 +66,10 @@ export function RelayProvider({ children }: { children: React.ReactNode }) {
   const [retryAt, setRetryAt] = useState<number | null>(null);
   const [reconnectAttempts, setReconnectAttempts] = useState(0);
   const [relayProtocol, setRelayProtocol] = useState<number | undefined>(undefined);
-  const [relayFeatures, setRelayFeatures] = useState<{ stt: boolean }>({ stt: false });
+  const [relayFeatures, setRelayFeatures] = useState<{ stt: boolean; push: boolean }>({
+    stt: false,
+    push: false,
+  });
   const [pendingApprovals, setPendingApprovals] = useState<ApprovalRequest[]>([]);
   const [connectedUrl, setConnectedUrl] = useState<string | null>(null);
   const clientRef = useRef<RelayClientLike | null>(null);
@@ -220,7 +224,7 @@ export function RelayProvider({ children }: { children: React.ReactNode }) {
     setStatus("closed");
     setServers([]);
     setRelayProtocol(undefined);
-    setRelayFeatures({ stt: false });
+    setRelayFeatures({ stt: false, push: false });
     setPendingApprovals([]);
     setConnectedUrl(null);
   }, []);
@@ -238,7 +242,7 @@ export function RelayProvider({ children }: { children: React.ReactNode }) {
     setAuthFailed(false);
     setLastError(null);
     setRelayProtocol(undefined);
-    setRelayFeatures({ stt: false });
+    setRelayFeatures({ stt: false, push: false });
     setPendingApprovals([]);
     setConnectedUrl(null);
   }, []);

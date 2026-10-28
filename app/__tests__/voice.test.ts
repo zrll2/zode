@@ -363,10 +363,10 @@ describe("ready.features gate", () => {
     sockets[0]!.open();
     sockets[0]!.receive({ type: "ready", device: "mac", servers: [], seq: 1, features: { stt: true } });
     await connected;
-    expect(client.relayFeatures).toEqual({ stt: true });
+    expect(client.relayFeatures).toEqual({ stt: true, push: false });
 
     sockets[0]!.drop(1006); // disconnect resets to unavailable
-    expect(client.relayFeatures).toEqual({ stt: false });
+    expect(client.relayFeatures).toEqual({ stt: false, push: false });
     client.close();
   });
 
@@ -385,11 +385,11 @@ describe("ready.features gate", () => {
     sockets[0]!.open();
     sockets[0]!.receive({ type: "ready", device: "mac", servers: [], seq: 1 });
     await connected;
-    expect(client.relayFeatures).toEqual({ stt: false });
+    expect(client.relayFeatures).toEqual({ stt: false, push: false });
     client.close();
   });
 
-  it("the demo relay offers voice", () => {
-    expect(new DemoClient().relayFeatures).toEqual({ stt: true });
+  it("the demo relay offers voice but not push", () => {
+    expect(new DemoClient().relayFeatures).toEqual({ stt: true, push: false });
   });
 });

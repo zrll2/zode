@@ -85,6 +85,30 @@ it("sends auth first and resolves connect on ready", async () => {
   client.close();
 });
 
+it("parses ready.features into stt and push, defaulting to false", async () => {
+  const { client, sockets } = makeClient();
+  const connected = client.connect();
+  sockets[0].open();
+  sockets[0].receive({ type: "ready", device: "mac", servers: [], seq: 1, features: { stt: true, push: true } });
+  await connected;
+  expect(client.relayFeatures).toEqual({ stt: true, push: true });
+  client.close();
+});
+
+it("treats a missing push feature as false while keeping stt", async () => {
+  const { client, sockets } = makeClient();
+  const connected = client.connect();
+  sockets[0].open();
+  sockets[0].receive({ type: "ready", device: "mac", servers: [], seq: 1, features: { stt: true } });
+  await connected;
+  expect(client.relayFeatures).toEqual({ stt: true, push: false });
+
+  // an older relay re-sends ready without a features object
+  sockets[0].receive({ type: "ready", device: "mac", servers: [], seq: 2 });
+  expect(client.relayFeatures).toEqual({ stt: false, push: false });
+  client.close();
+});
+
 it("matches rpc results by id and rejects on error", async () => {
   const { client, sockets } = makeClient();
   const connected = client.connect();
@@ -123,7 +147,7 @@ it("rejects an rpc after the timeout", async () => {
   client.close();
 });
 
-it("re-races immediately when a live connection drops and resumes with since", async () => {
+it("backs off when a live connection drops and resumes with since", async () => {
   jest.useFakeTimers();
   const { client, sockets } = makeClient();
   const connected = client.connect();
@@ -138,8 +162,12 @@ it("re-races immediately when a live connection drops and resumes with since", a
     msg: { method: "session/event", params: { type: "turn.started", payload: { input: "hi" } } },
   });
 
-  // a live drop rolls straight into a new race, no backoff wait
+  // a live drop joins the backoff loop instead of re-racing at once
   sockets[0].drop(1006);
+  expect(client.status).toBe("reconnecting");
+  expect(sockets).toHaveLength(1);
+
+  jest.advanceTimersByTime(2_000); // the first delay is at most 1150 ms
   expect(sockets).toHaveLength(2);
   sockets[1].open();
   expect(sockets[1].sent[0]).toEqual({ type: "auth", token: "tok", since: 7 });
@@ -147,6 +175,82 @@ it("re-races immediately when a live connection drops and resumes with since", a
   sockets[1].receive({ ...READY, seq: 8 });
   expect(client.status).toBe("ready");
   client.close();
+});
+
+it("climbs the backoff while the connection flaps without settling", async () => {
+  jest.useFakeTimers();
+  const { client, sockets } = makeClient();
+  const connected = client.connect();
+  connected.catch(() => {});
+  sockets[0].open();
+  sockets[0].receive(READY);
+  await connected;
+
+  // two quick ready-then-drop cycles: attempts 0 then 1
+  sockets[0].drop(1006);
+  jest.advanceTimersByTime(2_000);
+  sockets[1].open();
+  sockets[1].receive({ ...READY, seq: 8 });
+  sockets[1].drop(1006);
+
+  // the second delay is 1700-2300 ms: the counter did not restart
+  jest.advanceTimersByTime(1_600);
+  expect(sockets).toHaveLength(2);
+  jest.advanceTimersByTime(1_000);
+  expect(sockets).toHaveLength(3);
+  client.close();
+});
+
+it("restarts the backoff after a connection stayed up ten seconds", async () => {
+  jest.useFakeTimers();
+  const { client, sockets } = makeClient();
+  const connected = client.connect();
+  connected.catch(() => {});
+  sockets[0].open();
+  sockets[0].receive(READY);
+  await connected;
+
+  sockets[0].drop(1006);
+  jest.advanceTimersByTime(2_000);
+  sockets[1].open();
+  sockets[1].receive({ ...READY, seq: 8 });
+
+  // stay up well past the stability window, then drop again
+  jest.advanceTimersByTime(20_000);
+  sockets[1].drop(1006);
+
+  // the counter reset, so the next delay is short again (at most 1150 ms)
+  jest.advanceTimersByTime(2_000);
+  expect(sockets).toHaveLength(3);
+  client.close();
+});
+
+it("ignores a stale ready from a socket that lost the race", async () => {
+  jest.useFakeTimers();
+  const { client, byUrl } = makeMultiClient(["ws://a:1", "ws://b:2"]);
+  const connectedUrls: string[] = [];
+  client.onConnected((url) => connectedUrls.push(url));
+  const connected = client.connect();
+
+  const a = byUrl("ws://a:1")!;
+  a.open();
+  jest.advanceTimersByTime(2_500);
+  const b = byUrl("ws://b:2")!;
+  b.open();
+
+  a.receive(READY);
+  await connected;
+  b.receive(READY); // already in flight when b lost: must change nothing
+
+  expect(client.status).toBe("ready");
+  expect(connectedUrls).toEqual(["ws://a:1"]);
+  expect(client.candidateUrls).toEqual(["ws://a:1", "ws://b:2"]);
+
+  // the real winner is still the socket rpc rides on
+  const listing = client.rpc("session/list", {});
+  expect(a.sent.some((f) => f.type === "rpc")).toBe(true);
+  client.close();
+  await expect(listing).rejects.toThrow("relay: closed");
 });
 
 it("falls back to backoff when a round fails without ready", async () => {
@@ -468,6 +572,7 @@ describe("address racing", () => {
   });
 
   it("learns the relay's address list from ready and prefers the winner", async () => {
+    jest.useFakeTimers();
     const { client, sockets } = makeMultiClient(["ws://old:1"]);
     const addressesSeen: (string[] | null)[] = [];
     client.onConnected((_url, addresses) => addressesSeen.push(addresses));
@@ -481,6 +586,7 @@ describe("address racing", () => {
     expect(client.candidateUrls).toEqual(["ws://old:1", "ws://n1:1", "ws://n2:2"]);
 
     sockets[0]!.drop(1006); // the re-race tries the winner first
+    jest.advanceTimersByTime(2_000); // past the first backoff delay
     const next = sockets[1]!;
     expect(next.url).toBe("ws://old:1");
     next.open();

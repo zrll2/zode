@@ -15,6 +15,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Linking from "expo-linking";
 import { useRelay } from "../src/useRelay";
 import { parsePairingPayload, pair } from "../src/pairing";
+import { savePushKey } from "../src/storage";
 import { PRIVACY_URL } from "../src/config";
 import { radius, useTheme } from "../src/theme";
 import { Pill } from "../src/ui/Pill";
@@ -50,11 +51,16 @@ export default function PairScreen() {
     try {
       const payload = parsePairingPayload(raw);
       const result = await pair(payload, deviceName());
+      // The push key lives in two places: with the credentials for the app,
+      // and in the shared-keychain sibling record the notification
+      // extension reads. Re-pairing overwrites both.
+      if (result.pushKey) await savePushKey(result.pushKey);
       connect({
         wsUrl: result.wsUrl,
         wsUrls: result.wsUrls,
         token: result.token,
         deviceId: result.id,
+        pushKey: result.pushKey,
       });
       router.replace("/sessions");
     } catch (e: any) {

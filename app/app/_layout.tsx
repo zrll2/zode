@@ -12,6 +12,7 @@ import {
 import { RelayProvider } from "../src/useRelay";
 import { useWatchBridge } from "../src/watchBridge";
 import { ensureNotificationCategories, registerPushTasks } from "../src/pushActions";
+import { useLocalTaskNotifications } from "../src/localNotify";
 import { FontsLoadedProvider, useTheme } from "../src/theme";
 
 // Push glue (PS3): the foreground handler, the in-app response listener, the
@@ -40,11 +41,19 @@ function WatchBridge() {
   return null;
 }
 
+// Local task-completion banners while the app is backgrounded (fallback for
+// remote push, which needs the push service deployed).
+function LocalNotifyBridge() {
+  useLocalTaskNotifications();
+  return null;
+}
+
 function RootStack() {
   const t = useTheme();
   return (
     <RelayProvider>
       <WatchBridge />
+      <LocalNotifyBridge />
       <StatusBar style="auto" />
       <Stack
         screenOptions={{

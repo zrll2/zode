@@ -1,5 +1,11 @@
 import * as SecureStore from "expo-secure-store";
-import { loadCredentials, loadPushKey, saveCredentials, savePushKey } from "../src/storage";
+import {
+  clearCredentials,
+  loadCredentials,
+  loadPushKey,
+  saveCredentials,
+  savePushKey,
+} from "../src/storage";
 
 jest.mock("expo-secure-store", () => ({
   getItemAsync: jest.fn(),
@@ -9,6 +15,7 @@ jest.mock("expo-secure-store", () => ({
 
 const mockedGet = SecureStore.getItemAsync as jest.Mock;
 const mockedSet = SecureStore.setItemAsync as jest.Mock;
+const mockedDelete = SecureStore.deleteItemAsync as jest.Mock;
 
 const KEY = "zcode.relay.credentials.v1";
 let store: Record<string, string> = {};
@@ -17,21 +24,25 @@ beforeEach(() => {
   store = {};
   mockedGet.mockReset();
   mockedSet.mockReset();
+  mockedDelete.mockReset();
   mockedGet.mockImplementation(async (key: string) => store[key] ?? null);
   mockedSet.mockImplementation(async (key: string, value: string) => {
     store[key] = value;
+  });
+  mockedDelete.mockImplementation(async (key: string) => {
+    delete store[key];
   });
 });
 
 it("migrates an old record that only has wsUrl", async () => {
   store[KEY] = JSON.stringify({
-    wsUrl: "ws://192.168.86.46:8787",
+    wsUrl: "ws://192.168.1.20:8787",
     token: "tok",
     deviceId: "dev_1",
   });
   await expect(loadCredentials()).resolves.toEqual({
-    wsUrl: "ws://192.168.86.46:8787",
-    wsUrls: ["ws://192.168.86.46:8787"],
+    wsUrl: "ws://192.168.1.20:8787",
+    wsUrls: ["ws://192.168.1.20:8787"],
     lastGood: undefined,
     token: "tok",
     deviceId: "dev_1",
@@ -40,15 +51,15 @@ it("migrates an old record that only has wsUrl", async () => {
 
 it("round-trips the address list and the last good address", async () => {
   await saveCredentials({
-    wsUrl: "ws://192.168.86.46:8787",
-    wsUrls: ["ws://192.168.86.46:8787", "ws://100.86.6.90:8787"],
+    wsUrl: "ws://192.168.1.20:8787",
+    wsUrls: ["ws://192.168.1.20:8787", "ws://100.86.6.90:8787"],
     lastGood: "ws://100.86.6.90:8787",
     token: "tok",
     deviceId: "dev_1",
   });
   await expect(loadCredentials()).resolves.toEqual({
-    wsUrl: "ws://192.168.86.46:8787",
-    wsUrls: ["ws://192.168.86.46:8787", "ws://100.86.6.90:8787"],
+    wsUrl: "ws://192.168.1.20:8787",
+    wsUrls: ["ws://192.168.1.20:8787", "ws://100.86.6.90:8787"],
     lastGood: "ws://100.86.6.90:8787",
     token: "tok",
     deviceId: "dev_1",
@@ -117,5 +128,45 @@ describe("push key sibling record", () => {
       expect.objectContaining({ accessGroup: "XP5Q8LPH52.sg.comex.zode.shared" }),
     );
     await expect(loadPushKey()).resolves.toBe("cHVzaC1rZXktMzItYnl0ZXM");
+  });
+
+  it("keeps a pairing's push key in credentials and the extension record", async () => {
+    // The sequence pair.tsx runs after a successful pairing.
+    await savePushKey("cHVzaC1rZXktMzItYnl0ZXM");
+    await saveCredentials({
+      wsUrl: "ws://a:1",
+      wsUrls: ["ws://a:1"],
+      pushKey: "cHVzaC1rZXktMzItYnl0ZXM",
+      token: "tok",
+      deviceId: "dev_1",
+    });
+    await expect(loadCredentials()).resolves.toMatchObject({
+      pushKey: "cHVzaC1rZXktMzItYnl0ZXM",
+    });
+    await expect(loadPushKey()).resolves.toBe("cHVzaC1rZXktMzItYnl0ZXM");
+  });
+
+  it("re-pairing replaces the extension record", async () => {
+    await savePushKey("old-key");
+    await savePushKey("new-key");
+    await expect(loadPushKey()).resolves.toBe("new-key");
+  });
+
+  it("clearCredentials removes the credentials and the extension record", async () => {
+    await savePushKey("cHVzaC1rZXktMzItYnl0ZXM");
+    await saveCredentials({
+      wsUrl: "ws://a:1",
+      wsUrls: ["ws://a:1"],
+      pushKey: "cHVzaC1rZXktMzItYnl0ZXM",
+      token: "tok",
+      deviceId: "dev_1",
+    });
+    await clearCredentials();
+    await expect(loadCredentials()).resolves.toBeNull();
+    await expect(loadPushKey()).resolves.toBeNull();
+    expect(mockedDelete).toHaveBeenCalledWith(
+      "zode.push.key.v1",
+      expect.objectContaining({ accessGroup: "XP5Q8LPH52.sg.comex.zode.shared" }),
+    );
   });
 });

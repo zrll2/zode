@@ -221,7 +221,7 @@ describe("pair", () => {
 
 describe("describeAddress", () => {
   it("names the network from the address host", () => {
-    expect(describeAddress("ws://192.168.86.46:8787")).toBe("Connected over Wi-Fi");
+    expect(describeAddress("ws://192.168.1.20:8787")).toBe("Connected over Wi-Fi");
     expect(describeAddress("ws://10.1.2.3:8787")).toBe("Connected over Wi-Fi");
     expect(describeAddress("wss://172.20.0.9:8787")).toBe("Connected over Wi-Fi");
     expect(describeAddress("ws://100.64.0.7:8787")).toBe("Connected over Tailscale");

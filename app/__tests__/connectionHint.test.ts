@@ -6,8 +6,8 @@ import {
 } from "../src/connectionHint";
 
 const BASE = {
-  urls: ["ws://192.168.86.46:8787"],
-  lastGood: "ws://192.168.86.46:8787" as string | null,
+  urls: ["ws://192.168.1.20:8787"],
+  lastGood: "ws://192.168.1.20:8787" as string | null,
   status: "reconnecting",
   secondsDisconnected: 30,
 };
@@ -44,7 +44,7 @@ describe("home Wi-Fi only (no Tailscale address known, connected before)", () =>
 
 describe("away from home with a Tailscale address known", () => {
   const AWAY = {
-    urls: ["ws://192.168.86.46:8787", "ws://100.86.6.90:8787"],
+    urls: ["ws://192.168.1.20:8787", "ws://100.86.6.90:8787"],
     lastGood: "ws://100.86.6.90:8787" as string | null,
     status: "reconnecting",
     secondsDisconnected: 30,
@@ -71,7 +71,7 @@ describe("away from home with a Tailscale address known", () => {
   });
 
   it("keeps the plain advice when home Wi-Fi was the last good address", () => {
-    const hint = connectionHint({ ...AWAY, lastGood: "ws://192.168.86.46:8787" });
+    const hint = connectionHint({ ...AWAY, lastGood: "ws://192.168.1.20:8787" });
     expect(hint).toEqual({
       title: "Mac not reachable",
       icon: "monitor",
@@ -125,7 +125,7 @@ describe("address classifiers", () => {
   });
 
   it("recognises private LAN addresses", () => {
-    expect(isPrivateLanAddress("ws://192.168.86.46:8787")).toBe(true);
+    expect(isPrivateLanAddress("ws://192.168.1.20:8787")).toBe(true);
     expect(isPrivateLanAddress("ws://10.0.0.2:8787")).toBe(true);
     expect(isPrivateLanAddress("wss://172.16.1.1")).toBe(true);
     expect(isPrivateLanAddress("wss://172.31.255.1")).toBe(true);

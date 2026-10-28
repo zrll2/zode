@@ -1,4 +1,6 @@
+import * as SecureStore from "expo-secure-store";
 import {
+  disablePush,
   enablePush,
   ensurePushOnStart,
   pushRowLabel,
@@ -184,5 +186,56 @@ describe("enablePush and the menu label", () => {
     expect(pushRowLabel("off")).toBe("Notifications: Off");
     expect(pushRowLabel("denied")).toBe("Notifications: Denied");
     expect(pushRowLabel("unavailable")).toBe("Notifications: Pair again");
+  });
+});
+
+describe("pushId persistence", () => {
+  it("stores the registered pushId after a successful registration", async () => {
+    const savePushId = jest.fn(async () => {});
+    const state = await registerPush({
+      ...base,
+      rpc: jest.fn(async () => ({})) as any,
+      savePushId,
+    });
+    expect(state).toBe("enabled");
+    expect(savePushId).toHaveBeenCalledWith("push-1");
+  });
+
+  it("persists the pushId into prefs through the default helper", async () => {
+    const state = await registerPush({
+      ...base,
+      rpc: jest.fn(async () => ({})) as any,
+    });
+    expect(state).toBe("enabled");
+    expect(SecureStore.setItemAsync).toHaveBeenCalledWith(
+      "zode.prefs.v1",
+      expect.stringContaining('"pushId":"push-1"'),
+    );
+  });
+
+  it("does not store a pushId when the relay rpc fails", async () => {
+    const savePushId = jest.fn(async () => {});
+    const rpc = jest.fn(async () => {
+      throw new Error("relay down");
+    });
+    const state = await registerPush({ ...base, rpc: rpc as any, savePushId });
+    expect(state).toBe("off");
+    expect(savePushId).not.toHaveBeenCalled();
+  });
+
+  it("disablePush unregisters with the stored pushId and clears it", async () => {
+    const rpc = jest.fn(async () => ({}));
+    const savePushId = jest.fn(async () => {});
+    await disablePush({ pushId: "push-1", rpc: rpc as any, savePushId });
+    expect(rpc).toHaveBeenCalledWith("push/unregister", { pushId: "push-1" });
+    expect(savePushId).toHaveBeenCalledWith(null);
+  });
+
+  it("disablePush clears the stored pushId even when none was stored", async () => {
+    const rpc = jest.fn(async () => ({}));
+    const savePushId = jest.fn(async () => {});
+    await disablePush({ rpc: rpc as any, savePushId });
+    expect(rpc).not.toHaveBeenCalled();
+    expect(savePushId).toHaveBeenCalledWith(null);
   });
 });

@@ -12,7 +12,7 @@ import { RelayClient } from "./relay/client";
 export type PushRelay = Pick<RelayClient, "connect" | "respond" | "rpc" | "close">;
 import { loadCredentials, type Credentials } from "./storage";
 import { buildSessionSendParams } from "./relay/params";
-import { openSealed, parseNotificationData, type SealedPayload } from "./push";
+import { openSealed, parseNotificationData } from "./push";
 
 export const PUSH_ACTION_TASK = "zode.push.action";
 
@@ -169,23 +169,6 @@ function showFailure(deps: PushActionDeps) {
     .catch(() => {});
 }
 
-function routeDefault(response: PushResponseLike, deps: PushActionDeps) {
-  try {
-    if (response.actionIdentifier !== DEFAULT_ACTION) return;
-    const data = parseNotificationData(response.notification?.request?.content?.data);
-    if (!data) return;
-    void (async () => {
-      try {
-        const stored = await (deps.loadCredentials ?? loadCredentials)();
-        if (!stored?.pushKey) return;
-        const payload: SealedPayload | null = openSealed(stored.pushKey, data.kind, data.sealed);
-        if (!payload) return;
-        deps.openConversation?.(payload.session ?? null);
-      } catch {}
-    })();
-  } catch {}
-}
-
 // Registers everything once from the root layout: the foreground handler
 // (banners while open, no sound for `done`), the in-app response listener and
 // the background task.
@@ -205,8 +188,9 @@ export function registerPushTasks(deps: PushActionDeps = {}): void {
     });
   } catch {}
   try {
+    // runPushAction's default branch opens the conversation for a body tap;
+    // routing it separately would open it twice.
     Notifications.addNotificationResponseReceivedListener((response) => {
-      routeDefault(response as PushResponseLike, deps);
       void runPushAction(response as PushResponseLike, deps);
     });
   } catch {}

@@ -31,6 +31,8 @@ export interface PushRegistrationDeps {
   serviceUrl?: string;
   loadPrefs?: () => Promise<{ pushEnabled: boolean }>;
   savePushEnabled?: (enabled: boolean) => Promise<void>;
+  // Persists the registration slot; null clears it (prefs.pushId).
+  savePushId?: (pushId: string | null) => Promise<void>;
 }
 
 function defaultNotifications(): PushNotificationsApi {
@@ -79,6 +81,11 @@ export async function registerPush(deps: PushRegistrationDeps = {}): Promise<Pus
       env: env(deps),
     });
 
+    // Remember the slot so turning push off later can unregister it.
+    try {
+      await (deps.savePushId ?? savePushIdDefault)(registered.pushId);
+    } catch {}
+
     return "enabled";
   } catch {
     return "off";
@@ -120,11 +127,19 @@ export async function disablePush(deps: PushRegistrationDeps = {}): Promise<void
   try {
     await save(false);
   } catch {}
+  try {
+    await (deps.savePushId ?? savePushIdDefault)(null);
+  } catch {}
 }
 
 async function savePushEnabledDefault(enabled: boolean): Promise<void> {
   const prefs = await loadPrefs();
   await savePrefs({ ...prefs, pushEnabled: enabled });
+}
+
+async function savePushIdDefault(pushId: string | null): Promise<void> {
+  const prefs = await loadPrefs();
+  await savePrefs({ ...prefs, pushId });
 }
 
 export function pushRowLabel(state: PushState): string {
@@ -152,7 +167,7 @@ export function usePushRegistration(): {
   const [pushState, setPushState] = useState<PushState>("off");
 
   const pushKey = credentials?.pushKey;
-  const pushFeature = (relayFeatures as unknown as { push?: boolean } | undefined)?.push === true;
+  const pushFeature = relayFeatures.push === true;
   const state = useRef({ status, rpc, pushKey, pushFeature });
   state.current = { status, rpc, pushKey, pushFeature };
 

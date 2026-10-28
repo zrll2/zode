@@ -22,8 +22,9 @@ export interface RelayClientLike {
   retryAt: number | null;
   // Protocol the relay announced (undefined = older relay, protocol 1).
   readonly relayProtocol: number | undefined;
-  // Optional relay features (V3): demo announces voice.
-  readonly relayFeatures: { stt: boolean };
+  // Optional relay features (V3/PS3): demo has voice but no push
+  // registration, so local banners stay active in demo mode.
+  readonly relayFeatures: { stt: boolean; push: boolean };
   // Permission requests waiting right now (Ask first mode).
   readonly pendingApprovals: ApprovalRequest[];
   retryNow(): void;
@@ -64,7 +65,7 @@ export class DemoClient implements RelayClientLike {
   retryAt: number | null = null; // the demo never reconnects
   // Demo behaves as a current (protocol 2) relay with voice available.
   readonly relayProtocol: number | undefined = 2;
-  readonly relayFeatures: { stt: boolean } = { stt: true };
+  readonly relayFeatures: { stt: boolean; push: boolean } = { stt: true, push: false };
 
   retryNow() {}
 
