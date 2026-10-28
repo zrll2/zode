@@ -1,6 +1,8 @@
 import {
   buildWatchSnapshot,
+  forwardableClip,
   nextPushDelayMs,
+  sessionIsPushed,
   shouldFetch,
 } from "../src/watchBridge";
 
@@ -228,5 +230,56 @@ describe("fetch/push decisions (W4)", () => {
 
     // but the status change itself still pushes, after the throttle wait
     expect(nextPushDelayMs(now - 100, now, throttle)).toBe(1_900);
+  });
+});
+
+// Watch prompts are only forwarded for sessions from the last pushed snapshot;
+// a stale watch snapshot must get a short error, not a send into a closed session.
+describe("sessionIsPushed", () => {
+  const snapshot = buildWatchSnapshot({
+    sessions: [row({ id: "s1" }), row({ id: "needs", status: "waiting" })],
+    status: "ready",
+    servers: 1,
+  });
+
+  it("accepts a session that was in the pushed rows", () => {
+    expect(sessionIsPushed(snapshot, "s1")).toBe(true);
+    expect(sessionIsPushed(snapshot, "needs")).toBe(true);
+  });
+
+  it("rejects a session missing from the pushed rows (stale watch snapshot)", () => {
+    expect(sessionIsPushed(snapshot, "closed-earlier")).toBe(false);
+  });
+
+  it("rejects everything when no rows were pushed", () => {
+    const empty = buildWatchSnapshot({ sessions: [], status: "ready", servers: 1 });
+    expect(sessionIsPushed(empty, "s1")).toBe(false);
+  });
+});
+
+// Received clips are forwarded only with a known size inside the 3 MB cap;
+// an unknown size counts as over the cap.
+describe("forwardableClip", () => {
+  const meta = { id: "a1", rid: "a1", sessionId: "s1", format: "m4a" };
+
+  it("forwards a clip with a known size within the cap", () => {
+    expect(forwardableClip(meta, 1024)).toMatchObject({ id: "a1", sessionId: "s1" });
+  });
+
+  it("rejects a known size over the 3 MB cap", () => {
+    expect(forwardableClip(meta, 3 * 1024 * 1024 + 1)).toBeNull();
+  });
+
+  it("treats an unknown size as over the cap", () => {
+    expect(forwardableClip(meta, undefined)).toBeNull();
+  });
+
+  it("rejects non-finite sizes", () => {
+    expect(forwardableClip(meta, Number.NaN)).toBeNull();
+    expect(forwardableClip(meta, Number.POSITIVE_INFINITY)).toBeNull();
+  });
+
+  it("still rejects junk metadata even with a good size", () => {
+    expect(forwardableClip({ junk: true }, 1024)).toBeNull();
   });
 });

@@ -22,6 +22,7 @@ import {
   promptFailureText,
   voiceUnavailableText,
   type TranscriptReply,
+  type WatchAudioMeta,
 } from "./watchVoice";
 
 export type WatchRowState = "needs" | "working" | "idle";
@@ -45,6 +46,10 @@ export type WatchSnapshot = {
 const MAX_SESSIONS = 8;
 const PUSH_THROTTLE_MS = 2_000;
 const REFETCH_THROTTLE_MS = 10_000;
+
+// Reply shown on the watch when a prompt targets a session that is no longer
+// in the rows last pushed to it.
+const STALE_SESSION_TEXT = "That conversation is gone. Pick another one.";
 
 const STATE_RANK: Record<WatchRowState, number> = { needs: 0, working: 1, idle: 2 };
 
@@ -98,6 +103,19 @@ export function buildWatchSnapshot(input: {
     sessions: visible,
     defaultSessionId: pickDefaultSession(sessions)?.id ?? null,
   };
+}
+
+// A watch prompt may only target a session that was in the rows last pushed
+// to it; the watch can hold a stale snapshot after a session closed.
+export function sessionIsPushed(snapshot: WatchSnapshot, sessionId: string): boolean {
+  return snapshot.sessions.some((session) => session.id === sessionId);
+}
+
+// A received clip may only be forwarded when its size is known and within the
+// relay's 3 MB cap (parseWatchAudio); an unknown size counts as over the cap.
+export function forwardableClip(meta: unknown, size: unknown): WatchAudioMeta | null {
+  if (typeof size !== "number" || !Number.isFinite(size)) return null;
+  return parseWatchAudio(meta, size);
 }
 
 // Pure fetch/push decisions (W4): exported so the demo sequence
@@ -287,6 +305,11 @@ export function useWatchBridge(): void {
         replyToWatch(buildPromptReply(id, false, phoneUnreachableText()));
         return;
       }
+      // Only forward targets that were in the rows last sent to the watch.
+      if (!sessionIsPushed(snapshot(), sessionId)) {
+        replyToWatch(buildPromptReply(id, false, STALE_SESSION_TEXT));
+        return;
+      }
       void (async () => {
         try {
           await state.current.rpc("session/send", buildSessionSendParams(sessionId, text));
@@ -296,7 +319,7 @@ export function useWatchBridge(): void {
         }
       })();
     },
-    [replyToWatch],
+    [replyToWatch, snapshot],
   );
 
   // watch -> phone `audio` (file transfer with metadata): transcribe it
@@ -314,7 +337,8 @@ export function useWatchBridge(): void {
             return;
           }
           const clip = new File(file.url);
-          if (typeof clip.size === "number" && !parseWatchAudio(meta, clip.size)) {
+          // An unknown size counts as over the cap: never forward unbounded audio.
+          if (!forwardableClip(meta, clip.size)) {
             replyToWatch(
               buildTranscriptReply(meta.id, {
                 ok: false,

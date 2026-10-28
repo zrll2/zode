@@ -10,8 +10,9 @@ them: it reads the push key from the shared keychain access group
 `XP5Q8LPH52.sg.comex.zode.shared` (the app stores it there with expo-secure-store's
 `accessGroup` option), opens the AES-GCM box with the kind as AAD, and replaces
 title/body. `userInfo` and the category are kept untouched so the app can still
-answer actions. On any failure (no key, tamper, wrong kind, bad JSON) the unchanged
-placeholder push (`Zode` / `Open Zode`) is delivered. The fixed test vector lives in
+answer actions. On any failure (no key, tamper, wrong kind, bad JSON) the neutral
+placeholder push (`Zode` / `Open Zode`, no custom sound) is delivered — never the
+push's own text. The fixed test vector lives in
 `targets/notification-service/VECTOR.md` (`__tests__/pushVectorSwift.test.ts` keeps
 the `sealed:` line in sync).
 
@@ -25,9 +26,9 @@ pair `audio`/`transcript` plus `prompt`/`result`.
 | --- | --- | --- |
 | watch → phone | `hello` | `{ type: "hello", at: <epoch ms> }` — `sendMessage` with reply handler, `transferUserInfo` fallback |
 | phone → watch | `snapshot` | `{ ok: true, status, servers, defaultSessionId, sessions: [{ id, project, title, state }] }` — at most 8 rows, needs-you first, `defaultSessionId` = first needs-you row else the most recent; the `hello` reply and the `updateApplicationContext` push (throttled 2 s) |
-| watch → phone | `audio` | **Reachable (W3):** a normal message `{ type: "audio", id, sessionId, format: "m4a" \| "wav", audioBase64: <base64 clip> }` sent with `sendMessage`; the transcript comes straight back through the reply handler. The base64 is capped at 900 KB on the watch (~55 s of 16 kHz AAC is far below). **Fallback (not reachable, or the send failed):** `WCSession.transferFile` with metadata `{ type: "audio", id, sessionId, format }`, and the transcript arrives as a separate message. Clip: AAC m4a 16 kHz mono from the watch mic, capped at 55 s. |
+| watch → phone | `audio` | **Reachable (W3):** a normal message `{ type: "audio", id, sessionId, format: "m4a" \| "wav", audioBase64: <base64 clip> }` sent with `sendMessage`; the transcript comes straight back through the reply handler. The base64 is capped at 60,000 characters on the watch (WatchConnectivity rejects messages over about 65 KB); a longer clip goes straight to file transfer. **Fallback (not reachable, or the send failed):** `WCSession.transferFile` with metadata `{ type: "audio", id, sessionId, format }`, and the transcript arrives as a separate message. Clip: AAC m4a 16 kHz mono from the watch mic, capped at 55 s. |
 | phone → watch | `transcript` | `{ type: "transcript", id, ok: true, text }` or `{ type: "transcript", id, ok: false, message }` — arrives through the `audio` reply handler (message path) or as a separate message (file path); `message` is already plain English (`voiceErrorText`); `Voice is not available on your Mac…` when `features.stt` is false or the relay is down |
-| watch → phone | `prompt` | `{ type: "prompt", id, sessionId, text }` — plain text only, sent with `session/send` (same params as the chat) |
+| watch → phone | `prompt` | `{ type: "prompt", id, sessionId, text }` — plain text only; forwarded to `session/send` only when `sessionId` is in the rows last pushed, else a short error replies |
 | phone → watch | `result` | `{ type: "result", id, ok: true }` or `{ type: "result", id, ok: false, message }` — friendly text via `friendlyError`; immediate `Your phone cannot reach your Mac.` when the relay is down |
 
 - **Phone** — `src/watchBridge.ts` (hello + snapshot + the W2/W3 `audio`/`prompt`
@@ -45,13 +46,13 @@ pair `audio`/`transcript` plus `prompt`/`result`.
   state machine (record → transcribing → confirm → sent; 25 s transcript timeout),
   `ContentView.swift` (home: target picker, mic, `Continue`/`Yes`/`No`/`Stop` quick
   chips, DEBUG buttons), `VoiceFlowView.swift` (recording/transcribing/confirm/error/
-  sent screens). `test-clip.wav` is a resource of the target (synchronized folder);
+  sent screens). `test-clip.m4a` is a resource of the target (synchronized folder);
   the `Send test clip` button (`#if DEBUG`) sends it as if recorded.
 
 ## Spike notes
 
 Files: `targets/watch/{expo-target.config.js, Info.plist, ZodeWatchApp.swift,
-PhoneLink.swift, ContentView.swift, VoiceFlowView.swift, test-clip.wav}`,
+PhoneLink.swift, ContentView.swift, VoiceFlowView.swift, test-clip.m4a}`,
 `src/watchBridge.ts`, `src/watchVoice.ts`, mounted in `app/_layout.tsx`;
 `app.json` carries the `@bacons/apple-targets` plugin entry.
 

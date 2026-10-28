@@ -1,7 +1,8 @@
 import { gcm } from "@noble/ciphers/aes.js";
 import { utf8ToBytes } from "@noble/ciphers/utils.js";
+import * as Notifications from "expo-notifications";
 import { bytesToBase64Url } from "../src/push";
-import { PUSH_ACTION_TASK, runPushAction, type PushRelay } from "../src/pushActions";
+import { PUSH_ACTION_TASK, registerPushTasks, runPushAction, type PushRelay } from "../src/pushActions";
 
 jest.mock("expo-notifications", () => ({
   setNotificationHandler: jest.fn(),
@@ -263,5 +264,55 @@ describe("runPushAction: guards", () => {
 describe("task name", () => {
   it("is stable", () => {
     expect(PUSH_ACTION_TASK).toBe("zode.push.action");
+  });
+});
+
+// The registered response listener is what a real tap hits. It must open the
+// conversation exactly once (runPushAction's default branch only — the old
+// routeDefault duplicate is gone) and keep the Allow/Deny/Reply buttons working.
+describe("registerPushTasks: notification taps", () => {
+  const DEFAULT_ACTION = "expo.modules.notifications.actions.DEFAULT";
+
+  function lastListener(): (response: unknown) => void {
+    const mock = Notifications.addNotificationResponseReceivedListener as unknown as jest.Mock;
+    const calls = mock.mock.calls;
+    return calls[calls.length - 1][0];
+  }
+
+  // The listener fire-and-forgets runPushAction; one macrotask lets it settle.
+  const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+  it("opens the conversation exactly once for a body tap", async () => {
+    const { base, opened } = deps();
+    registerPushTasks(base);
+    const data = sealedData("done", {
+      v: 1,
+      kind: "done",
+      title: "t",
+      body: "b",
+      session: "sess_9",
+      at: 1,
+    });
+    lastListener()({ ...notificationData(data, "tap-1"), actionIdentifier: DEFAULT_ACTION });
+    await flush();
+    expect(opened).toEqual(["sess_9"]);
+  });
+
+  it("still answers an allow tap through the same listener", async () => {
+    const { base, sent, opened } = deps();
+    registerPushTasks(base);
+    const data = sealedData("ask", {
+      v: 1,
+      kind: "ask",
+      title: "t",
+      body: "b",
+      session: "sess_9",
+      at: 1,
+      req: { server: "101", id: "req-9" },
+    });
+    lastListener()(notificationData(data, "tap-2"));
+    await flush();
+    expect(sent).toEqual([{ type: "respond", server: "101", id: "req-9", decision: "allow" }]);
+    expect(opened).toEqual([]);
   });
 });
