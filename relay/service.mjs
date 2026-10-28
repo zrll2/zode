@@ -52,10 +52,20 @@ const B64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
 const b64Bytes = s => Math.floor(s.length / 4) * 3 - (s.endsWith('==') ? 2 : s.endsWith('=') ? 1 : 0);   // decoded size, no decode
 const ATTACH_FIELDS = a => ({ ref: a.ref, fileName: a.fileName, mime: a.mime, bytes: a.bytes });         // drop anything else the phone sent
 
+// The agent stages files under the name a phone sends, so a file name is only ever one path
+// component: the basename after / or \, control characters dropped, trimmed, at most 200
+// characters. Null when nothing safe remains ('', '.', '..', separators only) — callers refuse.
+function safeFileName(name) {
+  if (typeof name !== 'string') return null;
+  const base = name.split(/[\\/]/).pop().replace(/[\x00-\x1f\x7f]/g, '').trim().slice(0, 200);
+  return base && base !== '.' && base !== '..' ? base : null;
+}
+
 function checkAttachment(a, sessionId) {
   if (!a || typeof a !== 'object' || Array.isArray(a)) return 'each attachment must be an object';
   if (typeof a.ref !== 'string' || !a.ref.startsWith(`zcode-artifact://${sessionId}/`)) return 'attachment ref must be a zcode-artifact:// ref of this session';
   if (typeof a.fileName !== 'string' || !a.fileName.length || a.fileName.length > 200) return 'attachment fileName must be 1-200 characters';
+  if (!safeFileName(a.fileName)) return 'attachment fileName must reduce to a safe file name';
   if (typeof a.mime !== 'string' || a.mime.length > 100 || !MIME_RE.test(a.mime)) return 'attachment mime must be a lowercase type/subtype';
   if (!Number.isInteger(a.bytes) || a.bytes < 1 || a.bytes > MAX_UPLOAD) return 'attachment bytes must be 1 byte to 8 MB';
   return null;
@@ -77,6 +87,7 @@ export function checkPolicy(method, params) {
   if (method === 'attachment/upload') {
     const name = params?.fileName;
     if (typeof name !== 'string' || !name.length || name.length > 200) return 'fileName must be 1-200 characters';
+    if (!safeFileName(name)) return 'fileName must reduce to a safe file name';
     const mime = params?.mime;
     if (typeof mime !== 'string' || mime.length > 100 || !MIME_RE.test(mime)) return 'mime must be a lowercase type/subtype';
     const b64 = params?.dataBase64;
@@ -381,7 +392,8 @@ export function createRelay(opts = {}) {
     const fail = message => send(c, { type: 'rpc-result', id: m.id, error: { code: -32010, message } });
     try {
       const raw = Buffer.from(p.dataBase64, 'base64');
-      const fileName = p.fileName.replace(/[\/\\\x00-\x1f\x7f]/g, '_');     // the agent stages files under this name
+      const fileName = safeFileName(p.fileName);                           // one safe basename, the same rule the send path applies
+      if (!fileName) return fail('upload failed: the file name is not safe');
       log.log(`upload ${c.device.id} ${fileName} ${raw.length}B -> ${u.meta.pid}`);
       await callUpstream(u, 'session/resume', { sessionId: p.sessionId });
       await callUpstream(u, 'v4/attachment/begin', { connectionId, uploadId, sessionId: p.sessionId, fileName, mime: p.mime,
@@ -405,7 +417,9 @@ export function createRelay(opts = {}) {
     try {
       log.log(`send ${c.device.id} ${p.attachments.length} attachment(s) -> ${u.meta.pid}`);
       await callUpstream(u, 'session/resume', { sessionId: p.sessionId });
-      const payload = { text: p.content, attachments: p.attachments.map(ATTACH_FIELDS) };
+      const attachments = p.attachments.map((a) => ({ ...ATTACH_FIELDS(a), fileName: safeFileName(a.fileName) }));   // never the phone's raw name
+      if (attachments.some((a) => !a.fileName)) return fail('send failed: an attachment file name is not safe');
+      const payload = { text: p.content, attachments };
       if (p.modelSelection !== undefined) payload.modelSelection = p.modelSelection;
       const res = await callUpstream(u, 'v4/command', { commandId: crypto.randomUUID(), clientId: 'zode-relay', sessionId: p.sessionId, type: 'sendText', payload, issuedAt: Date.now() });
       if (!res || res.status !== 'accepted') return fail(res?.reasonCode ?? 'send was not accepted');

@@ -2,12 +2,19 @@
 // phone repo (app/src/approvals.ts) carries the same rules and can copy the table verbatim.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isRiskyRequest, RISKY_FIXTURES } from '../risk.mjs';
+import { isRiskyRequest, commandSegments, RISKY_FIXTURES } from '../risk.mjs';
 
 test('the fixture table: every command, risky or safe, exactly as the classifier sees it', () => {
   for (const f of RISKY_FIXTURES) {
     assert.equal(isRiskyRequest({ riskLevel: f.riskLevel, input: { command: f.command } }), f.risky, f.command);
   }
+});
+
+test('normalisation: separators, wrappers and whitespace split a command into bare segments', () => {
+  assert.deepEqual(commandSegments('  ENV NOHUP   sudo\tls  '), ['sudo ls']);   // wrappers stripped, whitespace collapsed
+  assert.deepEqual(commandSegments('a;b && c | d||e'), ['a', 'b', 'c', 'd', 'e']);
+  assert.deepEqual(commandSegments('cargo run > /dev/null 2>&1'), ['cargo run > /dev/null 2>&1']);   // 2>&1 is not a separator
+  assert.deepEqual(commandSegments('   '), []);
 });
 
 test('non-string commands and missing fields are never risky; the classics ignore riskLevel', () => {

@@ -689,6 +689,9 @@ test('checkPolicy: rename/upload session ids, upload file rules, send attachment
   assert.match(checkPolicy('attachment/upload', { sessionId: 'nope', ...png }), /sessionId/);
   assert.match(checkPolicy('attachment/upload', { sessionId: id100, fileName: '', mime: 'image/png', dataBase64: png.dataBase64 }), /fileName/);
   assert.match(checkPolicy('attachment/upload', { sessionId: id100, fileName: 'x'.repeat(201), mime: 'image/png', dataBase64: png.dataBase64 }), /fileName/);
+  assert.equal(checkPolicy('attachment/upload', { sessionId: id100, fileName: 'a/b/c.png', mime: 'image/png', dataBase64: png.dataBase64 }), null);   // a directory part is reduced, not refused
+  assert.match(checkPolicy('attachment/upload', { sessionId: id100, fileName: '..', mime: 'image/png', dataBase64: png.dataBase64 }), /fileName/);   // nothing safe remains
+  assert.match(checkPolicy('session/send', { sessionId: 'sess_a', content: 'hi', attachments: [{ ...att, fileName: '..' }] }), /fileName/);
   assert.match(checkPolicy('attachment/upload', { sessionId: id100, fileName: 'a.png', mime: 'not a mime', dataBase64: png.dataBase64 }), /mime/);
   assert.match(checkPolicy('attachment/upload', { sessionId: id100, fileName: 'a.png', mime: 'Image/PNG', dataBase64: png.dataBase64 }), /mime/);   // lowercase only
   assert.match(checkPolicy('attachment/upload', { sessionId: id100, fileName: 'a.png', mime: 'image/png', dataBase64: '' }), /dataBase64/);
@@ -818,7 +821,7 @@ test('attachment/upload resumes, stages the chunks in order, commits and answers
     ws.send(JSON.stringify({ type: 'rpc', id: 21, method: 'attachment/upload',
       params: { sessionId: 'sess_up1', fileName: 'a/b\nc.png', mime: 'image/png', dataBase64: raw.toString('base64') } }));
     const res = await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === 21);
-    assert.deepEqual(res.result, { ref, fileName: 'a_b_c.png', mime: 'image/png', bytes: 300 * 1024 });   // sanitized name
+    assert.deepEqual(res.result, { ref, fileName: 'bc.png', mime: 'image/png', bytes: 300 * 1024 });   // basename; control characters dropped
 
     await waitFor(() => up.received.length >= 5);
     const [resume, begin, chunk0, chunk1, commit] = up.received;
@@ -827,7 +830,7 @@ test('attachment/upload resumes, stages the chunks in order, commits and answers
     assert.equal(begin.method, 'v4/attachment/begin');
     assert.equal(begin.params.connectionId, `relay-${device}`);
     assert.equal(begin.params.sessionId, 'sess_up1');
-    assert.equal(begin.params.fileName, 'a_b_c.png');                    // / and control characters replaced
+    assert.equal(begin.params.fileName, 'bc.png');                       // directory part stripped, control characters dropped
     assert.equal(begin.params.mime, 'image/png');
     assert.equal(begin.params.totalBytes, 300 * 1024);
     assert.equal(begin.params.totalChunks, 2);
@@ -875,6 +878,56 @@ test('attachment/upload: too large or bad mime is refused by policy, nothing rea
   } finally { await relay.stop(); await up.close(); }
 });
 
+test('file names reduce to a safe basename on both paths; a name with nothing safe is refused', async () => {
+  const port = await freePort();
+  const up = fakeUpstream();
+  const relay = createRelay({ port, stateDir: path.join(up.home, 'state'), tapDir: up.tapDir, log: silent });
+  await relay.start();
+  try {
+    await waitFor(() => relay.status().upstreams === 1);
+    const { token } = await (await pair(port, relay.createPairing().code, 'phone')).json();
+    const { ws } = await authed(`ws://127.0.0.1:${port}`, token);
+    const small = Buffer.from('hello').toString('base64');
+    const ref = 'zcode-artifact://sess_nm1/tool-result-1';
+
+    up.answer('v4/attachment/commit', () => ({ ref }));
+    ws.send(JSON.stringify({ type: 'rpc', id: 41, method: 'attachment/upload',
+      params: { sessionId: 'sess_nm1', fileName: 'dir/sub\\..\\report.pdf', mime: 'image/png', dataBase64: small } }));
+    const upload = await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === 41);
+    assert.equal(upload.error, undefined);
+    assert.equal(upload.result.fileName, 'report.pdf');                  // every separator starts a new name: the last one wins
+    await waitFor(() => up.received.length >= 4);
+    assert.equal(up.received.find((m) => m.method === 'v4/attachment/begin').params.fileName, 'report.pdf');
+
+    up.received.length = 0;
+    up.answer('v4/command', (m) => ({ commandId: m.params.commandId, status: 'accepted' }));
+    ws.send(JSON.stringify({ type: 'rpc', id: 42, method: 'session/send',
+      params: { sessionId: 'sess_nm1', content: 'hi', attachments: [{ ref, fileName: '../out/../pic.png', mime: 'image/png', bytes: 1 }] } }));
+    const send = await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === 42);
+    assert.equal(send.error, undefined);
+    await waitFor(() => up.received.some((m) => m.method === 'v4/command'));
+    assert.deepEqual(up.received.find((m) => m.method === 'v4/command').params.payload.attachments,
+      [{ ref, fileName: 'pic.png', mime: 'image/png', bytes: 1 }]);
+
+    const bad = ['..', '.', '///', '\\\\', '\u0000\u0001', '   ', 'x'.repeat(201)];   // nothing safe remains
+    let id = 43;
+    const before = up.received.length;
+    for (const name of bad) {
+      ws.send(JSON.stringify({ type: 'rpc', id, method: 'attachment/upload',
+        params: { sessionId: 'sess_nm1', fileName: name, mime: 'image/png', dataBase64: small } }));
+      assert.equal((await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === id)).error.code, -32001, JSON.stringify(name));
+      id += 1;
+      ws.send(JSON.stringify({ type: 'rpc', id, method: 'session/send',
+        params: { sessionId: 'sess_nm1', content: 'hi', attachments: [{ ref, fileName: name, mime: 'image/png', bytes: 1 }] } }));
+      assert.equal((await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === id)).error.code, -32001, JSON.stringify(name));
+      id += 1;
+    }
+    await sleep(150);
+    assert.equal(up.received.length, before);                            // none of the refused names reached upstream
+    ws.close();
+  } finally { await relay.stop(); await up.close(); }
+});
+
 test('session/send with attachments sends exactly one sendText v4/command; a foreign ref is refused', async () => {
   const port = await freePort();
   const up = fakeUpstream();
@@ -886,7 +939,7 @@ test('session/send with attachments sends exactly one sendText v4/command; a for
     const { ws } = await authed(`ws://127.0.0.1:${port}`, token);
 
     up.answer('v4/command', (m) => ({ commandId: m.params.commandId, status: 'accepted', result: { type: 'inputAccepted', delivery: 'startNow', inputId: 'in_1' } }));
-    const att = { ref: 'zcode-artifact://sess_s1/tool-result-9', fileName: 'pic.png', mime: 'image/png', bytes: 1234, bogus: 'dropped' };
+    const att = { ref: 'zcode-artifact://sess_s1/tool-result-9', fileName: 'pics/pic.png', mime: 'image/png', bytes: 1234, bogus: 'dropped' };
     const resP = nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === 41);   // listen first: the fake answers v4/command within the same tick
     ws.send(JSON.stringify({ type: 'rpc', id: 41, method: 'session/send',
       params: { sessionId: 'sess_s1', content: 'look at this', attachments: [att], modelSelection: { model: 'glm-5' } } }));
@@ -900,7 +953,7 @@ test('session/send with attachments sends exactly one sendText v4/command; a for
     assert.equal(cmd.params.sessionId, 'sess_s1');
     assert.equal(typeof cmd.params.issuedAt, 'number');
     assert.deepEqual(cmd.params.payload, { text: 'look at this',
-      attachments: [{ ref: att.ref, fileName: 'pic.png', mime: 'image/png', bytes: 1234 }],
+      attachments: [{ ref: att.ref, fileName: 'pic.png', mime: 'image/png', bytes: 1234 }],   // reduced to the basename, never the phone's raw name
       modelSelection: { model: 'glm-5' } });
     const res = await resP;
     assert.deepEqual(res.result, { accepted: true, sessionId: 'sess_s1',
