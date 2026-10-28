@@ -15,8 +15,9 @@ export function signProviderToken({ key, keyId, teamId, now = Math.floor(Date.no
 }
 
 // A fresh token between 20 and 60 minutes is APNs' rule; 40 minutes sits in the middle. `now` is
-// injectable so tests can walk the clock.
-export function createTokenSource({ key, keyId, teamId, now = Date.now(), ttlMs = 40 * 60 * 1000 } = {}) {
+// injectable so tests can walk the clock. The default must be the function `Date.now` — `token()`
+// calls `now()`, so a number here throws on the first push.
+export function createTokenSource({ key, keyId, teamId, now = Date.now, ttlMs = 40 * 60 * 1000 } = {}) {
   let cached = null;
   let cachedAt = -Infinity;
   return function token() {
