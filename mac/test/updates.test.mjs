@@ -81,8 +81,10 @@ test('engineRebuildScript: paths with a space and a single quote survive the she
 test('engineRebuildScript: quits the engine, builds with ZODE_ENGINE=1, swaps only after success, reopens', () => {
   const s = engineRebuildScript({ repo: '/repo', enginePath: '/Applications/ZCode Engine.app' });
   assert.ok(s.includes(`osascript -e 'tell application id "dev.zode.engine" to quit'`));
-  assert.ok(s.includes('pgrep -f "$ENGINE/Contents/MacOS"'));
-  assert.ok(s.includes('pkill -f "$ENGINE/"'));
+  assert.ok(s.includes('pgrep -f "^$ENGINE/Contents/MacOS/"'));      // anchored at the line start: only the Engine's own processes
+  assert.ok(s.includes('pkill -f "^$ENGINE/"'));
+  assert.equal(s.includes('pgrep -f "$ENGINE'), false);              // the unanchored forms are gone
+  assert.equal(s.includes('pkill -f "$ENGINE/'), false);
   assert.ok(s.includes('ZODE_ENGINE=1 ZODE_TAP_APP="$TMP/$(basename "$ENGINE")" bash "$REPO/scripts/build-tap.sh"'));
   assert.ok(s.includes('mv "$ENGINE" "$ENGINE.old"'));
   assert.ok(s.includes('mv "$TMP/$(basename "$ENGINE")" "$ENGINE"'));

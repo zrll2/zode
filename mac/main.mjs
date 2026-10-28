@@ -500,7 +500,13 @@ async function start() {
     function notifyFlush() {
       try {
         if (!notifyQueue.length) return;
-        if (panelFocused()) { notifyQueue = []; return; }            // the user is looking right now: nothing to tell them
+        if (panelFocused()) {                        // the user is looking right now: no toast, but the phones still hear the news
+          let batch = notifyQueue;
+          notifyQueue = [];
+          if (batch.length > 3) batch = [{ kind: 'many', count: batch.length }];
+          for (const note of batch) pushDevices(note);
+          return;
+        }
         if (Date.now() - notifyShownAt < NOTIFY_PACE_MS) return;     // paced: the queue merges into the next show
         let batch = notifyQueue;
         notifyQueue = [];
@@ -511,25 +517,37 @@ async function start() {
       } catch (err) { appendLog(`zode: notify flush: ${err?.stack || err}`); }
     }
 
+    // Plain words for one event: the macOS toast and the phone push say the same thing.
+    function noteWords(note) {
+      const project = typeof note.project === 'string' && note.project ? note.project : 'ZCode';
+      let title = `ZCode: ${Math.max(0, Math.floor(Number(note.count) || 0))} updates`, body = 'Open Zode to see them.', silent = true;
+      if (note.kind === 'finished') { title = `${project} finished`; body = (typeof note.title === 'string' && note.title) || 'Done.'; }
+      else if (note.kind === 'failed') { title = `${project} failed`; body = 'Open Zode to retry.'; silent = false; }
+      else if (note.kind === 'needs') { title = `${project} needs you`; body = 'Waiting for an answer or permission.'; silent = false; }
+      else if (note.kind === 'stalled') { title = `${project} may be stuck`; body = 'No activity for a while.'; }
+      return { title, body, silent };
+    }
+
+    // The same news goes to the paired phones, sealed per phone by the relay. Kinds map 1:1; a burst
+    // becomes one 'done' carrying the update count.
+    function pushDevices(note) {
+      try {
+        const kind = { finished: 'done', failed: 'failed', stalled: 'stuck', many: 'done' }[note.kind];
+        if (!kind) return;
+        const { title, body } = noteWords(note);
+        const text = note.kind === 'many' ? `${Math.max(0, Math.floor(Number(note.count) || 0))} updates` : body;
+        try { relay?.notifyDevices?.({ kind, title, body: text, project: note.project }); } catch { /* pushes are best effort */ }
+      } catch (err) { appendLog(`zode: device push: ${err?.stack || err}`); }
+    }
+
     function showNotification(note) {
       try {
-        const project = typeof note.project === 'string' && note.project ? note.project : 'ZCode';
-        let title = `ZCode: ${Math.max(0, Math.floor(Number(note.count) || 0))} updates`, body = 'Open Zode to see them.', silent = true;
-        if (note.kind === 'finished') { title = `${project} finished`; body = (typeof note.title === 'string' && note.title) || 'Done.'; }
-        else if (note.kind === 'failed') { title = `${project} failed`; body = 'Open Zode to retry.'; silent = false; }
-        else if (note.kind === 'needs') { title = `${project} needs you`; body = 'Waiting for an answer or permission.'; silent = false; }
-        else if (note.kind === 'stalled') { title = `${project} may be stuck`; body = 'No activity for a while.'; }
+        const { title, body, silent } = noteWords(note);
         const n = new Notification({ title, body, silent });
         n.on('click', () => { try { showPanel(); } catch { /* the panel comes with the next click */ } });
         n.show();
         appendLog(`zode: notification ${note.kind}`);
-        // The same news goes to the paired phones, sealed per phone by the relay. Kinds map 1:1;
-        // a burst becomes one 'done' carrying the update count.
-        const kind = { finished: 'done', failed: 'failed', stalled: 'stuck', many: 'done' }[note.kind];
-        if (kind) {
-          const text = note.kind === 'many' ? `${Math.max(0, Math.floor(Number(note.count) || 0))} updates` : body;
-          try { relay?.notifyDevices?.({ kind, title, body: text, project: note.project }); } catch { /* pushes are best effort */ }
-        }
+        pushDevices(note);
       } catch (err) { appendLog(`zode: notification: ${err?.stack || err}`); }
     }
 
@@ -1048,15 +1066,19 @@ async function start() {
     }
 
     // Every payload is checked against the last listing before it reaches an action; anything unknown
-    // or stale is ignored.
+    // or stale is ignored. An approval is re-derived from the listing by requestId — the renderer's
+    // sock and risky flag are never taken at their word, and a request that is no longer pending
+    // does nothing.
     const liveSocks = () => new Set((Array.isArray(work?.lines) ? work.lines : []).map(l => l?.sock).filter(s => typeof s === 'string' && s.length > 0));
     const idOk = v => (typeof v === 'string' && v.length > 0) || (typeof v === 'number' && Number.isFinite(v));
 
     function handlePanelAction(name, payload) {
       const p = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {};
       if (name === 'approve') {
-        if (!idOk(p.requestId) || !liveSocks().has(p.sock)) return;
-        panelApprove({ requestId: p.requestId, sock: p.sock, risky: p.risky === true, summary: typeof p.summary === 'string' ? p.summary : '' });
+        if (!idOk(p.requestId)) return;
+        const listed = findPending(p.requestId);         // the listing decides, never the renderer's word
+        if (!listed || listed.kind !== 'permission' || !liveSocks().has(listed.sock)) return;
+        panelApprove({ requestId: listed.requestId, sock: listed.sock, risky: listed.risky === true, summary: typeof listed.summary === 'string' ? listed.summary : '' });
       } else if (name === 'deny') {
         if (!idOk(p.requestId) || !liveSocks().has(p.sock)) return;
         actions.deny(p.requestId, p.sock);

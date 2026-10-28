@@ -29,7 +29,16 @@ export function loadSettings(file) {
 
 export function saveSettings(file, settings = {}) {
   const s = sanitize(settings);
-  fs.writeFileSync(file, JSON.stringify(s, null, 2) + '\n', { mode: 0o600 });
-  fs.chmodSync(file, 0o600);                                      // umask may have masked the mode
+  // Write beside the target and rename over it: a crash mid-save leaves the old file intact, never
+  // a half-written one that load would read as defaults.
+  const tmp = `${file}.${process.pid}.tmp`;
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(s, null, 2) + '\n', { mode: 0o600 });
+    fs.chmodSync(tmp, 0o600);                                     // umask may have masked the mode
+    fs.renameSync(tmp, file);
+  } catch (err) {
+    try { fs.unlinkSync(tmp); } catch { /* nothing to clean up */ }
+    throw err;
+  }
   return s;
 }

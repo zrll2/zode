@@ -111,11 +111,12 @@ fail() {
 echo "$(date '+%F %T') rebuilding the Engine at $ENGINE from the original ZCode (kit: $REPO)"
 
 # Only one copy of ZCode may run while the Engine is replaced: ask it to quit, wait up to 10 s, then stop it.
+# The pgrep/pkill patterns anchor at the line start: a process that merely mentions the path is not the Engine.
 osascript -e 'tell application id "dev.zode.engine" to quit' >/dev/null 2>&1 || true
 n=0
-while pgrep -f "$ENGINE/Contents/MacOS" >/dev/null 2>&1; do
+while pgrep -f "^$ENGINE/Contents/MacOS/" >/dev/null 2>&1; do
   n=$((n + 1))
-  if [ "$n" -eq 10 ]; then pkill -f "$ENGINE/" >/dev/null 2>&1 || true; fi
+  if [ "$n" -eq 10 ]; then pkill -f "^$ENGINE/" >/dev/null 2>&1 || true; fi
   if [ "$n" -ge 20 ]; then fail "the Engine did not quit within 10 s"; fi
   sleep 1
 done
