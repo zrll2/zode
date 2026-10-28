@@ -43,6 +43,16 @@ test('saveSettings drops unknown keys and out-of-range ports', () => {
   assert.deepEqual(JSON.parse(fs.readFileSync(f, 'utf8')), saved);
 });
 
+test('saveSettings replaces the file atomically: whole new content, 0600, no temp file left', () => {
+  const dir = tmp();
+  const f = path.join(dir, 'settings.json');
+  fs.writeFileSync(f, '{ half a file');                            // what a crashed plain write could leave
+  saveSettings(f, { relayEnabled: false, notify: false });
+  assert.deepEqual(loadSettings(f), { ...DEFAULTS, relayEnabled: false, notify: false });   // replaced whole, never merged or partial
+  assert.equal(fs.statSync(f).mode & 0o777, 0o600);
+  assert.deepEqual(fs.readdirSync(dir).filter(n => n.includes('.tmp')), []);
+});
+
 test('setupDone, keepAwake and foldFinished survive a round-trip and default correctly', () => {
   const dir = tmp();
   const f = path.join(dir, 'settings.json');

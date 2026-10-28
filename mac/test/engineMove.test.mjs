@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { findEngine, migrateEngine, enginePathFor } from '../lib/system.mjs';
+import { findEngine, migrateEngine, enginePathFor, appProcessPattern, isRunning } from '../lib/system.mjs';
 
 const home = () => fs.mkdtempSync(path.join(os.tmpdir(), 'zode-eng-'));
 const apps = h => path.join(h, 'SysApplications');     // a stand-in for /Applications: a test never touches the real one
@@ -41,4 +41,19 @@ test('migrateEngine: nothing to move, already moved, or running means null and n
   assert.equal(fs.existsSync(old), true);
   fs.mkdirSync(enginePathFor(h), { recursive: true });
   assert.equal(await migrateEngine({ home: h, apps: apps(h), run: never }), null);
+});
+
+test('appProcessPattern anchors at the start of the command line', () => {
+  assert.equal(appProcessPattern('/Applications/ZCode.app'), '^/Applications/ZCode.app/Contents/MacOS/');
+  assert.equal(appProcessPattern('/Users/x/Library/Application Support/Zode/engine.noindex/ZCode.app'),
+    '^/Users/x/Library/Application Support/Zode/engine.noindex/ZCode.app/Contents/MacOS/');
+});
+
+test('isRunning asks pgrep for the anchored pattern and reads its stdout', async () => {
+  const calls = [];
+  const found = (cmd, args, o, cb) => { calls.push([cmd, args]); (typeof o === 'function' ? o : cb)(null, '123\n'); };
+  assert.equal(await isRunning('/Applications/ZCode.app', found), true);
+  assert.deepEqual(calls, [['pgrep', ['-f', '^/Applications/ZCode.app/Contents/MacOS/']]]);
+  assert.equal(await isRunning('/Applications/ZCode.app', never), false);
+  assert.equal(await isRunning('', never), false);
 });

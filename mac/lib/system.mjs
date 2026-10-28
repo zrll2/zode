@@ -82,12 +82,16 @@ export function findOldIntegrated({ home = HOME, fs: fsMod = fs } = {}) {
   });
 }
 
+// pgrep -f and pkill -f match whole command lines: anchor at the start, so a path that merely shows
+// up in another process's arguments (an editor, a tail) never counts as the app itself.
+export const appProcessPattern = (appPath) => `^${appPath}/Contents/MacOS/`;
+
 // Is any copy of the app at appPath running right now?
 export function isRunning(appPath, run = execFile) {
   return new Promise(resolve => {
     try {
       if (typeof appPath !== 'string' || !appPath) return resolve(false);
-      run('pgrep', ['-f', `${appPath}/Contents/MacOS`], { timeout: 5000 }, (err, stdout) => {
+      run('pgrep', ['-f', appProcessPattern(appPath)], { timeout: 5000 }, (err, stdout) => {
         resolve(!err && String(stdout ?? '').trim() !== '');
       });
     } catch { resolve(false); }
@@ -98,7 +102,7 @@ export function isRunning(appPath, run = execFile) {
 export async function quitApp(id, appPath, run = execFile) {
   try {
     if (typeof appPath !== 'string' || !appPath) return false;
-    const pattern = `${appPath}/Contents/MacOS`;
+    const pattern = appProcessPattern(appPath);
     const running = () => new Promise(res => {
       try { run('pgrep', ['-f', pattern], { timeout: 5000 }, err => res(!err)); } catch { res(false); }
     });
