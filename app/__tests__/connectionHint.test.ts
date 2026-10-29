@@ -44,8 +44,8 @@ describe("home Wi-Fi only (no Tailscale address known, connected before)", () =>
 
 describe("away from home with a Tailscale address known", () => {
   const AWAY = {
-    urls: ["ws://192.168.1.20:8787", "ws://100.86.6.90:8787"],
-    lastGood: "ws://100.86.6.90:8787" as string | null,
+    urls: ["ws://192.168.1.20:8787", "ws://100.64.0.7:8787"],
+    lastGood: "ws://100.64.0.7:8787" as string | null,
     status: "reconnecting",
     secondsDisconnected: 30,
   };
@@ -66,7 +66,7 @@ describe("away from home with a Tailscale address known", () => {
   });
 
   it("points at Tailscale when only the Tailscale address is known", () => {
-    const hint = connectionHint({ ...AWAY, urls: ["ws://100.86.6.90:8787"] });
+    const hint = connectionHint({ ...AWAY, urls: ["ws://100.64.0.7:8787"] });
     expect(hint?.title).toBe("Turn on Tailscale");
   });
 

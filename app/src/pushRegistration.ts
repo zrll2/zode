@@ -46,6 +46,7 @@ function env(deps: PushRegistrationDeps): "sandbox" | "production" {
 // Permission -> APNs token -> POST /api/register -> relay `push/register`.
 // Never throws; the returned state is what the menu row shows.
 export async function registerPush(deps: PushRegistrationDeps = {}): Promise<PushState> {
+  if (Platform.OS === "web") return "off";
   if (!deps.pushKey) return "unavailable";
   const notifications = deps.notifications ?? defaultNotifications();
   try {
@@ -97,6 +98,7 @@ export async function registerPush(deps: PushRegistrationDeps = {}): Promise<Pus
 export async function ensurePushOnStart(
   deps: PushRegistrationDeps = {},
 ): Promise<PushState | null> {
+  if (Platform.OS === "web") return null;
   const load = deps.loadPrefs ?? loadPrefs;
   try {
     const prefs = await load();
@@ -120,6 +122,7 @@ export async function enablePush(deps: PushRegistrationDeps = {}): Promise<PushS
 
 // Best-effort relay unregister + forget. Never throws.
 export async function disablePush(deps: PushRegistrationDeps = {}): Promise<void> {
+  if (Platform.OS === "web") return;
   try {
     if (deps.pushId) await deps.rpc?.("push/unregister", { pushId: deps.pushId });
   } catch {}

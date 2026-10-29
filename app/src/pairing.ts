@@ -226,3 +226,34 @@ export function describeAddress(url: string): string {
   }
   return "Connected";
 }
+
+export interface WebRelay {
+  u: string;
+  urls: string[];
+}
+
+// Web: the browser was served by the relay itself, so the relay address is
+// this page's origin (http -> ws, https -> wss).
+export function webRelayFromLocation(loc: {
+  protocol?: string;
+  host?: string;
+}): WebRelay {
+  const origin = `${loc.protocol ?? "http:"}//${loc.host ?? ""}`.replace(/\/+$/, "");
+  const u = origin.replace(/^http/i, "ws");
+  return { u, urls: sanitizeUrlList([u]) };
+}
+
+// A bare pairing code (no JSON) typed into the web paste box pairs with the
+// relay that served this page. Returns null for anything that is not a bare
+// code — the caller falls back to the JSON parser.
+export function webPairingPayload(
+  code: string,
+  loc: { protocol?: string; host?: string },
+): PairingPayload | null {
+  const trimmed = code.trim();
+  if (!trimmed || trimmed.startsWith("{")) return null;
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(trimmed)) return null;
+  const base = webRelayFromLocation(loc);
+  if (!base.u) return null;
+  return { u: base.u, urls: base.urls, w: "", c: trimmed };
+}

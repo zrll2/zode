@@ -1,4 +1,10 @@
-import { describeAddress, parsePairingPayload, pair } from "../src/pairing";
+import {
+  describeAddress,
+  parsePairingPayload,
+  pair,
+  webPairingPayload,
+  webRelayFromLocation,
+} from "../src/pairing";
 
 const PAYLOAD_TEXT = '{"u":"ws://100.64.0.7:8787","w":"/Users/me/proj","c":"ABC123"}';
 
@@ -216,6 +222,57 @@ describe("pair", () => {
 
     await expect(pair(multi, "Test phone", fetchImpl)).rejects.toThrow("host unreachable");
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("web pairing", () => {
+  const loc = { protocol: "http:", host: "mac:8787" };
+
+  it("derives ws and wss relay addresses from the page location", () => {
+    expect(webRelayFromLocation(loc)).toEqual({
+      u: "ws://mac:8787",
+      urls: ["ws://mac:8787"],
+    });
+    expect(webRelayFromLocation({ protocol: "https:", host: "mac" }).u).toBe("wss://mac");
+    expect(webRelayFromLocation({ protocol: "http:", host: "[::1]:8787" }).u).toBe(
+      "ws://[::1]:8787",
+    );
+    expect(webRelayFromLocation({ protocol: "https:", host: "mac:8443" }).urls).toEqual([
+      "wss://mac:8443",
+    ]);
+  });
+
+  it("builds a payload for a bare pairing code", () => {
+    expect(webPairingPayload("ABC123", loc)).toEqual({
+      u: "ws://mac:8787",
+      urls: ["ws://mac:8787"],
+      w: "",
+      c: "ABC123",
+    });
+    expect(webPairingPayload("  code_9 ", loc)?.c).toBe("code_9");
+  });
+
+  it("rejects bare codes that are not codes", () => {
+    expect(webPairingPayload("", loc)).toBeNull();
+    expect(webPairingPayload("has space", loc)).toBeNull();
+    expect(webPairingPayload('{"u":"ws://x"}', loc)).toBeNull();
+  });
+
+  it("pairs a web payload through the derived http address", async () => {
+    const payload = webPairingPayload("C1", { protocol: "http:", host: "mac:8787" })!;
+    const fetchImpl = jest.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ id: "dev_1", token: "tok_1" }),
+    })) as any;
+
+    const result = await pair(payload, "Browser", fetchImpl);
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "http://mac:8787/pair",
+      expect.objectContaining({ body: JSON.stringify({ code: "C1", name: "Browser" }) }),
+    );
+    expect(result.wsUrl).toBe("ws://mac:8787");
   });
 });
 

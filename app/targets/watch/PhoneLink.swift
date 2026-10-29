@@ -291,7 +291,7 @@ final class PhoneLink: NSObject, ObservableObject, WCSessionDelegate {
         transcriptTimer = Timer.scheduledTimer(withTimeInterval: seconds, repeats: false) { [weak self] _ in
             guard let self, self.step == .transcribing else { return }
             self.pendingAudioId = nil
-            self.step = .error("Your Mac did not answer. Try again.")
+            self.step = .error("No answer. Open Zode on your phone and try again.")
         }
     }
 
@@ -503,10 +503,10 @@ final class PhoneLink: NSObject, ObservableObject, WCSessionDelegate {
     // MARK: constants and state
 
     static let maxSeconds = 55
-    // Stay under WatchConnectivity's ~65 KB message limit; clips above it go
-    // straight to a file transfer.
-    static let maxBase64Characters = 60_000
-    static let messageTimeoutSeconds: TimeInterval = 25
+    // About 14 s of 48 kbps AAC goes in one message (tested on device); longer clips use a file
+    // transfer, which iOS can delay for minutes when the phone app is asleep.
+    static let maxBase64Characters = 80_000
+    static let messageTimeoutSeconds: TimeInterval = 63
     static let fileTransferTimeoutSeconds: TimeInterval = 90
 
     private var audioRecorder: AVAudioRecorder?

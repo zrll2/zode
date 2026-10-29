@@ -52,15 +52,15 @@ it("migrates an old record that only has wsUrl", async () => {
 it("round-trips the address list and the last good address", async () => {
   await saveCredentials({
     wsUrl: "ws://192.168.1.20:8787",
-    wsUrls: ["ws://192.168.1.20:8787", "ws://100.86.6.90:8787"],
-    lastGood: "ws://100.86.6.90:8787",
+    wsUrls: ["ws://192.168.1.20:8787", "ws://100.64.0.7:8787"],
+    lastGood: "ws://100.64.0.7:8787",
     token: "tok",
     deviceId: "dev_1",
   });
   await expect(loadCredentials()).resolves.toEqual({
     wsUrl: "ws://192.168.1.20:8787",
-    wsUrls: ["ws://192.168.1.20:8787", "ws://100.86.6.90:8787"],
-    lastGood: "ws://100.86.6.90:8787",
+    wsUrls: ["ws://192.168.1.20:8787", "ws://100.64.0.7:8787"],
+    lastGood: "ws://100.64.0.7:8787",
     token: "tok",
     deviceId: "dev_1",
   });

@@ -8,7 +8,7 @@
     "userInterfaceStyle": "automatic",
     "ios": {
       "bundleIdentifier": "sg.comex.zode",
-      "buildNumber": "2",
+      "buildNumber": "4",
       "supportsTablet": false,
       "requireFullScreen": false,
       "entitlements": {

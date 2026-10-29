@@ -3,16 +3,28 @@
 // typed text as a prompt. Injectable connect/notifications so the tests
 // never touch a native module or a real socket.
 
-import { Linking } from "react-native";
+import { Linking, Platform } from "react-native";
 import * as Notifications from "expo-notifications";
-import * as TaskManager from "expo-task-manager";
 import { RelayClient } from "./relay/client";
-
-// The slice of the relay client the actions use: a narrow type so fakes fit in tests.
-export type PushRelay = Pick<RelayClient, "connect" | "respond" | "rpc" | "close">;
 import { loadCredentials, type Credentials } from "./storage";
 import { buildSessionSendParams } from "./relay/params";
 import { openSealed, parseNotificationData } from "./push";
+
+// expo-task-manager has no web implementation: loaded lazily so the web
+// bundle never touches it.
+import type * as TaskManagerType from "expo-task-manager";
+
+function taskManager(): typeof TaskManagerType | null {
+  if (Platform.OS === "web") return null;
+  try {
+    return require("expo-task-manager") as typeof TaskManagerType;
+  } catch {
+    return null;
+  }
+}
+
+// The slice of the relay client the actions use: a narrow type so fakes fit in tests.
+export type PushRelay = Pick<RelayClient, "connect" | "respond" | "rpc" | "close">;
 
 export const PUSH_ACTION_TASK = "zode.push.action";
 
@@ -171,8 +183,11 @@ function showFailure(deps: PushActionDeps) {
 
 // Registers everything once from the root layout: the foreground handler
 // (banners while open, no sound for `done`), the in-app response listener and
-// the background task.
+// the background task. Web: nothing to register (no remote notifications).
 export function registerPushTasks(deps: PushActionDeps = {}): void {
+  if (Platform.OS === "web") return;
+  const tm = taskManager();
+  if (!tm) return;
   try {
     Notifications.setNotificationHandler({
       handleNotification: async (notification) => {
@@ -195,7 +210,7 @@ export function registerPushTasks(deps: PushActionDeps = {}): void {
     });
   } catch {}
   try {
-    TaskManager.defineTask(PUSH_ACTION_TASK, async (taskBody: unknown) => {
+    tm.defineTask(PUSH_ACTION_TASK, async (taskBody: unknown) => {
       try {
         const response = (taskBody as { data?: PushResponseLike })?.data;
         if (response) void runPushAction(response, deps);
@@ -214,6 +229,7 @@ interface CategoryNotifications {
 export async function ensureNotificationCategories(
   notifications: CategoryNotifications = Notifications as unknown as CategoryNotifications,
 ): Promise<void> {
+  if (Platform.OS === "web") return;
   const reply = {
     identifier: "reply",
     buttonTitle: "Send",

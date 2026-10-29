@@ -7,6 +7,8 @@
     "start": "expo start",
     "ios": "expo run:ios",
     "android": "expo run:android",
+    "web": "expo start --web",
+    "export:web": "expo export --platform web --output-dir dist-web",
     "test": "jest",
     "typecheck": "tsc --noEmit",
     "store:check": "node scripts/store-check.mjs"
@@ -15,6 +17,7 @@
     "@bacons/apple-targets": "^5.0.0",
     "@expo-google-fonts/nunito": "^0.4.2",
     "@expo-google-fonts/source-serif-4": "^0.4.1",
+    "@expo/metro-runtime": "^58.0.15",
     "@expo/vector-icons": "^15.1.1",
     "@noble/ciphers": "^2.4.0",
     "expo": "~58.0.14",
@@ -41,7 +44,8 @@
     "react-native-markdown-display": "^7.0.2",
     "react-native-safe-area-context": "~5.10.1",
     "react-native-screens": "~4.30.0",
-    "react-native-watch-connectivity": "^2.0.0"
+    "react-native-watch-connectivity": "^2.0.0",
+    "react-native-web": "^0.21.4"
   },
   "devDependencies": {
     "@types/jest": "30.0.0",

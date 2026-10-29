@@ -48,6 +48,17 @@ The device token is stored in the iOS Keychain / Android Keystore via
 `expo-secure-store`. It is only ever sent inside the first WebSocket `auth` frame —
 never logged, never put in a URL.
 
+## Browser client
+
+The phone app also runs on the web: `npm run export:web` produces a static site in
+`dist-web/`; copy it to the folder the relay serves at `/`. The browser is then a
+full client: it pairs with the bare code `./zode pair` prints (the relay address is
+the page's own origin), lists sessions, chats and answers approvals. Serve it over
+the same LAN/Tailscale only — the relay has no TLS. Push notifications, the watch
+bridge and voice recording are native-only and stay off in the browser.
+
+## Modes
+
 ## Cleartext traffic note
 
 The relay has no TLS: it speaks plain `ws://` / `http://` and is meant to run on a

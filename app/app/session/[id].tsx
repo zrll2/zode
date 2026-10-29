@@ -585,7 +585,9 @@ export default function SessionScreen() {
   const usageTone = usage?.tone ?? "normal";
 
   // Voice input (V3): mic in the composer when the Mac's relay offers stt.
-  const voiceAvailable = status === "ready" && relayFeatures.stt;
+  // Web: expo-audio recording is native-only, so the mic stays hidden.
+  const voiceAvailable =
+    status === "ready" && relayFeatures.stt && Platform.OS !== "web";
   const voiceHint = useVoiceHint({ rpc, enabled: voiceAvailable });
   const voice = useVoiceInput({
     rpc,

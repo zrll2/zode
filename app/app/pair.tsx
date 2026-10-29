@@ -14,7 +14,11 @@ import Constants from "expo-constants";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Linking from "expo-linking";
 import { useRelay } from "../src/useRelay";
-import { parsePairingPayload, pair } from "../src/pairing";
+import {
+  parsePairingPayload,
+  pair,
+  webPairingPayload,
+} from "../src/pairing";
 import { savePushKey } from "../src/storage";
 import { PRIVACY_URL } from "../src/config";
 import { radius, useTheme } from "../src/theme";
@@ -24,6 +28,7 @@ import { Text } from "../src/ui/Text";
 import { friendlyError } from "../src/friendlyError";
 
 function deviceName(): string {
+  if (Platform.OS === "web") return "Browser";
   const anyConstants = Constants as any;
   if (typeof anyConstants?.deviceName === "string" && anyConstants.deviceName) {
     return anyConstants.deviceName;
@@ -44,12 +49,19 @@ export default function PairScreen() {
   const [error, setError] = useState<string | null>(null);
   const [scanned, setScanned] = useState(false);
 
+  const isWeb = Platform.OS === "web";
+
   async function pairWith(raw: string) {
     if (busy || !raw.trim()) return;
     setBusy(true);
     setError(null);
     try {
-      const payload = parsePairingPayload(raw);
+      // Web: a bare code (no JSON) pairs with the relay that served this page.
+      const payload =
+        isWeb && !raw.trim().startsWith("{")
+          ? webPairingPayload(raw, window.location)
+          : parsePairingPayload(raw);
+      if (!payload) throw new Error("Enter the pairing code shown by `./zode pair`.");
       const result = await pair(payload, deviceName());
       // The push key lives in two places: with the credentials for the app,
       // and in the shared-keychain sibling record the notification
@@ -90,43 +102,49 @@ export default function PairScreen() {
           <Image source={require("../assets/zode-mark.png")} style={styles.mark} accessibilityLabel="Zode" />
           <Text variant="display">Connect to your Mac</Text>
           <Text variant="body" color="subtext" style={styles.paragraph}>
-            Scan the code on your Mac.
+            {isWeb
+              ? "Paste the pairing code from `./zode pair` on your Mac."
+              : "Scan the code on your Mac."}
           </Text>
         </View>
         <View style={styles.actions}>
-          {scanning ? (
-            <View style={[styles.camera, { borderColor: t.colors.border }]}>
-              <CameraView
-                style={StyleSheet.absoluteFill}
-                barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
-                onBarcodeScanned={
-                  busy || scanned
-                    ? undefined
-                    : (event) => {
-                        setScanned(true);
-                        void pairWith(event.data);
-                      }
-                }
+          {!isWeb ? (
+            scanning ? (
+              <View style={[styles.camera, { borderColor: t.colors.border }]}>
+                <CameraView
+                  style={StyleSheet.absoluteFill}
+                  barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
+                  onBarcodeScanned={
+                    busy || scanned
+                      ? undefined
+                      : (event) => {
+                          setScanned(true);
+                          void pairWith(event.data);
+                        }
+                  }
+                />
+              </View>
+            ) : (
+              <Pill
+                label="Scan QR code"
+                onPress={() => void startScan()}
+                style={styles.fullWidth}
               />
-            </View>
-          ) : (
-            <Pill
-              label="Scan QR code"
-              onPress={() => void startScan()}
-              style={styles.fullWidth}
-            />
-          )}
-          <Pressable
-            onPress={() => setShowPaste(!showPaste)}
-            accessibilityRole="button"
-            accessibilityLabel="Paste pairing text"
-            hitSlop={8}
-            style={styles.pasteToggle}
-          >
-            <Text variant="button" color="accent">
-              {showPaste ? "Hide pairing text" : "Paste pairing text"}
-            </Text>
-          </Pressable>
+            )
+          ) : undefined}
+          {!isWeb ? (
+            <Pressable
+              onPress={() => setShowPaste(!showPaste)}
+              accessibilityRole="button"
+              accessibilityLabel="Paste pairing text"
+              hitSlop={8}
+              style={styles.pasteToggle}
+            >
+              <Text variant="button" color="accent">
+                {showPaste ? "Hide pairing text" : "Paste pairing text"}
+              </Text>
+            </Pressable>
+          ) : undefined}
           <Pressable
             onPress={() => {
               startDemo();
@@ -141,7 +159,7 @@ export default function PairScreen() {
               Try the demo
             </Text>
           </Pressable>
-          {showPaste ? (
+          {(isWeb || showPaste) ? (
             <View style={styles.pasteBox}>
               <TextInput
                 style={[

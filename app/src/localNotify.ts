@@ -3,7 +3,7 @@
 // decision function is tested, the hook is glue (repo convention).
 
 import { useEffect, useRef } from "react";
-import { AppState } from "react-native";
+import { AppState, Platform } from "react-native";
 import * as Notifications from "expo-notifications";
 import { useRelay } from "./useRelay";
 import { loadPrefs } from "./storage";
@@ -69,6 +69,7 @@ export function useLocalTaskNotifications(): void {
   const remoteRef = useRef({ pushEnabled: false, pushId: null as string | null });
 
   useEffect(() => {
+    if (Platform.OS === "web") return; // no local notifications on web
     const reread = () => {
       void loadPrefs()
         .then((prefs) => {
@@ -82,6 +83,7 @@ export function useLocalTaskNotifications(): void {
   }, []);
 
   useEffect(() => {
+    if (Platform.OS === "web") return; // no local notifications on web
     if (!client) return;
     const off = client.onEvent((msg: RelayMessage) => {
       try {

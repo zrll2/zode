@@ -1,4 +1,5 @@
 import * as SecureStore from "expo-secure-store";
+import { Platform } from "react-native";
 import { PUSH_KEYCHAIN_GROUP } from "./config";
 
 const KEY = "zcode.relay.credentials.v1";
@@ -7,6 +8,73 @@ const KEY = "zcode.relay.credentials.v1";
 const PUSH_KEY = "zode.push.key.v1";
 
 const WS_URLS_CAP = 8;
+
+// Web: the same records live in localStorage (no keychain there). A blocked
+// storage (private mode) reads as absent and never throws. Tests override the
+// storage with setWebStorageOverride.
+interface WebStorageLike {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+  removeItem(key: string): void;
+}
+
+let webStorageOverride: WebStorageLike | null | undefined;
+
+export function setWebStorageOverride(store: WebStorageLike | null | undefined): void {
+  webStorageOverride = store;
+}
+
+function webStorage(): WebStorageLike | null {
+  if (webStorageOverride !== undefined) return webStorageOverride;
+  if (Platform.OS !== "web") return null;
+  try {
+    return globalThis.localStorage ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function storageSet(key: string, value: string): Promise<void> {
+  const web = webStorage();
+  if (web) {
+    try {
+      web.setItem(key, value);
+    } catch {}
+    return;
+  }
+  try {
+    await SecureStore.setItemAsync(key, value);
+  } catch {}
+}
+
+async function storageGet(key: string): Promise<string | null> {
+  const web = webStorage();
+  if (web) {
+    try {
+      return web.getItem(key);
+    } catch {
+      return null;
+    }
+  }
+  try {
+    return await SecureStore.getItemAsync(key);
+  } catch {
+    return null;
+  }
+}
+
+async function storageDelete(key: string): Promise<void> {
+  const web = webStorage();
+  if (web) {
+    try {
+      web.removeItem(key);
+    } catch {}
+    return;
+  }
+  try {
+    await SecureStore.deleteItemAsync(key);
+  } catch {}
+}
 
 export interface Credentials {
   wsUrl: string;
@@ -62,14 +130,16 @@ function normalizeCredentials(parsed: any): Credentials | null {
 // sibling record under the shared access group (for the notification
 // extension). The access group can fail where entitlements are missing
 // (e.g. simulator builds); the credentials copy still works, so failures are
-// swallowed here.
+// swallowed here. Web has no keychain and no extension: no-ops.
 export async function savePushKey(pushKey: string): Promise<void> {
+  if (Platform.OS === "web") return;
   try {
     await SecureStore.setItemAsync(PUSH_KEY, pushKey, { accessGroup: PUSH_KEYCHAIN_GROUP });
   } catch {}
 }
 
 export async function loadPushKey(): Promise<string | null> {
+  if (Platform.OS === "web") return null;
   try {
     return await SecureStore.getItemAsync(PUSH_KEY, { accessGroup: PUSH_KEYCHAIN_GROUP });
   } catch {
@@ -78,20 +148,19 @@ export async function loadPushKey(): Promise<string | null> {
 }
 
 export async function clearPushKey(): Promise<void> {
+  if (Platform.OS === "web") return;
   try {
     await SecureStore.deleteItemAsync(PUSH_KEY, { accessGroup: PUSH_KEYCHAIN_GROUP });
   } catch {}
 }
 
 export async function saveCredentials(credentials: Credentials): Promise<void> {
-  try {
-    await SecureStore.setItemAsync(KEY, JSON.stringify(credentials));
-  } catch {}
+  await storageSet(KEY, JSON.stringify(credentials));
 }
 
 export async function loadCredentials(): Promise<Credentials | null> {
   try {
-    const raw = await SecureStore.getItemAsync(KEY);
+    const raw = await storageGet(KEY);
     if (!raw) return null;
     return normalizeCredentials(JSON.parse(raw));
   } catch {
@@ -102,14 +171,13 @@ export async function loadCredentials(): Promise<Credentials | null> {
 // Forgetting also drops the extension's sibling record: unpair removes both
 // copies of the push key.
 export async function clearCredentials(): Promise<void> {
-  try {
-    await SecureStore.deleteItemAsync(KEY);
-  } catch {}
+  await storageDelete(KEY);
   await clearPushKey();
 }
 
-// UI preferences (not secret): JSON in SecureStore, defaults on any error.
-// archivedIds holds short keys (see sessionActions.archiveKey).
+// UI preferences (not secret): JSON in SecureStore on native, localStorage on
+// web; defaults on any error. archivedIds holds short keys (see
+// sessionActions.archiveKey).
 import { ARCHIVE_CAP } from "./sessionActions";
 
 const PREFS_KEY = "zode.prefs.v1";
@@ -149,7 +217,7 @@ function normalizePrefs(raw: unknown): Prefs {
 
 export async function loadPrefs(): Promise<Prefs> {
   try {
-    const raw = await SecureStore.getItemAsync(PREFS_KEY);
+    const raw = await storageGet(PREFS_KEY);
     if (!raw) return normalizePrefs(null);
     return normalizePrefs(JSON.parse(raw));
   } catch {
@@ -158,7 +226,5 @@ export async function loadPrefs(): Promise<Prefs> {
 }
 
 export async function savePrefs(prefs: Prefs): Promise<void> {
-  try {
-    await SecureStore.setItemAsync(PREFS_KEY, JSON.stringify(prefs));
-  } catch {}
+  await storageSet(PREFS_KEY, JSON.stringify(prefs));
 }

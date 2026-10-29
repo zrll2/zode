@@ -151,7 +151,7 @@ export default function SessionsScreen() {
   // The first-run prompt appears once, after the first successful connection
   // (never in demo mode, never after either choice was made).
   useEffect(() => {
-    if (demo || status !== "ready" || prefs.pushPromptShown) return;
+    if (Platform.OS === "web" || demo || status !== "ready" || prefs.pushPromptShown) return;
     if (promptOfferedRef.current) return;
     promptOfferedRef.current = true;
     setPushPromptVisible(true);

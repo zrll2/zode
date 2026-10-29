@@ -11,3 +11,6 @@ dist/
 *.p12
 *.mobileprovision
 play-service-account*.json
+
+# web export output
+dist-web/

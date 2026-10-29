@@ -64,8 +64,8 @@ test('unknown outcome and answerer are coerced; missing device stays out of the 
     log.decided({ id: '1:r1', outcome: 'maybe', by: 'who-knows' });
     const [row] = log.recent();
     assert.deepEqual([row.outcome, row.by, row.device], ['unavailable', 'none', null]);
-    log.decided({ id: '1:r2', outcome: 'rejected', by: 'phone', device: 'Richard iPhone' });
-    assert.deepEqual([log.recent()[0].outcome, log.recent()[0].by, log.recent()[0].device], ['rejected', 'phone', 'Richard iPhone']);
+    log.decided({ id: '1:r2', outcome: 'rejected', by: 'phone', device: 'Alex iPhone' });
+    assert.deepEqual([log.recent()[0].outcome, log.recent()[0].by, log.recent()[0].device], ['rejected', 'phone', 'Alex iPhone']);
     for (const o of OUTCOMES) log.decided({ id: `1:${o}`, outcome: o, by: 'auto' });
     for (const b of ANSWERERS) log.decided({ id: `1:${b}`, outcome: 'allowed', by: b });   // every listed value passes through
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
