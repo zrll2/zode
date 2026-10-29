@@ -1,5 +1,8 @@
 # Zode for Mac
 
+## 1.5.7
+- **Browser access.** Turn it on in Settings and open this Mac's address in any browser (on Linux, say) over Tailscale or your network. Pair with a one-time code and use your ZCode conversations, approvals and prompts from there.
+
 ## 1.5.6
 - **Answer ZCode's questions from the panel.** A question card now shows what ZCode asks and its options; pick one and send it without opening ZCode.
 - Repeated or conflicting answers to one approval are noticed and logged, and never change the first decision.

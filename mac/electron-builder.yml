@@ -25,6 +25,8 @@ extraResources:                      # the "engine kit": what the setup wizard n
     to: bin/whisper-cli               # the app runs it at process.resourcesPath/bin/whisper-cli
   - from: resources/Assets.car       # compiled from resources/Icon.xcassets (actool): macOS 26 draws the icon on its own rounded plate
     to: Assets.car
+  - from: web                         # the browser client the relay serves when Browser access is on (scripts/release.sh fills it)
+    to: web
   - from: bin/zode-watch.mjs          # the Claude Code event watcher (runs via ELECTRON_RUN_AS_NODE)
     to: bin/zode-watch.mjs
 mac:

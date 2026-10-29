@@ -11,6 +11,11 @@ PROFILE="${ZODE_NOTARY_PROFILE:-zode-notary}"
 npm install --no-audit --no-fund
 npm install --prefix ../relay --no-audit --no-fund --omit=dev
 bash scripts/build-whisper.sh        # builds vendor/whisper-cli, packaged as Resources/bin/whisper-cli
+if [ -n "${ZODE_APP_DIR:-}" ]; then   # the phone app's web export becomes the browser client
+  (cd "$ZODE_APP_DIR" && npm run export:web)
+  rm -rf web && mkdir -p web && rsync -a "$ZODE_APP_DIR/dist-web/" web/
+fi
+[ -d web ] || mkdir -p web
 node build.mjs
 rm -rf release
 npx electron-builder --mac --arm64 --publish never
