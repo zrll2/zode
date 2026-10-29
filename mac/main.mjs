@@ -20,7 +20,7 @@ import { setupSteps, parseBuildProgress, friendlySetupError, kitDir } from './li
 import { isRunning, quitApp, tapAlive, findOriginal, findEngine, findOldIntegrated, runBuild, migrateEngine, enginePathFor } from './lib/system.mjs';
 import { readVersion, compareVersions, checkRelease, engineRebuildScript } from './lib/updates.mjs';
 import { readFlow } from './lib/tokenflow.mjs';
-import { listSessions, listPending, readTapServers, summarize, withLiveStatus, readUsage, respondPermission, pendingToAutoAllow, AUTO_ALLOW_RESULT, stopSession, sendToSession, nudgeSession, RETRY_MESSAGE } from './lib/sessions.mjs';
+import { listSessions, listPending, readTapServers, summarize, withLiveStatus, readUsage, respondPermission, respondQuestion, answerResult, pendingToAutoAllow, AUTO_ALLOW_RESULT, stopSession, sendToSession, nudgeSession, RETRY_MESSAGE } from './lib/sessions.mjs';
 import { lineStates, notificationsFor } from './lib/notify.mjs';
 import { createEventFeed } from './lib/events.mjs';
 import { installSkill, removeSkill } from './lib/claudeCode.mjs';
@@ -883,6 +883,18 @@ async function start() {
           run: () => answerPile(jobs, j => j.build, 'allowed'),
         });
       },
+      // A ZCode question answered from the panel: the renderer's picks are checked against the
+      // question that is actually pending, built by answerResult (unknown labels dropped), sent
+      // verbatim by respondQuestion. No audit line: this is an answer, not an approval.
+      answerQuestion: (requestId, sock, picks) => {
+        const listed = findPending(requestId);
+        if (!listed || listed.kind !== 'question' || !liveSocks().has(listed.sock)) return;
+        const questions = Array.isArray(listed.questions) ? listed.questions : [];
+        if (!questions.length) return;
+        const result = answerResult(questions, picks && typeof picks === 'object' && !Array.isArray(picks) ? picks : {});
+        respondQuestion({ sock: listed.sock, requestId: listed.requestId, result }).catch(() => {});
+        refresh();
+      },
       toggleFoldFinished: () => { settings.foldFinished = !settings.foldFinished; save(); pushPanel(); },
       toggleLaunchAtLogin: () => { settings.launchAtLogin = !settings.launchAtLogin; save(); app.setLoginItemSettings({ openAtLogin: settings.launchAtLogin }); refresh(); },
       toggleKeepAwake: () => { settings.keepAwake = !(settings.keepAwake === true); save(); updatePowerBlocker(); refresh(); },
@@ -1133,6 +1145,10 @@ async function start() {
       } else if (name === 'alwaysAllow') {
         if (!idOk(p.requestId) || !liveSocks().has(p.sock)) return;
         actions.alwaysAllow(p.requestId, Array.isArray(p.rest) ? p.rest : []);
+      } else if (name === 'answerQuestion') {
+        if (!idOk(p.requestId) || !liveSocks().has(p.sock)) return;
+        if (!p.picks || typeof p.picks !== 'object' || Array.isArray(p.picks)) return;
+        actions.answerQuestion(p.requestId, p.sock, p.picks);
       } else if (name === 'nudge' || name === 'stop' || name === 'retry') {
         if (!idOk(p.sessionId) || !liveSocks().has(p.sock)) return;
         actions[name](p.sessionId, p.sock);

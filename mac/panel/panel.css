@@ -52,10 +52,13 @@ body{color:var(--ink);font:13px/1.35 var(--font);overflow:hidden}
 .need .top span{color:var(--amber);font-size:12px;font-variant-numeric:tabular-nums;flex:none}
 .need code{display:block;background:var(--code);border-radius:8px;padding:8px 10px;font:12px/1.4 var(--mono);color:var(--ink);overflow-wrap:anywhere;max-height:54px;overflow:hidden}
 .need .more{color:var(--amber);font-size:12px;font-weight:600}
+.need .q{display:flex;flex-direction:column;gap:6px;min-width:0}
+.need .q b{font-weight:600;overflow-wrap:anywhere}
 .acts{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 .btn{height:30px;padding:0 13px;border-radius:9px;border:1px solid var(--line);background:var(--card);color:var(--ink);font:inherit;font-weight:600;cursor:pointer}
 .btn.pri{background:var(--pri);color:var(--pri-ink);border-color:var(--pri)}
 .btn.ghost{background:transparent;border-color:transparent;color:var(--sub)}
+.btn.on{background:var(--pri);color:var(--pri-ink);border-color:var(--pri)}
 .btn:hover{filter:brightness(.97)}
 .btn:disabled{opacity:.5;cursor:default}
 .txtbtn{border:0;background:transparent;color:var(--sub);font:inherit;font-size:12px;cursor:pointer;padding:4px 2px}

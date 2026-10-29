@@ -97,7 +97,10 @@ test('busy: every need kind, red before amber, working rows with run start, fini
   assert.deepEqual([ask.more, ask.same], [1, 0]);     // one other permission, none with the same command (the question does not count)
   assert.equal(m.needs[2].kind, 'question');          // the question behind the permissions wins nothing
   assert.equal(m.needs[2].waiting, '1 min');
-  assert.equal('requestId' in m.needs[2], false);
+  assert.equal(m.needs[2].requestId, 'r7');           // answerable from the panel now
+  assert.equal(m.needs[2].sock, '/sock');
+  assert.deepEqual(m.needs[2].questions, []);         // the fixture carries no questions
+  assert.equal(m.needs[2].ask, '');
   assert.equal('more' in m.needs[2], false);
   assert.equal(m.needs[3].kind, 'stalled');
   assert.equal(m.needs[3].waiting, 'Quiet 12m');      // the right-hand value, no sentence
@@ -122,6 +125,27 @@ test('a waiting session with only a question — or nothing pending — still as
   }), NOW);
   assert.equal(withNothing.needs[0].kind, 'question');
   assert.equal(withNothing.needs[0].waiting, '1 min');
+});
+
+test('a question need carries the questions, the request id and the sock', () => {
+  const questions = [
+    { question: 'Which database?', header: 'Storage', multiSelect: false, options: [{ label: 'SQLite', description: 'simple' }, { label: 'Postgres', description: '' }] },
+    { question: 'Which caches?', header: 'Cache', multiSelect: true, options: [{ label: 'memory', description: '' }, { label: 'disk', description: '' }] },
+  ];
+  const m = buildPanelModel(input({
+    work: { lines: [line({ id: 'a', light: 'amber', status: 'Waiting for you', at: NOW - min })], pending: { a: [perm({ requestId: 'rq', kind: 'question', summary: '', questions })] } },
+  }), NOW);
+  assert.equal(m.needs[0].kind, 'question');
+  assert.equal(m.needs[0].requestId, 'rq');
+  assert.equal(m.needs[0].sock, '/sock');
+  assert.equal(m.needs[0].ask, 'Which database?');                       // the first question text
+  assert.deepEqual(m.needs[0].questions, questions);
+  // junk questions are dropped on the way in, an empty list still makes the card
+  const none = buildPanelModel(input({
+    work: { lines: [line({ id: 'b', light: 'amber', status: 'Waiting for you' })], pending: { b: [perm({ requestId: 'rq2', kind: 'question', summary: '', questions: 'nope' })] } },
+  }), NOW);
+  assert.deepEqual(none.needs[0].questions, []);
+  assert.equal(none.needs[0].ask, '');
 });
 
 test('repeated requests: more counts the others, same counts identical commands, none with a single request', () => {

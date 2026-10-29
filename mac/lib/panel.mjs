@@ -102,7 +102,15 @@ function needOf(line, pending, now) {
           .some(o => o && (o.optionId === 'allow_project' || o.kind === 'allow_always')),
       };
     }
-    return { ...base, kind: 'question', waiting };
+    const question = (Array.isArray(pending) ? pending : []).find(r => r && r.kind === 'question');
+    const questions = Array.isArray(question?.questions) ? question.questions : [];
+    return {
+      ...base, kind: 'question', waiting,
+      ask: questions[0] ? questions[0].question : '',              // the first question text, when ZCode asks one
+      requestId: question ? question.requestId : undefined,
+      sock: question && str(question.sock) ? str(question.sock) : base.sock,
+      questions,
+    };
   }
   const m = /^Quiet for (\d+) min/.exec(str(line.status));
   const n = m ? m[1] : null;

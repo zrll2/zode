@@ -74,3 +74,11 @@ test('mac/main.mjs takes setPreset and rejects junk; the old two-switch toggles 
   assert.doesNotMatch(js, /toggleAutoAllow|toggleAskRisky/);                   // the two switches are gone, presets only
   assert.doesNotMatch(js, /p\.key === ["']autoAllow["']|p\.key === ["']askRisky["']/);
 });
+
+test('mac/main.mjs wires the question answer action end to end', () => {
+  const src = fs.readFileSync(path.join(root, 'main.mjs'), 'utf8');
+  assert.match(src, /name === ["']answerQuestion["']/);                       // the panel action arrives
+  assert.match(src, /answerQuestion: \(requestId, sock, picks\)/);            // the action is defined
+  assert.match(src, /answerResult\(questions, picks/);                        // picks are built against the pending question
+  assert.match(src, /respondQuestion\(\{ sock: listed\.sock, requestId: listed\.requestId, result \}\)/);   // and sent by tap/respond
+});

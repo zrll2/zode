@@ -137,7 +137,62 @@ function needCard(n) {
   }
 
   if (n.kind === 'question') {
-    const acts = el('div', 'acts');
+    const questions = Array.isArray(n.questions) ? n.questions.filter(q => q && typeof q.question === 'string' && q.question && Array.isArray(q.options) && q.options.length > 0) : [];
+    const answerable = n.requestId != null && questions.length > 0;
+    if (answerable) {
+      // Answer in place: every question's options as buttons. One single-select question answers on
+      // click; several questions or a multiSelect toggle and a Send submits once everything is picked.
+      const picks = {};
+      const optionBtns = [];
+      const hasPick = q => { const p = picks[q.question]; return Array.isArray(p) ? p.length > 0 : p != null; };
+      const sync = () => {
+        for (const b of optionBtns) b.classList.toggle('on', Array.isArray(picks[b.dataset.q]) ? picks[b.dataset.q].includes(b.dataset.label) : picks[b.dataset.q] === b.dataset.label);
+        send.disabled = !questions.every(hasPick);
+      };
+      for (const q of questions) {
+        const qwrap = el('div', 'q');
+        qwrap.append(el('b', null, q.question));
+        const opts = el('div', 'acts');
+        for (const o of q.options) {
+          const b = btn(o.label, 'btn', () => {
+            if (q.multiSelect) {
+              const cur = Array.isArray(picks[q.question]) ? picks[q.question].slice() : [];
+              const at = cur.indexOf(o.label);
+              if (at >= 0) cur.splice(at, 1); else cur.push(o.label);
+              if (cur.length) picks[q.question] = cur; else delete picks[q.question];
+            } else {
+              picks[q.question] = o.label;
+              for (const other of optionBtns) if (other.dataset.q === q.question && other !== b) other.classList.remove('on');
+            }
+            sync();
+          });
+          b.dataset.q = q.question;
+          b.dataset.label = o.label;
+          if (o.description) b.title = o.description;                 // the option's own tooltip; no hint text in the layout
+          optionBtns.push(b);
+          opts.append(b);
+        }
+        qwrap.append(opts);
+        card.append(qwrap);
+      }
+      const send = el('button', 'btn pri', 'Send');
+      send.disabled = true;
+      send.addEventListener('click', () => {
+        if (!questions.every(hasPick)) return;
+        send.disabled = true;
+        act('answerQuestion', { requestId: n.requestId, sock: n.sock, picks });
+        toast('Answered');
+      });
+      const acts = el('div', 'acts');
+      acts.append(
+        send,
+        once('Stop', 'btn ghost', () => { act('stop', { sessionId: n.sessionId, sock: n.sock }); toast(`Stopped ${project}`); }),
+        btn('Show in ZCode', 'btn', () => act('show')),
+      );
+      card.append(acts);
+      return card;
+    }
+    const acts = el('div', 'acts');                                   // nothing answerable here: today's card
     acts.append(
       once('Stop', 'btn ghost', () => { act('stop', { sessionId: n.sessionId, sock: n.sock }); toast(`Stopped ${project}`); }),
       btn('Show in ZCode', 'btn pri', () => act('show')),
