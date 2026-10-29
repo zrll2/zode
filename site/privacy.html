@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Zode privacy policy</title>
+<style>
+:root{--bg:#fafaf7;--fg:#1a1a18;--mut:#6b6b66;--link:#0a58ca;--code:#ecece6}
+@media (prefers-color-scheme:dark){:root{--bg:#141413;--fg:#ececea;--mut:#9a9a94;--link:#7cb3ff;--code:#26261f}}
+body{margin:0;background:var(--bg);color:var(--fg);font:17px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+main{max-width:680px;margin:0 auto;padding:48px 20px 80px}
+h1{font-size:2rem;margin:0 0 .5em}h2{font-size:1.25rem;margin:2em 0 .4em}
+a{color:var(--link)}code{background:var(--code);padding:.1em .35em;border-radius:4px;font-size:.9em}
+ul{padding-left:1.2em}li{margin:.4em 0}
+</style></head><body><main>
+<h1>Privacy policy</h1>
+<p><strong>Effective date:</strong> 19 October 2026</p>
+<p>Zode is an open-source phone companion for the ZCode desktop app. This policy explains what the Zode phone app does with your data. The short version: <strong>it collects no personal data and has no accounts, analytics or tracking.</strong> If you turn on push notifications, a small Zode service passes encrypted alerts to Apple's push service (details below).</p>
+<h2>What Zode collects</h2>
+<p>Nothing about you. Zode has no accounts, no analytics, no advertising, no crash reporting service and no tracking. The developers cannot read your conversations, because they never reach us.</p>
+<h2>What stays on your devices</h2>
+<ul>
+<li><strong>Your conversations</strong> travel only between your phone and the Zode relay that runs on <strong>your own Mac</strong>, over your local network or a private network that you choose (for example Tailscale). We do not operate any server that stores or relays them. The only server we run is the push service described below, and it never sees them.</li>
+<li><strong>Pairing token.</strong> When you pair, the relay gives your phone a random token. The phone stores it in the iOS Keychain (the system secure store). The Mac stores only a hash of it. You can remove a phone at any time on the Mac (<code>./zode revoke &lt;id&gt;</code>) or by choosing &quot;Unpair this phone&quot; in the app.</li>
+<li><strong>Relay address.</strong> The address of your Mac is stored on the phone so the app can reconnect.</li>
+</ul>
+<h2>Push notifications</h2>
+<p>If you allow notifications, your phone gives Apple's push service a device token, and the app hands it to the Zode push service (a small stateless function on Vercel, source in <code>push-service/</code>). The service encrypts the token into an opaque id and keeps nothing: no database, no files, no logs of tokens. Your Mac sends it alerts that are end-to-end encrypted with a key made when you paired, so the service sees only the alert type (for example &quot;needs an answer&quot;), a size and the opaque id. It forwards them to Apple, which delivers them to your phone. The text of an alert is decrypted on your phone only. You can turn notifications off in iOS Settings or unpair the phone.</p>
+<h2>Permissions</h2>
+<ul>
+<li><strong>Camera.</strong> Used only to scan the pairing QR code that the relay shows on your Mac. Images are not saved or sent anywhere.</li>
+<li><strong>Notifications.</strong> Optional, for the alerts above.</li>
+<li><strong>Microphone</strong> (voice replies, optional). Audio goes from your phone to your own Mac, which turns it into text on the Mac itself, and is not kept.</li>
+<li><strong>Local network.</strong> Used to connect to the relay on your Mac. Zode connects only to the address you paired with.</li>
+</ul>
+<h2>Third parties</h2>
+<p>Zode does not include third-party analytics or advertising SDKs and does not share data with anyone. Notifications are delivered through Apple's push service (APNs), and the push service runs on Vercel.</p>
+<h2>Demo mode</h2>
+<p>Demo mode shows built-in sample data. It makes no network connections.</p>
+<h2>Children</h2>
+<p>Zode is a developer tool and is not directed at children.</p>
+<h2>Changes</h2>
+<p>If this policy changes, the new version will be published in this repository with a new effective date.</p>
+<h2>Contact</h2>
+<p>Open an issue at https://github.com/zrll2/zode/issues. For a security problem, use the private vulnerability reporting described in <a href="https://github.com/zrll2/zode/blob/main/SECURITY.md">SECURITY.md</a>.</p>
+</main></body></html>

@@ -26,7 +26,7 @@
           "terminal"
         ],
         "releaseNotes": "First release. Pair your Mac, follow your sessions, read the agent's work, answer approvals and questions, start new sessions, and get notified on your phone and Apple Watch. Includes a demo mode with sample data.",
-        "privacyPolicyUrl": "https://github.com/zrll2/zode/blob/main/docs/PRIVACY.md",
+        "privacyPolicyUrl": "https://zode.comex.sg/privacy",
         "supportUrl": "https://github.com/zrll2/zode/issues",
         "marketingUrl": "https://github.com/zrll2/zode"
       },
@@ -48,7 +48,7 @@
           "终端"
         ],
         "releaseNotes": "首个版本。配对你的 Mac，跟进会话，阅读 Agent 的工作，处理审批和提问，新建会话，并在手机和 Apple Watch 上收到通知。内置示例数据的演示模式。",
-        "privacyPolicyUrl": "https://github.com/zrll2/zode/blob/main/docs/PRIVACY.md",
+        "privacyPolicyUrl": "https://zode.comex.sg/privacy",
         "supportUrl": "https://github.com/zrll2/zode/issues",
         "marketingUrl": "https://github.com/zrll2/zode"
       }
