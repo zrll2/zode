@@ -17,11 +17,14 @@ const SESSION_MAX = 120;
 const clean = (v, max) => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
 
 // One log per call. First write wins per id (an in-memory set, rebuilt from the file lazily), and
-// past maxLines the file is rewritten to the newest half, atomically.
-export function createAuditLog({ file, now = Date.now, maxLines = 2000 } = {}) {
+// past maxLines the file is rewritten to the newest half, atomically. An optional onIllegal hook is
+// told about every write the first-wins rule ignores: { id, state, event }.
+export function createAuditLog({ file, now = Date.now, maxLines = 2000, onIllegal } = {}) {
   const broken = typeof file !== 'string' || file === '';
+  const tell = typeof onIllegal === 'function' ? onIllegal : () => {};
   const askedIds = new Set();           // ids with an asked row already: the first one wins
   const decidedIds = new Set();         // ids with a decided row already: the first one wins
+  const decidedState = new Map();       // id -> the outcome the first decision recorded (for onIllegal)
   let counted = false;                  // the line count is read once, then kept
   let lines = 0;
   const tmp = `${file}.${process.pid}.tmp`;
@@ -36,7 +39,13 @@ export function createAuditLog({ file, now = Date.now, maxLines = 2000 } = {}) {
         lines += 1;
         try {
           const j = JSON.parse(line);
-          if (j && typeof j.id === 'string') (j.e === 'asked' ? askedIds : decidedIds).add(j.id);
+          if (j && typeof j.id === 'string') {
+            if (j.e === 'asked') askedIds.add(j.id);
+            else {
+              decidedIds.add(j.id);
+              decidedState.set(j.id, OUTCOMES.includes(j.outcome) ? j.outcome : 'unavailable');
+            }
+          }
         } catch { /* a torn line is history */ }
       }
     } catch { lines = 0; }              // no file yet: nothing loaded
@@ -79,13 +88,24 @@ export function createAuditLog({ file, now = Date.now, maxLines = 2000 } = {}) {
   };
 
   const decided = ({ id, outcome, by, device } = {}) => {
-    const name = clean(device, DEVICE_MAX);
-    append({
-      e: 'decided', id: clean(id, ID_MAX), at: now(),
-      outcome: OUTCOMES.includes(outcome) ? outcome : 'unavailable',
-      by: ANSWERERS.includes(by) ? by : 'none',
-      ...(name ? { device: name } : {}),
-    }, 'decided');
+    const cleanId = clean(id, ID_MAX);
+    const safeOutcome = OUTCOMES.includes(outcome) ? outcome : 'unavailable';
+    load();
+    if (decidedIds.has(cleanId)) {                                    // first-wins: the rewrite is ignored, but told
+      tell({ id: cleanId, state: decidedState.get(cleanId) ?? 'unavailable', event: 'decided' });
+      return;
+    }
+    if (broken) return;
+    try {
+      fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+      const fd = fs.openSync(file, 'a', 0o600);
+      try { fs.writeSync(fd, JSON.stringify({ e: 'decided', id: cleanId, at: now(), outcome: safeOutcome, by: ANSWERERS.includes(by) ? by : 'none', ...(device && typeof device === 'string' && device ? { device: clean(device, DEVICE_MAX) } : {}) }) + '\n'); } finally { fs.closeSync(fd); }
+      try { fs.chmodSync(file, 0o600); } catch { /* created with the mode; fine */ }
+      decidedIds.add(cleanId);
+      decidedState.set(cleanId, safeOutcome);
+      lines += 1;
+      if (lines > maxLines) truncate();
+    } catch { /* a full disk must not break approvals */ }
   };
 
   const recent = (limit = 50) => {
