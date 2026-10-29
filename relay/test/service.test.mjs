@@ -2,6 +2,7 @@
 // Port 0 is not supported (the pairing payload embeds the port), so each test asks the OS for a free port first.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import http from 'node:http';
 import net from 'node:net';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -9,6 +10,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import WebSocket from 'ws';
 import { createRelay, checkPolicy, PROTOCOL } from '../service.mjs';
+import { createAuditLog } from '../audit.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const silent = { log() {}, warn() {}, error() {} };
@@ -1223,4 +1225,193 @@ test('stt/transcribe: engine failures pass the engine reason through; a throwing
     assert.equal(res.error.message, 'engine exploded');
     ws.close();
   } finally { await relay.stop(); rm(state, tap); }
+});
+
+// ---- the approval audit log (opts.audit) -------------------------------------------------------
+
+const auditLines = (file) => fs.readFileSync(file, 'utf8').split('\n').filter(l => l.trim());
+
+test('audit: auto-allow records asked and allowed/auto, once per request', async () => {
+  const port = await freePort();
+  const up = fakeUpstream();
+  const auditFile = path.join(up.home, 'approvals.jsonl');
+  const audit = createAuditLog({ file: auditFile });
+  const relay = createRelay({ port, stateDir: path.join(up.home, 'state'), tapDir: up.tapDir, log: silent, pendingSyncMs: 60, autoAllow: () => true, audit });
+  await relay.start();
+  try {
+    await waitFor(() => relay.status().upstreams === 1);
+    up.answer('tap/pending', () => ({ pending: [
+      { id: 'req-1', method: 'interaction/requestPermission', params: { sessionId: 'sess_a', toolName: 'Bash', input: { command: 'npm test' } }, at: Date.now() },
+    ] }));
+    await waitFor(() => audit.recent(5).some(r => r.id.endsWith(':req-1') && r.outcome === 'allowed' && r.by === 'auto'));
+    const [row] = audit.recent(5);
+    assert.deepEqual({ tool: row.tool, summary: row.summary, risky: row.risky, outcome: row.outcome, by: row.by, device: row.device },
+      { tool: 'Bash', summary: 'Run: npm test', risky: false, outcome: 'allowed', by: 'auto', device: null });
+    assert.ok(row.askedAt > 0);
+
+    // a fresh event is asked + decided the same way; repeats and reconciles never double-record
+    up.send({ id: 'req-2', method: 'interaction/requestPermission', params: { sessionId: 'sess_a', toolName: 'Edit' } });
+    await waitFor(() => audit.recent(5).filter(r => r.outcome === 'allowed').length === 2);
+    await sleep(300);                                                   // a couple of reconciles
+    assert.equal(auditLines(auditFile).length, 4);                      // two asked + two decided, nothing more
+  } finally { await relay.stop(); await up.close(); }
+});
+
+test('audit: a phone respond records allowed/rejected with the device; a later tap/resolved adds nothing', async () => {
+  const port = await freePort();
+  const up = fakeUpstream();
+  const auditFile = path.join(up.home, 'approvals.jsonl');
+  const audit = createAuditLog({ file: auditFile });
+  const relay = createRelay({ port, stateDir: path.join(up.home, 'state'), tapDir: up.tapDir, log: silent, audit });
+  await relay.start();
+  let ws = null;
+  try {
+    await waitFor(() => relay.status().upstreams === 1);
+    const { token } = await (await pair(port, relay.createPairing().code, 'Test iPhone')).json();
+    ({ ws } = await authed(`ws://127.0.0.1:${port}`, token));
+    up.send({ id: 'req-a', method: 'interaction/requestPermission', params: { sessionId: 'sess_b', toolName: 'Bash', input: { command: 'npm test' } } });
+    up.send({ id: 'req-d', method: 'interaction/requestPermission', params: { sessionId: 'sess_b', toolName: 'Bash', input: { command: 'npm run clean' } } });
+    await waitFor(() => audit.recent(10).filter(r => r.outcome === 'pending').length === 2);
+
+    ws.send(JSON.stringify({ type: 'respond', rid: 1, server: process.pid, id: 'req-a', decision: 'allow' }));
+    ws.send(JSON.stringify({ type: 'respond', rid: 2, server: process.pid, id: 'req-d', decision: 'deny' }));
+    await waitFor(() => audit.recent(10).filter(r => r.by === 'phone').length === 2);
+    const rows = new Map(audit.recent(10).map(r => [r.id.split(':')[1], r]));
+    assert.deepEqual([rows.get('req-a').outcome, rows.get('req-a').by, rows.get('req-a').device], ['allowed', 'phone', 'Test iPhone']);
+    assert.deepEqual([rows.get('req-d').outcome, rows.get('req-d').by], ['rejected', 'phone']);
+
+    // the wrapper's own resolved arrives afterwards: the phone's decision already won the id
+    up.send({ method: 'tap/resolved', params: { id: 'req-a' } });
+    await sleep(100);
+    assert.equal(auditLines(auditFile).filter(l => l.includes(':req-a"')).length, 2);   // asked + one decided
+    assert.equal(audit.recent(10).some(r => r.id.endsWith(':req-a') && r.outcome === 'cancelled'), false);
+  } finally {
+    try { ws?.close(); } catch {}
+    await relay.stop();
+    await up.close();
+  }
+});
+
+test('audit: a dead socket records unavailable and the request stays pending, never allowed', async () => {
+  const port = await freePort();
+  const up = fakeUpstream();
+  const audit = createAuditLog({ file: path.join(up.home, 'approvals.jsonl') });
+  const realConnect = net.connect.bind(net);
+  let relaySock = null;                                                 // the socket the relay opened to the upstream
+  net.connect = (...args) => { const s = realConnect(...args); relaySock = s; return s; };
+  const relay = createRelay({ port, stateDir: path.join(up.home, 'state'), tapDir: up.tapDir, log: silent, autoAllow: () => true, audit });
+  await relay.start();
+  let ws = null;
+  try {
+    await waitFor(() => relay.status().upstreams === 1 && relaySock);
+    relaySock.write = () => { throw new Error('socket gone'); };        // a dead upstream: every relay write throws
+    up.send({ id: 'dead-1', method: 'interaction/requestPermission', params: { sessionId: 'sess_x', toolName: 'Bash', input: { command: 'npm test' } } });
+    await waitFor(() => audit.recent(5).some(r => r.id.endsWith(':dead-1') && r.outcome === 'unavailable' && r.by === 'none'));
+
+    const { token } = await (await pair(port, relay.createPairing().code, 'phone')).json();
+    ({ ws } = await authed(`ws://127.0.0.1:${port}`, token));
+    const resP = nextMessage(ws, (m) => m.type === 'pending');
+    ws.send(JSON.stringify({ type: 'pending' }));
+    assert.ok((await resP).pending.some(p => p.id === 'dead-1'));       // still pending, waiting for a human
+    assert.deepEqual(up.received.filter(m => m.method === 'tap/respond'), []);   // and never allowed
+  } finally {
+    net.connect = realConnect;
+    try { ws?.close(); } catch {}
+    await relay.stop();
+    await up.close();
+  }
+});
+
+test('audit: a request that vanishes from the wrapper without an answer is cancelled once', async () => {
+  const port = await freePort();
+  const up = fakeUpstream();
+  const auditFile = path.join(up.home, 'approvals.jsonl');
+  const audit = createAuditLog({ file: auditFile });
+  const relay = createRelay({ port, stateDir: path.join(up.home, 'state'), tapDir: up.tapDir, log: silent, pendingSyncMs: 60, audit });
+  await relay.start();
+  try {
+    await waitFor(() => relay.status().upstreams === 1);
+    up.answer('tap/pending', () => ({ pending: [
+      { id: 'van-1', method: 'interaction/requestPermission', params: { sessionId: 'sess_v', toolName: 'Bash' }, at: Date.now() - 10_000 },
+    ] }));
+    await waitFor(() => audit.recent(5).some(r => r.id.endsWith(':van-1') && r.outcome === 'pending'));
+    up.answer('tap/pending', () => ({ pending: [] }));                  // the turn was stopped; the request vanished
+    await waitFor(() => audit.recent(5).some(r => r.id.endsWith(':van-1') && r.outcome === 'cancelled' && r.by === 'none'));
+    await sleep(300);                                                   // several more reconciles
+    const lines = auditLines(auditFile).filter(l => l.includes(':van-1"'));
+    assert.equal(lines.length, 2);                                      // one asked, exactly one decided
+    assert.equal(lines.filter(l => JSON.parse(l).outcome === 'cancelled').length, 1);
+  } finally { await relay.stop(); await up.close(); }
+});
+
+// ---- the static web client (opts.webDir) -------------------------------------------------------
+
+// Raw node:http: the path reaches the relay byte for byte — fetch would normalize `..` and `\`
+// client-side, and these tests exist to prove the RELAY rejects them.
+const get = (port, file, method = 'GET') => new Promise((resolve, reject) => {
+  const req = http.request({ host: '127.0.0.1', port, path: file, method }, (res) => {
+    let text = '';
+    res.setEncoding('utf8');
+    res.on('data', d => { text += d; });
+    res.on('end', () => resolve({ status: res.statusCode, headers: { get: k => res.headers[String(k).toLowerCase()] ?? null }, text }));
+  });
+  req.on('error', reject);
+  req.end();
+});
+
+test('web client: index at / and on extension-less routes, files by type, 404s, headers, no CORS', async () => {
+  const web = fs.mkdtempSync(path.join('/tmp', 'zode-web-'));
+  fs.mkdirSync(path.join(web, '_expo'), { recursive: true });
+  fs.writeFileSync(path.join(web, 'index.html'), '<html>zode</html>');
+  fs.writeFileSync(path.join(web, 'app.js'), 'console.log(1)');
+  fs.writeFileSync(path.join(web, '_expo', 'chunk-abc.js'), 'export 1');
+  const port = await freePort();
+  const up = fakeUpstream();
+  const relay = createRelay({ port, stateDir: path.join(up.home, 'state'), tapDir: up.tapDir, log: silent, webDir: web });
+  await relay.start();
+  try {
+    const home = await get(port, '/');
+    assert.equal(home.status, 200);
+    assert.equal(home.text, '<html>zode</html>');
+    assert.equal(home.headers.get('content-type'), 'text/html; charset=utf-8');
+    assert.equal(home.headers.get('x-content-type-options'), 'nosniff');
+    assert.equal(home.headers.get('referrer-policy'), 'no-referrer');
+    assert.equal(home.headers.get('x-frame-options'), 'DENY');
+    assert.match(home.headers.get('content-security-policy'), /frame-ancestors 'none'/);
+    assert.equal(home.headers.get('cache-control'), 'no-cache');
+    assert.equal(home.headers.get('access-control-allow-origin'), null);
+    const spa = await get(port, '/conversations');                     // no extension: the app handles it
+    assert.equal(spa.status, 200);
+    assert.equal(spa.text, '<html>zode</html>');
+    const js = await get(port, '/app.js');
+    assert.equal(js.status, 200);
+    assert.equal(js.headers.get('content-type'), 'text/javascript; charset=utf-8');
+    const hashed = await get(port, '/_expo/chunk-abc.js');
+    assert.equal(hashed.status, 200);
+    assert.equal(hashed.headers.get('cache-control'), 'public, max-age=3600');
+    assert.equal((await get(port, '/missing.png')).status, 404);        // extension: no fallback
+    for (const bad of ['/../x', '/%2e%2e/x', '/a/..%2f..%2fx', '/x%00.html', '/a%5C..%5Cx']) {
+      assert.equal((await get(port, bad)).status, 404, bad);            // %5C = the backslash case
+    }
+    const head = await get(port, '/', 'HEAD');
+    assert.equal(head.status, 200);
+    assert.equal(head.text, '');
+    assert.equal(head.headers.get('content-type'), 'text/html; charset=utf-8');
+    // /health and /pair are untouched
+    assert.equal((await get(port, '/health')).status, 200);
+    const pairRes = await fetch(`http://127.0.0.1:${port}/pair`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: 'nope', name: 'x' }) });
+    assert.equal(pairRes.status, 403);
+  } finally { await relay.stop(); await up.close(); fs.rmSync(web, { recursive: true, force: true }); }
+});
+
+test('web client: without webDir everything but /health and /pair stays 404', async () => {
+  const port = await freePort();
+  const up = fakeUpstream();
+  const relay = createRelay({ port, stateDir: path.join(up.home, 'state'), tapDir: up.tapDir, log: silent });
+  await relay.start();
+  try {
+    assert.equal((await get(port, '/')).status, 404);
+    assert.equal((await get(port, '/app.js')).status, 404);
+    assert.equal((await get(port, '/health')).status, 200);
+  } finally { await relay.stop(); await up.close(); }
 });

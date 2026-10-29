@@ -15,6 +15,7 @@ import path from 'node:path';
 import http from 'node:http';
 import crypto from 'node:crypto';
 import { WebSocketServer } from 'ws';
+import { step } from './lifecycle.mjs';
 
 const HOME = os.homedir();
 const CODE_TTL_MS = 5 * 60 * 1000;
@@ -27,6 +28,90 @@ const MAX_FRAME = 800_000;
 const readJson = (f, d) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return d; } };
 const writeJson = (f, v) => { fs.writeFileSync(f, JSON.stringify(v, null, 1), { mode: 0o600 }); fs.chmodSync(f, 0o600); };
 const sha = s => crypto.createHash('sha256').update(s).digest('hex');
+
+
+// The static web client (opt-in with webDir): GET/HEAD only, nothing leaves the folder, no
+// directory listings, extension-less routes fall back to index.html, and the security headers are
+// on every served byte. Every failure is a plain 404; nothing here throws.
+const WEB_TYPES = {
+  '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8', '.png': 'image/png', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon', '.woff': 'font/woff', '.woff2': 'font/woff2', '.ttf': 'font/ttf',
+  '.map': 'application/json', '.txt': 'text/plain; charset=utf-8', '.webmanifest': 'application/manifest+json',
+};
+const WEB_MAX_BYTES = 20 * 1024 * 1024;
+const WEB_HEADERS = {
+  'x-content-type-options': 'nosniff',
+  'referrer-policy': 'no-referrer',
+  'x-frame-options': 'DENY',
+  'content-security-policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws: wss:; media-src 'self' blob:; frame-ancestors 'none'",
+};
+
+function serveWeb(webDir, req, res) {
+  const notFound = () => { try { res.writeHead(404).end(); } catch { /* the client is gone */ } };
+  try {
+    // The raw path is checked as it arrived: a URL parser would resolve `..` away and hide the traversal.
+    let pathname;
+    try { pathname = decodeURIComponent(String(req.url ?? '/').split('?')[0].split('#')[0]); } catch { return notFound(); }
+    if (pathname.includes('..') || pathname.includes('\0') || pathname.includes('\\')) return notFound();
+    let file = path.resolve(webDir, `.${pathname}`);
+    if (file !== webDir && !file.startsWith(webDir + path.sep)) return notFound();
+    let st = null;
+    try { st = fs.statSync(file); } catch { /* checked below */ }
+    if (st?.isDirectory()) {
+      file = path.join(file, 'index.html');
+      try { st = fs.statSync(file); } catch { st = null; }
+    }
+    if ((!st || !st.isFile()) && !path.extname(pathname)) {           // single-page routing
+      file = path.join(webDir, 'index.html');
+      try { st = fs.statSync(file); } catch { return notFound(); }
+    }
+    if (!st || !st.isFile() || st.size > WEB_MAX_BYTES) return notFound();
+    const type = WEB_TYPES[path.extname(file).toLowerCase()] || 'application/octet-stream';
+    const webPath = `/${path.relative(webDir, file).split(path.sep).join('/')}`;
+    res.writeHead(200, {
+      'content-type': type,
+      ...WEB_HEADERS,
+      'cache-control': webPath.startsWith('/_expo/') && !type.startsWith('text/html') ? 'public, max-age=3600' : 'no-cache',
+    });
+    if (req.method === 'HEAD') { res.end(); return; }
+    const stream = fs.createReadStream(file);
+    stream.on('error', () => { try { res.destroy(); } catch { /* already gone */ } });
+    stream.pipe(res);
+  } catch {
+    notFound();
+  }
+}
+
+// outcome/by -> the lifecycle event that models the decision (the audit's own first-wins rule does
+// the actual refusing; this only names the move for the model).
+const lifecycleEvent = (outcome, by) => {
+  if (outcome === 'cancelled') return 'vanished';
+  const actor = by === 'phone' ? 'phone' : by === 'panel' ? 'panel' : 'auto';
+  if (outcome === 'allowed') return actor === 'auto' ? 'auto_allow_ok' : `${actor}_allow`;
+  if (outcome === 'rejected') return actor === 'auto' ? 'auto_allow_failed' : `${actor}_deny`;
+  return actor === 'auto' ? 'auto_allow_failed' : `${actor}_write_failed`;
+};
+
+// Every audit call the relay makes replays through the lifecycle statechart; a move the model calls
+// illegal is reported through onIllegal and still passed to the log, whose own first-wins rule
+// ignores the duplicate write.
+function withLifecycle(audit, onIllegal) {
+  const states = new Map();                       // id -> statechart state, as far as this relay saw it
+  const fire = (id, event) => {
+    if (id == null) return;
+    const from = states.get(id) ?? 'pending';
+    const { state, legal } = step(from, event);
+    states.set(id, state);
+    if (states.size > 5000) states.delete(states.keys().next().value);      // bounded: oldest ids go first
+    if (!legal) { try { onIllegal({ id, state: from, event }); } catch { /* logging never blocks */ } }
+  };
+  return {
+    asked: (row) => { fire(row?.id, 'asked'); audit.asked(row); },
+    decided: (row) => { fire(row?.id, lifecycleEvent(row?.outcome, row?.by)); audit.decided(row); },
+    recent: (limit) => audit.recent(limit),
+  };
+}
 const eq = (a, b) => { const x = Buffer.from(a), y = Buffer.from(b); return x.length === y.length && crypto.timingSafeEqual(x, y); };
 
 // ---- policy: what a phone may call ------------------------------------------
@@ -142,7 +227,24 @@ export function createRelay(opts = {}) {
   const pusher = opts.push === false ? null : (opts.push || createPusher({ log: (...a) => log.log(...a), now: Date.now }));
   const pushDelayMs = Number.isFinite(opts.pushDelayMs) ? Math.max(0, opts.pushDelayMs) : 1500;
   const rpcTimeoutMs = Number.isFinite(opts.rpcTimeoutMs) ? Math.max(1, opts.rpcTimeoutMs) : RPC_TIMEOUT_MS;   // tests shorten it; the deadline stays one for everything
+  // The static web client's folder: opt-in, absolute, and it must exist as a directory. Absent or
+  // wrong -> null and the relay serves nothing but /health and /pair, as before.
+  const webDir = (() => {
+    const d = opts.webDir;
+    if (typeof d !== 'string' || !path.isAbsolute(d)) return null;
+    try { return fs.statSync(d).isDirectory() ? d : null; } catch { return null; }
+  })();
   const log = opts.log ?? console;
+  // The audit instance is the host's; every call it receives from the relay replays through the
+  // lifecycle statechart, and a move the model calls illegal (a second decided, say) is logged once
+  // per request id. The audit's own first-wins rule still ignores the duplicate write.
+  const lifecycleLogged = new Set();          // ids whose illegal move was already logged
+  const audit = opts.audit ? withLifecycle(opts.audit, ({ id, state, event }) => {
+    if (lifecycleLogged.has(id)) return;
+    lifecycleLogged.add(id);
+    if (lifecycleLogged.size > 5000) lifecycleLogged.delete(lifecycleLogged.keys().next().value);
+    log.log(`lifecycle: illegal ${event} for ${id} in ${state}`);
+  }) : null;                                  // the approval audit log (relay/audit.mjs); absent -> no bookkeeping
   const stt = opts.stt ?? null;               // the host's speech engine ({transcribe, status, defaultLanguage}); absent -> voice-off
   const sttLimiter = createLimiter();         // per device: one transcribe in flight, at most 20 per minute
   const DEVICES = path.join(stateDir, 'devices.json');
@@ -225,6 +327,15 @@ export function createRelay(opts = {}) {
     try { u.sock.write(JSON.stringify({ id, method: 'tap/pending', params: {} }) + '\n'); } catch {}
   }
 
+  // One asked row per permission request that becomes pending here (the log ignores repeats), before
+  // auto-allow gets its say. Only permissions: questions are not approvals.
+  function auditAsk(pid, entry) {
+    if (!audit || !entry || typeof entry !== 'object' || entry.method !== 'interaction/requestPermission') return;
+    try {
+      audit.asked({ id: `${pid}:${entry.id}`, tool: entry.params?.toolName, summary: summarizeRequest(entry.params).text, risky: isRiskyRequest(entry.params), sessionId: entry.params?.sessionId });
+    } catch { /* the log never blocks an answer */ }
+  }
+
   // Auto-allow, when the host turned it on: answer a permission request the moment the relay knows
   // it and strike it from the pending list (the wrapper's tap/resolved follows anyway). Questions
   // are never answered here — they need a human. One answer per request even if a reconcile lists
@@ -243,7 +354,8 @@ export function createRelay(opts = {}) {
     if (!u) return;
     try {
       u.sock.write(JSON.stringify({ id: ++relayId, method: 'tap/respond', params: { id: entry.id, result: { decision: 'allow', reason: 'Approved automatically by Zode' } } }) + '\n');
-    } catch { return; }
+    } catch { audit?.decided({ id: key, outcome: 'unavailable', by: 'none' }); return; }   // a dead socket never allows anything
+    audit?.decided({ id: key, outcome: 'allowed', by: 'auto' });
     autoAnswered.add(key);
     pendingReq.delete(key);
     log.log(`auto-allowed ${typeof entry.params?.toolName === 'string' && entry.params.toolName ? entry.params.toolName : 'request'} -> ${pid}`);
@@ -265,13 +377,17 @@ export function createRelay(opts = {}) {
         listed.add(String(p.id));
         if (pendingReq.has(key) || autoAnswered.has(key)) continue;     // known, or already answered by us
         pendingReq.set(key, { server: pid, ...p, seenAt: now });
+        auditAsk(pid, p);
         autoAllowRequest(pid, p);                                       // may answer and remove it again
       }
       const cutoff = now - 5_000;
       for (const [key, p] of pendingReq) {
         if (p.server !== pid || listed.has(String(key.slice(String(pid).length + 1)))) continue;
         const at = Number.isFinite(p.at) && p.at > 1e12 ? p.at : p.seenAt ?? now;   // when the request really became known
-        if (at < cutoff) pendingReq.delete(key);
+        if (at < cutoff) {
+          if (audit && p.method === 'interaction/requestPermission') audit.decided({ id: key, outcome: 'cancelled', by: 'none' });   // vanished with no answer
+          pendingReq.delete(key);
+        }
       }
       syncPending();
     } catch { /* the next round tries again */ }
@@ -303,6 +419,7 @@ export function createRelay(opts = {}) {
       const now = Date.now();
       if (!autoAnswered.has(`${pid}:${m.id}`)) {                        // an already-answered repeat stays out
         pendingReq.set(`${pid}:${m.id}`, { server: pid, id: m.id, method: m.method, params: m.params, at: now, seenAt: now });
+        auditAsk(pid, m);
         autoAllowRequest(pid, m);                                       // may answer and remove it again
         if (pendingReq.has(`${pid}:${m.id}`)) schedulePendingPush(pid, m);   // still pending: the phone hears about it
       }
@@ -310,10 +427,13 @@ export function createRelay(opts = {}) {
     }
     if (m.method === 'tap/resolved') {
       const key = `${pid}:${m.params?.id}`;
+      const known = pendingReq.get(key);
       pendingPushSeen.delete(key);                                      // answered: the scheduled push cancels itself
       const timer = pendingPushTimers.get(key);
       if (timer) { clearTimeout(timer); pendingPushTimers.delete(key); }
       pendingReq.delete(key); syncPending();
+      // Gone without this relay answering: cancelled — unless a decision already won the id, which the log keeps.
+      if (audit && known?.method === 'interaction/requestPermission') audit.decided({ id: key, outcome: 'cancelled', by: 'none' });
     }
     const e = { seq: ++seq, server: pid, msg: m };
     replay.push(e); if (replay.length > REPLAY_MAX) replay.shift();
@@ -586,6 +706,7 @@ export function createRelay(opts = {}) {
         });
         return;
       }
+      if ((req.method === 'GET' || req.method === 'HEAD') && webDir) return serveWeb(webDir, req, res);
       res.writeHead(404).end();
     };
     // One shared WebSocketServer and one shared /pair handler behind every listener: each server hands
@@ -621,7 +742,8 @@ export function createRelay(opts = {}) {
           const id = clientRoute(c, m.rid, m.server, 'tap/respond');
           log.log(`respond ${c.device.id} ${m.decision} ${p.params?.toolName ?? '?'} -> ${m.server}`);
           try { u.sock.write(JSON.stringify({ id, method: 'tap/respond', params: { id: m.id, result: { decision: m.decision, ...(typeof m.reason === 'string' ? { reason: m.reason.slice(0, 500) } : {}) } } }) + '\n'); }
-          catch { clearTimeout(routes.get(id)?.timer); routes.delete(id); fail('the server just went away'); }   // a dead socket must not throw out of the message handler
+          catch { clearTimeout(routes.get(id)?.timer); routes.delete(id); fail('the server just went away'); audit?.decided({ id: key, outcome: 'unavailable', by: 'none' }); return; }   // a dead socket must not throw out of the message handler
+          audit?.decided({ id: key, outcome: m.decision === 'deny' ? 'rejected' : 'allowed', by: 'phone', ...(typeof c.device?.name === 'string' && c.device.name ? { device: c.device.name } : {}) });
           return;
         }
         if (m.type === 'resume') { for (const e of replay) if (e.seq > (m.since ?? 0)) send(c, { type: 'event', ...e }); return; }

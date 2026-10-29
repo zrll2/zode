@@ -10,8 +10,9 @@ import updaterPkg from 'electron-updater';
 const { autoUpdater } = updaterPkg;
 import QRCode from 'qrcode';
 import { createRelay } from '../relay/service.mjs';
+import { createAuditLog } from '../relay/audit.mjs';
 import { detectAddresses, defaultAddress, autoAddresses } from './lib/addresses.mjs';
-import { loadSettings, saveSettings } from './lib/settings.mjs';
+import { loadSettings, saveSettings, applyPreset } from './lib/settings.mjs';
 import { buildMenuTemplate } from './lib/menu.mjs';
 import { buildPanelModel } from './lib/panel.mjs';
 import { panelBounds, trayImageName, isTemplate, trayTitle } from './lib/panelWindow.mjs';
@@ -19,7 +20,7 @@ import { setupSteps, parseBuildProgress, friendlySetupError, kitDir } from './li
 import { isRunning, quitApp, tapAlive, findOriginal, findEngine, findOldIntegrated, runBuild, migrateEngine, enginePathFor } from './lib/system.mjs';
 import { readVersion, compareVersions, checkRelease, engineRebuildScript } from './lib/updates.mjs';
 import { readFlow } from './lib/tokenflow.mjs';
-import { listSessions, listPending, readTapServers, summarize, withLiveStatus, readUsage, respondPermission, pendingToAutoAllow, AUTO_ALLOW_RESULT, stopSession, sendToSession, nudgeSession, RETRY_MESSAGE } from './lib/sessions.mjs';
+import { listSessions, listPending, readTapServers, summarize, withLiveStatus, readUsage, respondPermission, respondQuestion, answerResult, pendingToAutoAllow, AUTO_ALLOW_RESULT, stopSession, sendToSession, nudgeSession, RETRY_MESSAGE } from './lib/sessions.mjs';
 import { lineStates, notificationsFor } from './lib/notify.mjs';
 import { createEventFeed } from './lib/events.mjs';
 import { installSkill, removeSkill } from './lib/claudeCode.mjs';
@@ -31,6 +32,7 @@ import { voiceHint } from './lib/voiceHint.mjs';
 
 const HOME = os.homedir();
 const SETTINGS_FILE = path.join(HOME, '.zode', 'settings.json');
+const AUDIT_FILE = path.join(HOME, '.zode', 'approvals.jsonl');
 const LOG_FILE = path.join(HOME, '.zode', 'mac-app.log');
 const DOWNLOAD_URL = 'https://zcode.z.ai';
 const UPDATE_LOG = path.join(HOME, '.zode', 'update.log');
@@ -170,7 +172,18 @@ async function start() {
       return ips.length ? ips : ['127.0.0.1'];
     };
     const publicUrlsFor = (list = addresses) => hostIps(list).map(ip => `ws://${ip}:${settings.port}`);
+    // The browser client's folder: packaged builds ship it in Resources/web, dev builds look beside
+    // the bundle. Off, or the folder missing: the relay serves nothing but its own routes.
+    const webRoot = () => {
+      if (settings.webClient !== true) return null;
+      const candidates = [process.resourcesPath ? path.join(process.resourcesPath, 'web') : null, import.meta.dirname ? path.join(import.meta.dirname, 'web') : null];
+      for (const dir of candidates) {
+        try { if (dir && fs.statSync(dir).isDirectory()) return dir; } catch { /* try the next */ }
+      }
+      return null;
+    };
     const save = () => { settings = saveSettings(SETTINGS_FILE, settings); };
+    const audit = createAuditLog({ file: AUDIT_FILE });   // the approval audit log, shared by the relay and every answer below
     const relayLog = {
       log: (...a) => appendLog('relay: ' + a.join(' ')),
       warn: (...a) => appendLog('relay warn: ' + a.join(' ')),
@@ -275,7 +288,7 @@ async function start() {
       if (settings.relayEnabled) {
         const ips = hostIps();                                    // concrete addresses only, never 0.0.0.0
         relayHostSig = ips.join(',');
-        relay = createRelay({ hosts: ips, port: settings.port, publicUrls: publicUrlsFor(), autoAllow: () => settings.autoAllow === true, askRisky: () => settings.askRisky === true, log: relayLog, stt: sttAdapter });
+        relay = createRelay({ hosts: ips, port: settings.port, publicUrls: publicUrlsFor(), autoAllow: () => settings.autoAllow === true, askRisky: () => settings.askRisky === true, webDir: webRoot(), log: relayLog, stt: sttAdapter, audit });
         relay.on('status', refresh);
         try { await relay.start(); } catch (err) { error = startError(err); }
       }
@@ -431,7 +444,9 @@ async function start() {
           const autoAllowList = pendingToAutoAllow(Object.values(pending).flat(), settings.autoAllow === true && !(relay && relay.status().running), settings.askRisky === true);
           if (autoAllowList.length) {
             for (const request of autoAllowList) {
-              try { await respondPermission({ sock: request.sock, requestId: request.requestId, response: AUTO_ALLOW_RESULT }); } catch { /* gone is fine */ }
+              auditAsked(request.sock, request.requestId, request);
+              try { await respondPermission({ sock: request.sock, requestId: request.requestId, response: AUTO_ALLOW_RESULT }); auditDecided(request.sock, request.requestId, 'allowed', 'auto'); }
+              catch { auditDecided(request.sock, request.requestId, 'unavailable'); }
             }
             appendLog(`zode: auto-allowed ${autoAllowList.length} permission request${autoAllowList.length === 1 ? '' : 's'} without the relay`);
             for (const request of autoAllowList) {
@@ -752,15 +767,29 @@ async function start() {
     // What the user sees for a pending request, for grouping a pile of identical ones.
     const displayOf = r => (typeof r?.summary === 'string' && r.summary) || (typeof r?.toolName === 'string' && r.toolName) || 'Permission request';
 
+    // The audit trail for answers given right here: an asked row for anything we answer that the log
+    // does not have yet (it ignores repeats), and a decided row per answer. Ids pair the request
+    // with the socket it lives on, the same shape the relay uses.
+    const auditAsked = (sock, requestId, p = {}) => {
+      try {
+        audit.asked({ id: `${sock}:${requestId}`, tool: p.toolName, summary: p.summary || p.toolName || 'Permission request', risky: p.risky === true, sessionId: p.sessionId });
+      } catch { /* the log never blocks an answer */ }
+    };
+    const auditDecided = (sock, requestId, outcome, by = 'panel') => {
+      try { audit.decided({ id: `${sock}:${requestId}`, outcome, by: outcome === 'unavailable' ? 'none' : by }); } catch { /* never throws */ }
+    };
+
     // Answer a whole pile of pending permission requests: four at a time, and one refusal — or a
     // request that is already gone — never stops the rest. Nothing throws; the caller caps at 600
     // and logs one line with the count. The commands themselves are never logged.
-    async function answerPile(list, build) {
+    async function answerPile(list, build, outcome) {
       const queue = [...list].slice(0, 600);
       const worker = async () => {
         while (queue.length) {
           const job = queue.shift();
-          try { await respondPermission({ sock: job.sock, requestId: job.requestId, ...build(job) }); } catch { /* gone is fine */ }
+          auditAsked(job.sock, job.requestId, job, job.detail);
+          try { await respondPermission({ sock: job.sock, requestId: job.requestId, ...build(job) }); auditDecided(job.sock, job.requestId, outcome); }
+          catch { auditDecided(job.sock, job.requestId, 'unavailable'); }
         }
       };
       await Promise.all([worker(), worker(), worker(), worker()]);
@@ -783,14 +812,22 @@ async function start() {
             type: 'warning', buttons: ['Allow', 'Cancel'], defaultId: 0, cancelId: 1,
             message: 'Allow this command?', detail: String(p?.detail || text || ''),
           }).then(({ response }) => response === 0) : null,
-          run: async () => { await respondPermission({ sock, requestId, decision: 'allow', reason: 'Approved from the menu bar' }); return null; },
+          run: async () => {
+            auditAsked(sock, requestId, p ?? { summary: text, risky: risky === true });
+            try { await respondPermission({ sock, requestId, decision: 'allow', reason: 'Approved from the menu bar' }); auditDecided(sock, requestId, 'allowed'); return null; }
+            catch (err) { auditDecided(sock, requestId, 'unavailable'); throw err; }
+          },
         });
       },
       deny: (requestId, sock) => {
         const p = findPending(requestId);
         runWorkAction({
           what: 'denied', project: p ? projectOf(p.sessionId) : 'ZCode',
-          run: async () => { await respondPermission({ sock, requestId, decision: 'deny', reason: 'Denied from the menu bar' }); return null; },
+          run: async () => {
+            auditAsked(sock, requestId, p ?? {});
+            try { await respondPermission({ sock, requestId, decision: 'deny', reason: 'Denied from the menu bar' }); auditDecided(sock, requestId, 'rejected'); return null; }
+            catch (err) { auditDecided(sock, requestId, 'unavailable'); throw err; }
+          },
         });
       },
       nudge: (sessionId, sock) => runWorkAction({ what: 'nudged', project: projectOf(sessionId), run: () => nudgeSession({ sock, sessionId }) }),
@@ -811,7 +848,7 @@ async function start() {
           what: `approved ${pile.length} permission request${pile.length === 1 ? '' : 's'}`,
           project: projectOf(pile[0].requestId),
           confirm: risky.length ? () => confirmOverPanel({ message: `Allow these ${pile.length} requests?`, detail: String(risky[0].detail || '') }) : null,
-          run: () => answerPile(pile, () => ({ decision: 'allow', reason: 'Approved from the menu bar' })),
+          run: () => answerPile(pile, () => ({ decision: 'allow', reason: 'Approved from the menu bar' }), 'allowed'),
         });
       },
       denyMany: requests => {
@@ -823,7 +860,7 @@ async function start() {
         runWorkAction({
           what: `denied ${pile.length} permission request${pile.length === 1 ? '' : 's'}`,
           project: projectOf(pile[0].requestId),
-          run: () => answerPile(pile, () => ({ decision: 'deny', reason: 'Denied from the menu bar' })),
+          run: () => answerPile(pile, () => ({ decision: 'deny', reason: 'Denied from the menu bar' }), 'rejected'),
         });
       },
       // Always allow this here: the shown request gets ZCode's own allow_project response (so the
@@ -853,16 +890,27 @@ async function start() {
           what: `always allowed here and approved ${jobs.length} permission request${jobs.length === 1 ? '' : 's'}`,
           project: projectOf(requestId),
           confirm: risky.length ? () => confirmOverPanel({ message: `Allow these ${jobs.length} requests?`, detail: risky[0].detail }) : null,
-          run: () => answerPile(jobs, j => j.build),
+          run: () => answerPile(jobs, j => j.build, 'allowed'),
         });
+      },
+      // A ZCode question answered from the panel: the renderer's picks are checked against the
+      // question that is actually pending, built by answerResult (unknown labels dropped), sent
+      // verbatim by respondQuestion. No audit line: this is an answer, not an approval.
+      answerQuestion: (requestId, sock, picks) => {
+        const listed = findPending(requestId);
+        if (!listed || listed.kind !== 'question' || !liveSocks().has(listed.sock)) return;
+        const questions = Array.isArray(listed.questions) ? listed.questions : [];
+        if (!questions.length) return;
+        const result = answerResult(questions, picks && typeof picks === 'object' && !Array.isArray(picks) ? picks : {});
+        respondQuestion({ sock: listed.sock, requestId: listed.requestId, result }).catch(() => {});
+        refresh();
       },
       toggleFoldFinished: () => { settings.foldFinished = !settings.foldFinished; save(); pushPanel(); },
       toggleLaunchAtLogin: () => { settings.launchAtLogin = !settings.launchAtLogin; save(); app.setLoginItemSettings({ openAtLogin: settings.launchAtLogin }); refresh(); },
       toggleKeepAwake: () => { settings.keepAwake = !(settings.keepAwake === true); save(); updatePowerBlocker(); refresh(); },
-      toggleAutoAllow: () => { settings.autoAllow = !(settings.autoAllow === true); save(); refresh(); },   // the relay reads the flag per request, so this applies at once
-      toggleAskRisky: () => { settings.askRisky = !(settings.askRisky === true); save(); refresh(); },
       toggleNotify: () => { settings.notify = !(settings.notify === true); save(); refresh(); },
       toggleClaudeCode: () => { settings.claudeCode = !(settings.claudeCode === true); save(); syncClaudeCode(); refresh(); },
+      toggleWebClient: async () => { settings.webClient = !(settings.webClient === true); save(); await applyRelay(); },   // the relay restarts so the folder set applies
       setup: () => showSetupWindow(),
       openEngine: async () => {
         const p = enginePath || await findEngine().catch(() => null);
@@ -931,6 +979,7 @@ async function start() {
     ipcMain.handle('zode:copy', (_e, text) => { try { clipboard.writeText(String(text ?? '')); return true; } catch (err) { appendLog(`zode: copy: ${err?.stack || err}`); return false; } });
     ipcMain.handle('zode:listDevices', () => { try { return relay ? relay.listDevices() : []; } catch (err) { appendLog(`zode: listDevices: ${err?.stack || err}`); return []; } });
     ipcMain.handle('zode:revoke', (_e, id) => { try { const ok = relay ? relay.revokeDevice(String(id)) : false; refresh(); return ok; } catch (err) { appendLog(`zode: revoke: ${err?.stack || err}`); return false; } });
+    ipcMain.handle('zode:approvalLog', () => { try { return audit.recent(30); } catch (err) { appendLog(`zode: approvalLog: ${err?.stack || err}`); return []; } });
 
     // ---- the menu bar panel --------------------------------------------------------------------
     // A small popover under the tray icon; the native menu stays as the right-click fallback. The
@@ -966,6 +1015,7 @@ async function start() {
           askRisky: settings.askRisky === true,
           notify: settings.notify !== false,
           claudeCode: settings.claudeCode !== false,
+          webClient: settings.webClient === true,
           setupDone: settings.setupDone,
           foldFinished: settings.foldFinished === true,
           tapAlive: tapUp === true,
@@ -1107,6 +1157,10 @@ async function start() {
       } else if (name === 'alwaysAllow') {
         if (!idOk(p.requestId) || !liveSocks().has(p.sock)) return;
         actions.alwaysAllow(p.requestId, Array.isArray(p.rest) ? p.rest : []);
+      } else if (name === 'answerQuestion') {
+        if (!idOk(p.requestId) || !liveSocks().has(p.sock)) return;
+        if (!p.picks || typeof p.picks !== 'object' || Array.isArray(p.picks)) return;
+        actions.answerQuestion(p.requestId, p.sock, p.picks);
       } else if (name === 'nudge' || name === 'stop' || name === 'retry') {
         if (!idOk(p.sessionId) || !liveSocks().has(p.sock)) return;
         actions[name](p.sessionId, p.sock);
@@ -1114,14 +1168,15 @@ async function start() {
         actions.openEngine();
       } else if (name === 'refresh') {
         actions.refreshWork();
+      } else if (name === 'setPreset') {
+        if (applyPreset(settings, p.value)) { save(); refresh(); }     // the relay reads the flag per request, so this applies at once
       } else if (name === 'toggle') {
         if (p.key === 'keepAwake') actions.toggleKeepAwake();
         else if (p.key === 'relayEnabled') actions.toggleRelay();
         else if (p.key === 'launchAtLogin') actions.toggleLaunchAtLogin();
-        else if (p.key === 'autoAllow') actions.toggleAutoAllow();
-        else if (p.key === 'askRisky') actions.toggleAskRisky();
         else if (p.key === 'notify') actions.toggleNotify();
         else if (p.key === 'claudeCode') actions.toggleClaudeCode();
+        else if (p.key === 'webClient') actions.toggleWebClient().catch(() => {});
       } else if (name === 'removePhone') {
         if (typeof p.id === 'string' && p.id) actions.revoke(p.id);       // the popover's two-click remove
       } else if (name === 'foldFinished') {

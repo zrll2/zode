@@ -12,6 +12,7 @@ const once = (label, cls, fn) => { const b = btn(label, cls, () => { b.disabled 
 const MAX_HEIGHT = 560;
 let model = null;
 let sheetOn = false;
+let sheetView = 'settings';                 // 'settings' | 'apprs': which view the sheet shows
 let phonesOpen = false;                     // the paired phones popover above the footer
 let finishedOpen = null;                    // null = follow the default/fold-finished; else the user's choice
 let olderOpen = false;
@@ -136,7 +137,62 @@ function needCard(n) {
   }
 
   if (n.kind === 'question') {
-    const acts = el('div', 'acts');
+    const questions = Array.isArray(n.questions) ? n.questions.filter(q => q && typeof q.question === 'string' && q.question && Array.isArray(q.options) && q.options.length > 0) : [];
+    const answerable = n.requestId != null && questions.length > 0;
+    if (answerable) {
+      // Answer in place: every question's options as buttons. One single-select question answers on
+      // click; several questions or a multiSelect toggle and a Send submits once everything is picked.
+      const picks = {};
+      const optionBtns = [];
+      const hasPick = q => { const p = picks[q.question]; return Array.isArray(p) ? p.length > 0 : p != null; };
+      const sync = () => {
+        for (const b of optionBtns) b.classList.toggle('on', Array.isArray(picks[b.dataset.q]) ? picks[b.dataset.q].includes(b.dataset.label) : picks[b.dataset.q] === b.dataset.label);
+        send.disabled = !questions.every(hasPick);
+      };
+      for (const q of questions) {
+        const qwrap = el('div', 'q');
+        qwrap.append(el('b', null, q.question));
+        const opts = el('div', 'acts');
+        for (const o of q.options) {
+          const b = btn(o.label, 'btn', () => {
+            if (q.multiSelect) {
+              const cur = Array.isArray(picks[q.question]) ? picks[q.question].slice() : [];
+              const at = cur.indexOf(o.label);
+              if (at >= 0) cur.splice(at, 1); else cur.push(o.label);
+              if (cur.length) picks[q.question] = cur; else delete picks[q.question];
+            } else {
+              picks[q.question] = o.label;
+              for (const other of optionBtns) if (other.dataset.q === q.question && other !== b) other.classList.remove('on');
+            }
+            sync();
+          });
+          b.dataset.q = q.question;
+          b.dataset.label = o.label;
+          if (o.description) b.title = o.description;                 // the option's own tooltip; no hint text in the layout
+          optionBtns.push(b);
+          opts.append(b);
+        }
+        qwrap.append(opts);
+        card.append(qwrap);
+      }
+      const send = el('button', 'btn pri', 'Send');
+      send.disabled = true;
+      send.addEventListener('click', () => {
+        if (!questions.every(hasPick)) return;
+        send.disabled = true;
+        act('answerQuestion', { requestId: n.requestId, sock: n.sock, picks });
+        toast('Answered');
+      });
+      const acts = el('div', 'acts');
+      acts.append(
+        send,
+        once('Stop', 'btn ghost', () => { act('stop', { sessionId: n.sessionId, sock: n.sock }); toast(`Stopped ${project}`); }),
+        btn('Show in ZCode', 'btn', () => act('show')),
+      );
+      card.append(acts);
+      return card;
+    }
+    const acts = el('div', 'acts');                                   // nothing answerable here: today's card
     acts.append(
       once('Stop', 'btn ghost', () => { act('stop', { sessionId: n.sessionId, sock: n.sock }); toast(`Stopped ${project}`); }),
       btn('Show in ZCode', 'btn pri', () => act('show')),
@@ -299,10 +355,57 @@ function setPhones(open) {
 
 function sheet(on) {
   sheetOn = on;
+  if (!on && sheetView !== 'settings') showSettingsView();
   $('sheet').classList.toggle('on', on);
   $('sheet').setAttribute('aria-hidden', on ? 'false' : 'true');
   $('gear').setAttribute('aria-expanded', on ? 'true' : 'false');
   reportHeight();
+}
+
+// The approvals history view swaps the sheet's body; the back button (and Escape) returns.
+function showSettingsView() {
+  sheetView = 'settings';
+  $('apprs').hidden = true;
+  $('scroll').hidden = false;
+  $('sheetTitle').textContent = 'Settings';
+  reportHeight();
+}
+
+async function showApprovalsView() {
+  sheetView = 'apprs';
+  $('scroll').hidden = true;
+  $('apprs').hidden = false;
+  $('sheetTitle').textContent = 'Approvals';
+  $('apprs').textContent = '';
+  reportHeight();
+  let rows = null;
+  try { rows = await window.zode.approvalLog(); } catch { rows = null; }
+  if (sheetView !== 'apprs' || !sheetOn) return;   // the user left while the channel was in flight
+  renderApprs(Array.isArray(rows) ? rows : []);
+  reportHeight();
+}
+
+function renderApprs(rows) {
+  const root = $('apprs');
+  root.textContent = '';
+  const group = el('div', 'group');
+  if (!rows.length) {
+    group.append(el('div', 'aempty', 'No approvals yet'));
+  } else {
+    const now = Date.now();
+    for (const r of rows) {
+      const f = window.approvalRowOf ? window.approvalRowOf(r, now) : { title: '', status: '', source: '', ago: '', risky: false };
+      const row = el('div', 'arow');
+      if (f.risky) row.append(el('i', 'adot'));
+      row.append(el('span', 'atitle', f.title || 'Permission request'));
+      const right = el('span', 'astatus');
+      right.append(el('b', null, f.source ? `${f.status} ${f.source}` : f.status));
+      right.append(el('span', null, f.ago));
+      row.append(right);
+      group.append(row);
+    }
+  }
+  root.append(group);
 }
 
 function setSwitch(id, on) { $(id).setAttribute('aria-checked', on ? 'true' : 'false'); }
@@ -312,15 +415,13 @@ function flip(id, key) {
   act('toggle', { key });
 }
 
-// The settings sheet: three grouped cards, same settings, new layout.
+// The settings sheet: grouped cards; the Permissions preset derived from the two stored booleans.
 function renderSettings(s, voice) {
-  setSwitch('swAutoAllow', s.autoAllow === true);
-  const risky = $('swAskRisky');
-  risky.disabled = s.autoAllow !== true;                          // it only matters while auto-allow is on
-  setSwitch('swAskRisky', s.autoAllow === true && s.askRisky === true);
+  for (const b of document.querySelectorAll('#preset button')) b.setAttribute('aria-checked', b.dataset.preset === s.preset ? 'true' : 'false');
   setSwitch('swNotify', s.notify !== false);
   setSwitch('swClaudeCode', s.claudeCode !== false);
   setSwitch('swRelay', s.relayEnabled === true);
+  setSwitch('swWebClient', s.webClient === true);
   setSwitch('swAwake', s.keepAwake === true);
   setSwitch('swLogin', s.launchAtLogin === true);
   renderAddressSeg(s.addresses ?? [], s.addressId);
@@ -366,8 +467,9 @@ function renderVoice(v) {
 // the window from this number, so measure the natural content height, not the clipped one.
 function reportHeight() {
   try {
+    const body = sheetView === 'apprs' ? $('apprs') : $('scroll');
     const h = sheetOn
-      ? document.querySelector('#sheet .hdr').offsetHeight + $('scroll').scrollHeight + 2    // the settings sheet sizes the window while it is open
+      ? document.querySelector('#sheet .hdr').offsetHeight + body.scrollHeight + 2    // the sheet sizes the window while it is open
       : $('bar').offsetHeight + $('mid').scrollHeight + ($('mon').hidden ? 0 : $('mon').offsetHeight) + 2;          // + the panel's top and bottom border
     window.zode.panelResize(Math.min(MAX_HEIGHT, Math.max(1, Math.ceil(h))));
   } catch { /* the app keeps the last size */ }
@@ -391,7 +493,8 @@ $('refresh').addEventListener('click', () => {
   setTimeout(() => r.classList.remove('spin'), 700);
 });
 $('gear').addEventListener('click', () => sheet(!sheetOn));
-$('back').addEventListener('click', () => sheet(false));
+$('back').addEventListener('click', () => { if (sheetView === 'apprs') showSettingsView(); else sheet(false); });
+$('approvals').addEventListener('click', () => { if (sheetOn) showApprovalsView(); });
 $('phones').addEventListener('click', () => setPhones(!phonesOpen));
 document.addEventListener('click', e => {
   if (!phonesOpen) return;                                        // a click outside the popover closes it; the chip toggles
@@ -400,8 +503,7 @@ document.addEventListener('click', e => {
 });
 $('swAwake').addEventListener('click', () => flip('swAwake', 'keepAwake'));
 $('swRelay').addEventListener('click', () => flip('swRelay', 'relayEnabled'));
-$('swAutoAllow').addEventListener('click', () => flip('swAutoAllow', 'autoAllow'));
-$('swAskRisky').addEventListener('click', () => { if (!$('swAskRisky').disabled) flip('swAskRisky', 'askRisky'); });
+$('swWebClient').addEventListener('click', () => flip('swWebClient', 'webClient'));
 $('swNotify').addEventListener('click', () => flip('swNotify', 'notify'));
 $('swClaudeCode').addEventListener('click', () => flip('swClaudeCode', 'claudeCode'));
 $('swLogin').addEventListener('click', () => flip('swLogin', 'launchAtLogin'));
@@ -412,6 +514,13 @@ $('voiceLang').addEventListener('click', e => {
   b.setAttribute('aria-checked', 'true');
   act('setVoiceLanguage', { language: b.dataset.lang });
 });
+$('preset').addEventListener('click', e => {
+  const b = e.target.closest('button[data-preset]');
+  if (!b || b.getAttribute('aria-checked') === 'true') return;    // already chosen; the next push confirms
+  for (const x of document.querySelectorAll('#preset button')) x.setAttribute('aria-checked', 'false');
+  b.setAttribute('aria-checked', 'true');
+  act('setPreset', { value: b.dataset.preset });
+});
 $('updatesBtn').addEventListener('click', () => act('checkUpdates'));
 $('setupBtn').addEventListener('click', () => act('setup'));
 $('quitBtn').addEventListener('click', () => act('quit'));
@@ -420,6 +529,7 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Tab') document.body.classList.add('kb');
   if (e.key !== 'Escape') return;
   if (phonesOpen) setPhones(false);          // the popover steps back first
+  else if (sheetOn && sheetView === 'apprs') showSettingsView();   // then the approvals list
   else if (sheetOn) sheet(false);            // the sheet steps back first; Escape again closes the panel
   else act('close');
 });

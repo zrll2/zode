@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildPanelModel, orderTitle } from '../lib/panel.mjs';
-import { runFor, finishedDefaultOpen, addressSegOptions } from '../panel/helpers.mjs';
+import { runFor, finishedDefaultOpen, addressSegOptions, approvalRowOf } from '../panel/helpers.mjs';
 
 const NOW = 1_800_000_000_000;
 const min = 60 * 1000;
@@ -12,7 +12,7 @@ const perm = over => ({ requestId: 'r1', kind: 'permission', toolName: 'Bash', s
 const input = over => ({
   running: true, phones: 2,
   addresses: [{ id: 'lan', label: 'Wi-Fi / local network (192.168.1.5)', ip: '192.168.1.5' }, { id: 'local', label: 'This Mac only', ip: '127.0.0.1' }],
-  addressId: 'lan', launchAtLogin: false, keepAwake: true, autoAllow: true, askRisky: false, notify: true, claudeCode: true, setupDone: true, foldFinished: false,
+  addressId: 'lan', launchAtLogin: false, keepAwake: true, autoAllow: true, askRisky: false, notify: true, claudeCode: true, webClient: false, setupDone: true, foldFinished: false,
   tapAlive: true, engine: { path: '/Applications/ZCode Engine.app' },
   update: { available: false, originalVersion: null, engineVersion: null },
   release: { available: false, latest: null, installed: null },
@@ -35,7 +35,7 @@ test('quiet: idle glyph, no banner, empty lists, settings pass through, no headl
   assert.equal('summary' in m, false);                                // the headline is gone from the model
   assert.equal(m.usageLabel, null);                                   // usage unknown: hidden
   assert.deepEqual(m.settings, {
-    keepAwake: true, autoAllow: true, askRisky: false, notify: true, claudeCode: true, relayEnabled: true, launchAtLogin: false, foldFinished: false,
+    keepAwake: true, autoAllow: true, askRisky: false, preset: 'auto', notify: true, claudeCode: true, webClient: false, relayEnabled: true, launchAtLogin: false, foldFinished: false,
     addressId: 'lan',
     addresses: [{ id: 'lan', label: 'Wi-Fi / local network (192.168.1.5)' }, { id: 'local', label: 'This Mac only' }],
     version: '1.0.1', selfUpdate: 'idle',
@@ -97,7 +97,10 @@ test('busy: every need kind, red before amber, working rows with run start, fini
   assert.deepEqual([ask.more, ask.same], [1, 0]);     // one other permission, none with the same command (the question does not count)
   assert.equal(m.needs[2].kind, 'question');          // the question behind the permissions wins nothing
   assert.equal(m.needs[2].waiting, '1 min');
-  assert.equal('requestId' in m.needs[2], false);
+  assert.equal(m.needs[2].requestId, 'r7');           // answerable from the panel now
+  assert.equal(m.needs[2].sock, '/sock');
+  assert.deepEqual(m.needs[2].questions, []);         // the fixture carries no questions
+  assert.equal(m.needs[2].ask, '');
   assert.equal('more' in m.needs[2], false);
   assert.equal(m.needs[3].kind, 'stalled');
   assert.equal(m.needs[3].waiting, 'Quiet 12m');      // the right-hand value, no sentence
@@ -122,6 +125,27 @@ test('a waiting session with only a question — or nothing pending — still as
   }), NOW);
   assert.equal(withNothing.needs[0].kind, 'question');
   assert.equal(withNothing.needs[0].waiting, '1 min');
+});
+
+test('a question need carries the questions, the request id and the sock', () => {
+  const questions = [
+    { question: 'Which database?', header: 'Storage', multiSelect: false, options: [{ label: 'SQLite', description: 'simple' }, { label: 'Postgres', description: '' }] },
+    { question: 'Which caches?', header: 'Cache', multiSelect: true, options: [{ label: 'memory', description: '' }, { label: 'disk', description: '' }] },
+  ];
+  const m = buildPanelModel(input({
+    work: { lines: [line({ id: 'a', light: 'amber', status: 'Waiting for you', at: NOW - min })], pending: { a: [perm({ requestId: 'rq', kind: 'question', summary: '', questions })] } },
+  }), NOW);
+  assert.equal(m.needs[0].kind, 'question');
+  assert.equal(m.needs[0].requestId, 'rq');
+  assert.equal(m.needs[0].sock, '/sock');
+  assert.equal(m.needs[0].ask, 'Which database?');                       // the first question text
+  assert.deepEqual(m.needs[0].questions, questions);
+  // junk questions are dropped on the way in, an empty list still makes the card
+  const none = buildPanelModel(input({
+    work: { lines: [line({ id: 'b', light: 'amber', status: 'Waiting for you' })], pending: { b: [perm({ requestId: 'rq2', kind: 'question', summary: '', questions: 'nope' })] } },
+  }), NOW);
+  assert.deepEqual(none.needs[0].questions, []);
+  assert.equal(none.needs[0].ask, '');
 });
 
 test('repeated requests: more counts the others, same counts identical commands, none with a single request', () => {
@@ -335,6 +359,33 @@ test('settings switches: the auto-allow default is on, the risky gate and notify
   assert.equal(buildPanelModel(input({ claudeCode: false }), NOW).settings.claudeCode, false);
   assert.equal(buildPanelModel(input({}), NOW).settings.claudeCode, true);           // the default is on: junk never flips it
   assert.equal(buildPanelModel(input({ claudeCode: 'yes' }), NOW).settings.claudeCode, true);
+  assert.equal(buildPanelModel(input({ webClient: true }), NOW).settings.webClient, true);
+  assert.equal(buildPanelModel(input({ webClient: false }), NOW).settings.webClient, false);
+  assert.equal(buildPanelModel(input({}), NOW).settings.webClient, false);           // the browser client defaults off
+  assert.equal(buildPanelModel(input({ webClient: 'yes' }), NOW).settings.webClient, false);
+});
+
+test('the settings payload carries the derived Permissions preset', () => {
+  assert.equal(buildPanelModel(input({ autoAllow: false }), NOW).settings.preset, 'ask');
+  assert.equal(buildPanelModel(input({ autoAllow: true, askRisky: false }), NOW).settings.preset, 'auto');
+  assert.equal(buildPanelModel(input({ autoAllow: true, askRisky: true }), NOW).settings.preset, 'careful');
+  assert.equal(buildPanelModel(input({ autoAllow: true, askRisky: 'junk' }), NOW).settings.preset, 'auto');
+  assert.equal(buildPanelModel(input({ autoAllow: 'junk', askRisky: true }), NOW).settings.preset, 'careful');   // junk autoAllow means on (the default)
+  assert.equal(buildPanelModel(input({ autoAllow: false, askRisky: true }), NOW).settings.preset, 'ask');        // autoAllow dominates
+});
+
+test('approvalRowOf: status words, the answerer, the device, the age and the risky flag', () => {
+  const now = 1_800_000_000_100;
+  assert.deepEqual(approvalRowOf({ id: '1', at: now - 2 * 60_000, tool: 'Bash', summary: 'Run: npm test', risky: true, outcome: 'allowed', by: 'auto', device: null }, now),
+    { title: 'Run: npm test', status: 'Allowed', source: '· auto', ago: '2m ago', risky: true });
+  assert.deepEqual(approvalRowOf({ id: '2', at: now - 5_000, outcome: 'rejected', by: 'phone', device: 'Test iPhone' }, now),
+    { title: '', status: 'Denied', source: '· phone Test iPhone', ago: 'now', risky: false });
+  assert.deepEqual(approvalRowOf({ id: '3', at: now - 3_600_000, outcome: 'pending', by: 'none' }, now).source, '');
+  assert.equal(approvalRowOf({ id: '4', outcome: 'cancelled', by: 'none' }, now).status, 'Cancelled');
+  assert.equal(approvalRowOf({ id: '5', outcome: 'unavailable', by: 'none' }, now).status, 'Failed');
+  assert.equal(approvalRowOf({ id: '6', outcome: 'weird', by: 'nobody' }, now).status, 'Pending');   // junk falls back to pending
+  assert.equal(approvalRowOf({ id: '7', outcome: 'allowed', by: 'panel' }, now).source, '· Mac');
+  assert.equal(approvalRowOf(null, now).status, 'Pending');                                          // never throws
 });
 
 test('ages without a usable clock stay empty instead of throwing', () => {

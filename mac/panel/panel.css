@@ -52,10 +52,13 @@ body{color:var(--ink);font:13px/1.35 var(--font);overflow:hidden}
 .need .top span{color:var(--amber);font-size:12px;font-variant-numeric:tabular-nums;flex:none}
 .need code{display:block;background:var(--code);border-radius:8px;padding:8px 10px;font:12px/1.4 var(--mono);color:var(--ink);overflow-wrap:anywhere;max-height:54px;overflow:hidden}
 .need .more{color:var(--amber);font-size:12px;font-weight:600}
+.need .q{display:flex;flex-direction:column;gap:6px;min-width:0}
+.need .q b{font-weight:600;overflow-wrap:anywhere}
 .acts{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 .btn{height:30px;padding:0 13px;border-radius:9px;border:1px solid var(--line);background:var(--card);color:var(--ink);font:inherit;font-weight:600;cursor:pointer}
 .btn.pri{background:var(--pri);color:var(--pri-ink);border-color:var(--pri)}
 .btn.ghost{background:transparent;border-color:transparent;color:var(--sub)}
+.btn.on{background:var(--pri);color:var(--pri-ink);border-color:var(--pri)}
 .btn:hover{filter:brightness(.97)}
 .btn:disabled{opacity:.5;cursor:default}
 .txtbtn{border:0;background:transparent;color:var(--sub);font:inherit;font-size:12px;cursor:pointer;padding:4px 2px}
@@ -100,6 +103,9 @@ body{color:var(--ink);font:13px/1.35 var(--font);overflow:hidden}
 .set{display:flex;align-items:center;gap:10px;padding:10px 14px;min-height:44px;box-sizing:border-box}
 .set + .set{border-top:1px solid var(--line)}
 .set > span:first-child{flex:1;font-weight:500}
+button.set{width:100%;text-align:left;background:transparent;border:0;font:inherit;color:inherit;cursor:pointer;padding:10px 14px}
+button.set:hover{background:var(--chip)}
+.set .chev{width:14px;height:14px;flex:none;color:var(--sub)}
 .val{color:var(--sub);font-size:12.5px;flex:none}
 .sw{width:38px;height:22px;border-radius:11px;border:0;background:var(--line);position:relative;cursor:pointer;flex:none}
 .sw::after{content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.3);transition:left .15s}
@@ -110,6 +116,14 @@ body{color:var(--ink);font:13px/1.35 var(--font);overflow:hidden}
 .seg button{border:0;background:transparent;color:var(--sub);font:inherit;font-weight:600;font-size:12px;height:24px;padding:0 10px;border-radius:6px;cursor:pointer}
 .seg button.on,.seg button[aria-checked="true"]{background:var(--card);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.15)}
 .linkrow{display:flex;gap:6px;padding:2px 8px 6px;flex-wrap:wrap;align-items:center}
+/* the approvals history inside the settings sheet: summary left, status and age right */
+.arow{display:flex;align-items:center;gap:9px;padding:10px 14px;min-height:44px}
+.arow + .arow{border-top:1px solid var(--line)}
+.arow .adot{width:7px;height:7px;border-radius:50%;background:var(--amber);flex:none}
+.arow .atitle{flex:1;min-width:0;font:12px/1.35 var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.arow .astatus{display:flex;flex-direction:column;align-items:flex-end;flex:0 1 auto;min-width:0;max-width:48%;color:var(--sub);font-size:12px;font-variant-numeric:tabular-nums}
+.arow .astatus b{font-weight:500;color:var(--sub);max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.aempty{padding:12px 14px;color:var(--sub);font-size:12.5px}
 .ver{font-size:12px;color:var(--sub);padding:2px 4px;margin-right:auto}
 .voiceact{flex:none}
 button:focus,select:focus{outline:none}
@@ -124,7 +138,7 @@ body.kb button:focus-visible{outline:2px solid var(--pri);outline-offset:2px}   
 .mon .plot .gl{stroke:var(--line);stroke-width:1;stroke-dasharray:2 4}
 .mon .plot .ln{fill:none;stroke:var(--acc);stroke-width:1.6;stroke-linejoin:round}
 .mon .plot .ar{fill:var(--acc);fill-opacity:.16}
-.mon .rate{position:absolute;left:14px;top:9px;display:flex;align-items:baseline;gap:4px;font-variant-numeric:tabular-nums}
+.mon .rate{padding:9px 14px 0;display:flex;align-items:baseline;gap:4px;font-variant-numeric:tabular-nums}
 .mon .rate b{font-size:20px;font-weight:650;letter-spacing:-.01em}
 .mon .rate span{color:var(--sub);font-size:12px}
 .mon .rate.idle b{color:var(--sub)}

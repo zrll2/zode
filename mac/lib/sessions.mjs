@@ -184,7 +184,8 @@ export async function listPending({ dir = tapDir(), timeoutMs = 1500, connect = 
             sock: server.sock, at: Number(entry.at) || 0,
           });
         } else if (entry.method === 'interaction/requestUserInput') {          // a question: never allow/deny
-          requests.push({ requestId: entry.id, sessionId, kind: 'question', toolName: '', summary: '', detail: '', risky: false, sock: server.sock, at: Number(entry.at) || 0 });
+          requests.push({ requestId: entry.id, sessionId, kind: 'question', toolName: '', summary: '', detail: '', risky: false,
+            questions: questionsOf(entry.params), sock: server.sock, at: Number(entry.at) || 0 });
         }
       }
     }
@@ -252,6 +253,70 @@ export async function respondPermission({ sock, requestId, decision, reason, res
   const result = response && typeof response === 'object' && !Array.isArray(response)
     ? response
     : { decision, ...(reason ? { reason } : {}) };
+  const reply = await ask(sock, 'tap/respond', { id: requestId, result }, timeoutMs, connect);
+  return reply?.error ? String(reply.error.message ?? 'refused') : null;
+}
+
+// The questions a ZCode question asks, sanitised: at most 4, each with at most 8 options, strings
+// trimmed and capped, junk dropped. Everything the panel needs to show and answer them.
+export function questionsOf(params) {
+  const out = [];
+  for (const q of Array.isArray(params?.questions) ? params.questions : []) {
+    if (!q || typeof q !== 'object') continue;
+    const question = typeof q.question === 'string' ? q.question.trim().slice(0, 300) : '';
+    if (!question) continue;
+    const options = [];
+    for (const o of Array.isArray(q.options) ? q.options : []) {
+      if (!o || typeof o !== 'object') continue;
+      const label = typeof o.label === 'string' ? o.label.trim().slice(0, 80) : '';
+      if (!label) continue;
+      options.push({ label, description: typeof o.description === 'string' ? o.description.trim().slice(0, 160) : '' });
+      if (options.length >= 8) break;
+    }
+    out.push({
+      question,
+      header: typeof q.header === 'string' ? q.header.trim().slice(0, 40) : '',
+      multiSelect: q.multiSelect === true,
+      options,
+    });
+    if (out.length >= 4) break;
+  }
+  return out;
+}
+
+// The tap/respond result for a question: picks is { [question text]: label | label[] }. Unknown
+// questions and unknown labels are dropped; one question with a free-text pick (not one of its
+// options) answers `{ answer }`; nothing left to send declines. A plan approval (one question)
+// rides the same path.
+export function answerResult(questions, picks) {
+  const list = Array.isArray(questions) ? questions : [];
+  const one = list.length === 1 ? list[0] : null;
+  const answers = {};
+  let count = 0;
+  for (const q of list) {
+    const p = picks && typeof picks === 'object' && !Array.isArray(picks) ? picks[q.question] : undefined;
+    if (typeof p !== 'string' && !Array.isArray(p)) continue;
+    const labels = new Set(q.options.map(o => o.label));
+    if (Array.isArray(p)) {
+      const known = p.filter(l => typeof l === 'string' && labels.has(l));
+      if (known.length) { answers[q.question] = known; count += 1; }
+    } else if (labels.has(p)) {
+      answers[q.question] = p; count += 1;
+    } else if (one === q && !q.multiSelect && p.trim()) {
+      answers[q.question] = p; count += 1;                             // a single question: any text is its free answer
+    }
+  }
+  if (!count) return { action: 'decline' };
+  if (one && count === 1 && answers[one.question] !== undefined && !Array.isArray(answers[one.question])
+    && !one.options.some(o => o.label === answers[one.question])) {
+    return { action: 'accept', content: { answer: answers[one.question] } };   // free text on the one question
+  }
+  return { action: 'accept', content: { answers } };
+}
+
+// Answer a pending question. Same contract as respondPermission: null (any fine outcome) or the
+// server's refusal reason; the `result` comes from answerResult and goes out verbatim.
+export async function respondQuestion({ sock, requestId, result, timeoutMs = 1500, connect = defaultConnect } = {}) {
   const reply = await ask(sock, 'tap/respond', { id: requestId, result }, timeoutMs, connect);
   return reply?.error ? String(reply.error.message ?? 'refused') : null;
 }

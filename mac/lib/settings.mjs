@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 
 // voiceLanguage stays null until chosen: main.mjs picks it once from the macOS system language.
-const DEFAULTS = { relayEnabled: true, addressId: null, port: 8787, launchAtLogin: false, setupDone: false, keepAwake: true, foldFinished: false, autoAllow: true, askRisky: false, notify: true, claudeCode: true, voiceLanguage: null, voiceModel: 'small' };
+const DEFAULTS = { relayEnabled: true, addressId: null, port: 8787, launchAtLogin: false, setupDone: false, keepAwake: true, foldFinished: false, autoAllow: true, askRisky: false, notify: true, claudeCode: true, webClient: false, voiceLanguage: null, voiceModel: 'small' };
 
 function sanitize(raw) {
   const s = { ...DEFAULTS };
@@ -18,6 +18,7 @@ function sanitize(raw) {
   if (typeof raw.askRisky === 'boolean') s.askRisky = raw.askRisky;        // a missing or invalid value means off
   if (typeof raw.notify === 'boolean') s.notify = raw.notify;              // a missing or invalid value means on
   if (typeof raw.claudeCode === 'boolean') s.claudeCode = raw.claudeCode;   // a missing or invalid value means on
+  if (typeof raw.webClient === 'boolean') s.webClient = raw.webClient;     // a missing or invalid value means off
   if (raw.voiceLanguage === 'en' || raw.voiceLanguage === 'zh') s.voiceLanguage = raw.voiceLanguage;
   if (raw.voiceModel === 'small') s.voiceModel = raw.voiceModel;     // 'small' is the only model today
   return s;
@@ -41,4 +42,19 @@ export function saveSettings(file, settings = {}) {
     throw err;
   }
   return s;
+}
+
+// The Permissions control's three choices, derived from the two stored booleans. Ask: the user
+// answers everything; Auto: everything allowed; Careful: allowed, but the destructive ones wait.
+export function presetOf({ autoAllow, askRisky } = {}) {
+  if (autoAllow !== true) return 'ask';
+  return askRisky === true ? 'careful' : 'auto';
+}
+
+// Set the two booleans from a preset name. An unknown name changes nothing and returns false.
+export function applyPreset(settings, name) {
+  if (name !== 'ask' && name !== 'auto' && name !== 'careful') return false;
+  settings.autoAllow = name !== 'ask';
+  settings.askRisky = name === 'careful';
+  return true;
 }

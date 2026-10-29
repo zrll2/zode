@@ -17,6 +17,7 @@ export function orderTitle(line) {
 // summary) and `liveSince` (when the current run began) so the panel can show ages and durations
 // relative to `now`. work.pending stays keyed by sessionId, oldest request first, exactly as
 // refreshSessions() builds it.
+import { presetOf } from './settings.mjs';
 
 const MIN = 60 * 1000;
 
@@ -101,7 +102,15 @@ function needOf(line, pending, now) {
           .some(o => o && (o.optionId === 'allow_project' || o.kind === 'allow_always')),
       };
     }
-    return { ...base, kind: 'question', waiting };
+    const question = (Array.isArray(pending) ? pending : []).find(r => r && r.kind === 'question');
+    const questions = Array.isArray(question?.questions) ? question.questions : [];
+    return {
+      ...base, kind: 'question', waiting,
+      ask: questions[0] ? questions[0].question : '',              // the first question text, when ZCode asks one
+      requestId: question ? question.requestId : undefined,
+      sock: question && str(question.sock) ? str(question.sock) : base.sock,
+      questions,
+    };
   }
   const m = /^Quiet for (\d+) min/.exec(str(line.status));
   const n = m ? m[1] : null;
@@ -224,8 +233,10 @@ export function buildPanelModel(input, now = Date.now()) {
         keepAwake: s.keepAwake === true,
         autoAllow: s.autoAllow !== false,                     // the setting defaults on: missing or junk means on
         askRisky: s.askRisky === true,
+        preset: presetOf({ autoAllow: s.autoAllow !== false, askRisky: s.askRisky === true }),
         notify: s.notify !== false,                           // the setting defaults on: missing or junk means on
         claudeCode: s.claudeCode !== false,                   // the setting defaults on: missing or junk means on
+        webClient: s.webClient === true,                      // the browser client defaults off
         relayEnabled: s.running === true,
         launchAtLogin: s.launchAtLogin === true,
         foldFinished: s.foldFinished === true,
@@ -249,7 +260,7 @@ export function buildPanelModel(input, now = Date.now()) {
       usage: null, usageLabel: null, flow: null,
       connected: false,
       settings: {
-        keepAwake: false, autoAllow: true, askRisky: false, notify: true, claudeCode: true, relayEnabled: false, launchAtLogin: false, foldFinished: false,
+        keepAwake: false, autoAllow: true, askRisky: false, preset: 'auto', notify: true, claudeCode: true, webClient: false, relayEnabled: false, launchAtLogin: false, foldFinished: false,
         addressId: '', addresses: [], version: '', selfUpdate: 'idle',
       },
       voice: voiceOf(null),

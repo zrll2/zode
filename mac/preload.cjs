@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('zode', {
   copy: (text) => ipcRenderer.invoke('zode:copy', text),
   listDevices: () => ipcRenderer.invoke('zode:listDevices'),
   revoke: (id) => ipcRenderer.invoke('zode:revoke', id),
+  approvalLog: () => ipcRenderer.invoke('zode:approvalLog'),
   onStatus: (cb) => {
     const fn = (_e, data) => cb(data);
     ipcRenderer.on('zode:status', fn);

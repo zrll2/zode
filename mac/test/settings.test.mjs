@@ -4,10 +4,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { loadSettings, saveSettings } from '../lib/settings.mjs';
+import { loadSettings, saveSettings, presetOf, applyPreset } from '../lib/settings.mjs';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'zode-settings-'));
-const DEFAULTS = { relayEnabled: true, addressId: null, port: 8787, launchAtLogin: false, setupDone: false, keepAwake: true, foldFinished: false, autoAllow: true, askRisky: false, notify: true, claudeCode: true, voiceLanguage: null, voiceModel: 'small' };
+const DEFAULTS = { relayEnabled: true, addressId: null, port: 8787, launchAtLogin: false, setupDone: false, keepAwake: true, foldFinished: false, autoAllow: true, askRisky: false, notify: true, claudeCode: true, webClient: false, voiceLanguage: null, voiceModel: 'small' };
 
 test('missing or broken file falls back to defaults', () => {
   const dir = tmp();
@@ -22,15 +22,15 @@ test('missing or broken file falls back to defaults', () => {
 test('unknown keys and invalid values fall back to defaults', () => {
   const dir = tmp();
   const f = path.join(dir, 'settings.json');
-  fs.writeFileSync(f, JSON.stringify({ relayEnabled: 'yes', addressId: 42, port: '8787', launchAtLogin: 1, setupDone: 'done', keepAwake: 'yes', foldFinished: 'no', autoAllow: 'yes', askRisky: 'no', notify: 'yes', claudeCode: 'yes', voiceLanguage: 'fr', voiceModel: 'large', bogus: true }));
+  fs.writeFileSync(f, JSON.stringify({ relayEnabled: 'yes', addressId: 42, port: '8787', launchAtLogin: 1, setupDone: 'done', keepAwake: 'yes', foldFinished: 'no', autoAllow: 'yes', askRisky: 'no', notify: 'yes', claudeCode: 'yes', webClient: 'yes', voiceLanguage: 'fr', voiceModel: 'large', bogus: true }));
   assert.deepEqual(loadSettings(f), DEFAULTS);
 });
 
 test('save then load round-trips, and the file is mode 0600', () => {
   const dir = tmp();
   const f = path.join(dir, 'settings.json');
-  const saved = saveSettings(f, { relayEnabled: false, addressId: 'tailscale', port: 9000, launchAtLogin: true, setupDone: true, keepAwake: false, foldFinished: true, autoAllow: false, askRisky: true, notify: false, claudeCode: false, voiceLanguage: 'zh', voiceModel: 'small' });
-  assert.deepEqual(saved, { relayEnabled: false, addressId: 'tailscale', port: 9000, launchAtLogin: true, setupDone: true, keepAwake: false, foldFinished: true, autoAllow: false, askRisky: true, notify: false, claudeCode: false, voiceLanguage: 'zh', voiceModel: 'small' });
+  const saved = saveSettings(f, { relayEnabled: false, addressId: 'tailscale', port: 9000, launchAtLogin: true, setupDone: true, keepAwake: false, foldFinished: true, autoAllow: false, askRisky: true, notify: false, claudeCode: false, webClient: true, voiceLanguage: 'zh', voiceModel: 'small' });
+  assert.deepEqual(saved, { relayEnabled: false, addressId: 'tailscale', port: 9000, launchAtLogin: true, setupDone: true, keepAwake: false, foldFinished: true, autoAllow: false, askRisky: true, notify: false, claudeCode: false, webClient: true, voiceLanguage: 'zh', voiceModel: 'small' });
   assert.deepEqual(loadSettings(f), saved);
   assert.equal(fs.statSync(f).mode & 0o777, 0o600);
 });
@@ -39,7 +39,7 @@ test('saveSettings drops unknown keys and out-of-range ports', () => {
   const dir = tmp();
   const f = path.join(dir, 'settings.json');
   const saved = saveSettings(f, { port: 70000, evil: 'x', addressId: 'lan' });
-  assert.deepEqual(saved, { relayEnabled: true, addressId: 'lan', port: 8787, launchAtLogin: false, setupDone: false, keepAwake: true, foldFinished: false, autoAllow: true, askRisky: false, notify: true, claudeCode: true, voiceLanguage: null, voiceModel: 'small' });
+  assert.deepEqual(saved, { relayEnabled: true, addressId: 'lan', port: 8787, launchAtLogin: false, setupDone: false, keepAwake: true, foldFinished: false, autoAllow: true, askRisky: false, notify: true, claudeCode: true, webClient: false, voiceLanguage: null, voiceModel: 'small' });
   assert.deepEqual(JSON.parse(fs.readFileSync(f, 'utf8')), saved);
 });
 
@@ -72,4 +72,24 @@ test('voice settings: language is en or zh (null until chosen), model is small',
   assert.deepEqual(loadSettings(f), { ...DEFAULTS, voiceLanguage: 'zh' });
   fs.writeFileSync(f, JSON.stringify({ voiceLanguage: 'FR', voiceModel: 'large' }));
   assert.deepEqual(loadSettings(f), DEFAULTS);
+});
+
+test('presetOf maps the four boolean combos; applyPreset round-trips them', () => {
+  assert.equal(presetOf({ autoAllow: false, askRisky: false }), 'ask');
+  assert.equal(presetOf({ autoAllow: false, askRisky: true }), 'ask');     // askRisky only matters while auto-allow is on
+  assert.equal(presetOf({ autoAllow: true, askRisky: false }), 'auto');
+  assert.equal(presetOf({ autoAllow: true, askRisky: true }), 'careful');
+  for (const name of ['ask', 'auto', 'careful']) {
+    const s = {};
+    assert.equal(applyPreset(s, name), true);
+    assert.equal(presetOf(s), name);
+  }
+});
+
+test('applyPreset rejects junk names without touching the settings', () => {
+  const s = { autoAllow: true, askRisky: true };
+  for (const bad of [undefined, null, '', 'Auto', 'yolo', 3]) {
+    assert.equal(applyPreset(s, bad), false);
+    assert.deepEqual(s, { autoAllow: true, askRisky: true });
+  }
 });

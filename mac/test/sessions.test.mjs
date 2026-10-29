@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { readTapServers, listSessions, listPending, readUsage, describeSession, summarize, summarizeRequest, respondPermission, pendingToAutoAllow, AUTO_ALLOW_RESULT, stopSession, sendToSession, nudgeSession, withLiveStatus, NUDGE_MESSAGE } from '../lib/sessions.mjs';
+import { readTapServers, listSessions, listPending, readUsage, describeSession, summarize, summarizeRequest, respondPermission, respondQuestion, questionsOf, answerResult, pendingToAutoAllow, AUTO_ALLOW_RESULT, stopSession, sendToSession, nudgeSession, withLiveStatus, NUDGE_MESSAGE } from '../lib/sessions.mjs';
 import { createLiveStatus } from '../../relay/live.mjs';
 
 const NOW = 1_700_000_000_000;
@@ -211,7 +211,7 @@ test('listPending: permissions and questions from every server, oldest first, so
     ['server-1', 'permission', '/b', 's2'],     // request ids are per wrapper: the same id on two sockets is two requests
   ]);
   assert.deepEqual(pending[0], { requestId: 'server-1', sessionId: 's1', kind: 'permission', toolName: 'Bash', summary: 'Run: sudo rm -rf /tmp/x', detail: 'Run: sudo rm -rf /tmp/x', risky: true, options: [], command: 'sudo rm -rf /tmp/x', sock: '/a' });
-  assert.deepEqual(pending[1], { requestId: 'server-2', sessionId: 'sq', kind: 'question', toolName: '', summary: '', detail: '', risky: false, sock: '/a' });
+  assert.deepEqual(pending[1], { requestId: 'server-2', sessionId: 'sq', kind: 'question', toolName: '', summary: '', detail: '', risky: false, questions: [], sock: '/a' });
   assert.equal(pending[2].summary, 'Edit: main.mjs');
   assert.deepEqual(await listPending({ dir: '/tmp/zode-sessions-missing', timeoutMs: 20 }), []);   // no dir, never throws
   fs.rmSync(dir, { recursive: true, force: true });
@@ -422,4 +422,68 @@ test('withLiveStatus: an open permission request shows Waiting for you', () => {
   const rows = [session({ sessionId: 's1', status: 'idle', updatedAt: NOW - min })];
   const s = summarize(withLiveStatus(rows, live), NOW);
   assert.deepEqual([s.lines[0].status, s.lines[0].light], ['Waiting for you', 'amber']);
+});
+
+// ---- ZCode questions: the sanitised payload, the answer builder, and the send -------------------
+
+test('questionsOf: sanitised, capped, junk dropped', () => {
+  const questions = [
+    { question: '  Which database?  ', header: ' Storage ', multiSelect: false,
+      options: [{ label: ' SQLite ', description: ' simple ' }, { label: '' }, null, 42, { description: 'no label' }, { label: 'x'.repeat(200), description: 'd'.repeat(300) }] },
+    { question: '', header: 'gone' },
+    null, 42, { header: 'no question' },
+    { question: 'q2', multiSelect: true, options: [{ label: 'a' }, { label: 'b' }] },
+  ];
+  assert.deepEqual(questionsOf({ questions }), [
+    { question: 'Which database?', header: 'Storage', multiSelect: false, options: [
+      { label: 'SQLite', description: 'simple' },
+      { label: 'x'.repeat(80), description: 'd'.repeat(160) },
+    ] },
+    { question: 'q2', header: '', multiSelect: true, options: [{ label: 'a', description: '' }, { label: 'b', description: '' }] },
+  ]);
+  const long = questionsOf({ questions: [{ question: 'q'.repeat(400), header: 'h'.repeat(100), options: [] }] });
+  assert.equal(long[0].question.length, 300);
+  assert.equal(long[0].header.length, 40);
+  assert.deepEqual(long[0].options, []);
+  for (const junk of [undefined, {}, { questions: 'nope' }, { questions: [null, 7, 'x', { question: '   ' }] }]) {
+    assert.deepEqual(questionsOf(junk), []);
+  }
+  // at most 4 questions and at most 8 options
+  const capped = questionsOf({ questions: Array.from({ length: 6 }, (_, i) => ({ question: 'q' + i })) });
+  assert.equal(capped.length, 4);
+  const eight = questionsOf({ questions: [{ question: 'q', options: Array.from({ length: 12 }, (_, i) => ({ label: 'o' + i })) }] });
+  assert.deepEqual(eight[0].options.map(o => o.label), ['o0', 'o1', 'o2', 'o3', 'o4', 'o5', 'o6', 'o7']);
+});
+
+test('answerResult: single, multi, free text, decline, unknown dropped', () => {
+  const one = { question: 'Which database?', options: [{ label: 'SQLite' }, { label: 'Postgres' }] };
+  const multi = { question: 'Which caches?', multiSelect: true, options: [{ label: 'memory' }, { label: 'disk' }] };
+  assert.deepEqual(answerResult([one], { 'Which database?': 'SQLite' }),
+    { action: 'accept', content: { answers: { 'Which database?': 'SQLite' } } });
+  assert.deepEqual(answerResult([multi], { 'Which caches?': ['memory', 'disk'] }),
+    { action: 'accept', content: { answers: { 'Which caches?': ['memory', 'disk'] } } });
+  // multi with unknown labels: the known ones stay, an all-unknown pick is dropped
+  assert.deepEqual(answerResult([multi], { 'Which caches?': ['memory', 'nope'] }),
+    { action: 'accept', content: { answers: { 'Which caches?': ['memory'] } } });
+  assert.deepEqual(answerResult([multi], { 'Which caches?': ['nope'] }), { action: 'decline' });
+  // free text on the one question: the answer form
+  assert.deepEqual(answerResult([one], { 'Which database?': 'use litestream' }),
+    { action: 'accept', content: { answer: 'use litestream' } });
+  // an unknown label on a multi-question session is dropped, never free text
+  assert.deepEqual(answerResult([one, multi], { 'Which database?': 'use litestream' }), { action: 'decline' });
+  assert.deepEqual(answerResult([], { whatever: 'x' }), { action: 'decline' });
+  assert.deepEqual(answerResult([one], {}), { action: 'decline' });
+  assert.deepEqual(answerResult(undefined, undefined), { action: 'decline' });
+  // a known label on the one question never uses the free-text form
+  const oneMulti = { question: 'q', multiSelect: true, options: [{ label: 'a' }] };
+  assert.deepEqual(answerResult([oneMulti], { q: 'not an option' }), { action: 'decline' });
+});
+
+test('respondQuestion: sends the built result verbatim by tap/respond', async () => {
+  const seen = [];
+  const connect = async (sock, request) => { seen.push(JSON.parse(request)); return [{ tapReply: true, id: 1, result: { ok: true } }]; };
+  assert.equal(await respondQuestion({ sock: '/a', requestId: 'q1', result: { action: 'decline' }, connect }), null);
+  assert.deepEqual(seen, [{ id: 1, method: 'tap/respond', params: { id: 'q1', result: { action: 'decline' } } }]);
+  const refused = async () => [{ tapReply: true, id: 1, error: { code: -32010, message: 'already answered' } }];
+  assert.equal(await respondQuestion({ sock: '/a', requestId: 'q1', result: { action: 'decline' }, connect: refused }), 'already answered');
 });
