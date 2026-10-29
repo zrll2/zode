@@ -421,6 +421,7 @@ function renderSettings(s, voice) {
   setSwitch('swNotify', s.notify !== false);
   setSwitch('swClaudeCode', s.claudeCode !== false);
   setSwitch('swRelay', s.relayEnabled === true);
+  setSwitch('swWebClient', s.webClient === true);
   setSwitch('swAwake', s.keepAwake === true);
   setSwitch('swLogin', s.launchAtLogin === true);
   renderAddressSeg(s.addresses ?? [], s.addressId);
@@ -502,6 +503,7 @@ document.addEventListener('click', e => {
 });
 $('swAwake').addEventListener('click', () => flip('swAwake', 'keepAwake'));
 $('swRelay').addEventListener('click', () => flip('swRelay', 'relayEnabled'));
+$('swWebClient').addEventListener('click', () => flip('swWebClient', 'webClient'));
 $('swNotify').addEventListener('click', () => flip('swNotify', 'notify'));
 $('swClaudeCode').addEventListener('click', () => flip('swClaudeCode', 'claudeCode'));
 $('swLogin').addEventListener('click', () => flip('swLogin', 'launchAtLogin'));

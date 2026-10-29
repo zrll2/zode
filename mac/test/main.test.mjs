@@ -82,3 +82,11 @@ test('mac/main.mjs wires the question answer action end to end', () => {
   assert.match(src, /answerResult\(questions, picks/);                        // picks are built against the pending question
   assert.match(src, /respondQuestion\(\{ sock: listed\.sock, requestId: listed\.requestId, result \}\)/);   // and sent by tap/respond
 });
+
+test('mac/main.mjs wires the web client folder and the Browser access toggle', () => {
+  const src = fs.readFileSync(path.join(root, 'main.mjs'), 'utf8');
+  assert.match(src, /webDir: webRoot\(\)/);                                  // the relay gets the folder
+  assert.match(src, /if \(settings\.webClient !== true\) return null;/);      // off means the relay serves nothing
+  assert.match(src, /toggleWebClient: async \(\) => \{ settings\.webClient = !\(settings\.webClient === true\); save\(\); await applyRelay\(\); \}/);   // the same restart path an address change uses
+  assert.match(src, /p\.key === ["']webClient["']/);                          // the toggle key is dispatched
+});

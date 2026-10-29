@@ -12,7 +12,7 @@ const perm = over => ({ requestId: 'r1', kind: 'permission', toolName: 'Bash', s
 const input = over => ({
   running: true, phones: 2,
   addresses: [{ id: 'lan', label: 'Wi-Fi / local network (192.168.1.5)', ip: '192.168.1.5' }, { id: 'local', label: 'This Mac only', ip: '127.0.0.1' }],
-  addressId: 'lan', launchAtLogin: false, keepAwake: true, autoAllow: true, askRisky: false, notify: true, claudeCode: true, setupDone: true, foldFinished: false,
+  addressId: 'lan', launchAtLogin: false, keepAwake: true, autoAllow: true, askRisky: false, notify: true, claudeCode: true, webClient: false, setupDone: true, foldFinished: false,
   tapAlive: true, engine: { path: '/Applications/ZCode Engine.app' },
   update: { available: false, originalVersion: null, engineVersion: null },
   release: { available: false, latest: null, installed: null },
@@ -35,7 +35,7 @@ test('quiet: idle glyph, no banner, empty lists, settings pass through, no headl
   assert.equal('summary' in m, false);                                // the headline is gone from the model
   assert.equal(m.usageLabel, null);                                   // usage unknown: hidden
   assert.deepEqual(m.settings, {
-    keepAwake: true, autoAllow: true, askRisky: false, preset: 'auto', notify: true, claudeCode: true, relayEnabled: true, launchAtLogin: false, foldFinished: false,
+    keepAwake: true, autoAllow: true, askRisky: false, preset: 'auto', notify: true, claudeCode: true, webClient: false, relayEnabled: true, launchAtLogin: false, foldFinished: false,
     addressId: 'lan',
     addresses: [{ id: 'lan', label: 'Wi-Fi / local network (192.168.1.5)' }, { id: 'local', label: 'This Mac only' }],
     version: '1.0.1', selfUpdate: 'idle',
@@ -359,6 +359,10 @@ test('settings switches: the auto-allow default is on, the risky gate and notify
   assert.equal(buildPanelModel(input({ claudeCode: false }), NOW).settings.claudeCode, false);
   assert.equal(buildPanelModel(input({}), NOW).settings.claudeCode, true);           // the default is on: junk never flips it
   assert.equal(buildPanelModel(input({ claudeCode: 'yes' }), NOW).settings.claudeCode, true);
+  assert.equal(buildPanelModel(input({ webClient: true }), NOW).settings.webClient, true);
+  assert.equal(buildPanelModel(input({ webClient: false }), NOW).settings.webClient, false);
+  assert.equal(buildPanelModel(input({}), NOW).settings.webClient, false);           // the browser client defaults off
+  assert.equal(buildPanelModel(input({ webClient: 'yes' }), NOW).settings.webClient, false);
 });
 
 test('the settings payload carries the derived Permissions preset', () => {

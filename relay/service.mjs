@@ -29,6 +29,60 @@ const readJson = (f, d) => { try { return JSON.parse(fs.readFileSync(f, 'utf8'))
 const writeJson = (f, v) => { fs.writeFileSync(f, JSON.stringify(v, null, 1), { mode: 0o600 }); fs.chmodSync(f, 0o600); };
 const sha = s => crypto.createHash('sha256').update(s).digest('hex');
 
+
+// The static web client (opt-in with webDir): GET/HEAD only, nothing leaves the folder, no
+// directory listings, extension-less routes fall back to index.html, and the security headers are
+// on every served byte. Every failure is a plain 404; nothing here throws.
+const WEB_TYPES = {
+  '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8', '.png': 'image/png', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon', '.woff': 'font/woff', '.woff2': 'font/woff2', '.ttf': 'font/ttf',
+  '.map': 'application/json', '.txt': 'text/plain; charset=utf-8', '.webmanifest': 'application/manifest+json',
+};
+const WEB_MAX_BYTES = 20 * 1024 * 1024;
+const WEB_HEADERS = {
+  'x-content-type-options': 'nosniff',
+  'referrer-policy': 'no-referrer',
+  'x-frame-options': 'DENY',
+  'content-security-policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws: wss:; media-src 'self' blob:; frame-ancestors 'none'",
+};
+
+function serveWeb(webDir, req, res) {
+  const notFound = () => { try { res.writeHead(404).end(); } catch { /* the client is gone */ } };
+  try {
+    // The raw path is checked as it arrived: a URL parser would resolve `..` away and hide the traversal.
+    let pathname;
+    try { pathname = decodeURIComponent(String(req.url ?? '/').split('?')[0].split('#')[0]); } catch { return notFound(); }
+    if (pathname.includes('..') || pathname.includes('\0') || pathname.includes('\\')) return notFound();
+    let file = path.resolve(webDir, `.${pathname}`);
+    if (file !== webDir && !file.startsWith(webDir + path.sep)) return notFound();
+    let st = null;
+    try { st = fs.statSync(file); } catch { /* checked below */ }
+    if (st?.isDirectory()) {
+      file = path.join(file, 'index.html');
+      try { st = fs.statSync(file); } catch { st = null; }
+    }
+    if ((!st || !st.isFile()) && !path.extname(pathname)) {           // single-page routing
+      file = path.join(webDir, 'index.html');
+      try { st = fs.statSync(file); } catch { return notFound(); }
+    }
+    if (!st || !st.isFile() || st.size > WEB_MAX_BYTES) return notFound();
+    const type = WEB_TYPES[path.extname(file).toLowerCase()] || 'application/octet-stream';
+    const webPath = `/${path.relative(webDir, file).split(path.sep).join('/')}`;
+    res.writeHead(200, {
+      'content-type': type,
+      ...WEB_HEADERS,
+      'cache-control': webPath.startsWith('/_expo/') && !type.startsWith('text/html') ? 'public, max-age=3600' : 'no-cache',
+    });
+    if (req.method === 'HEAD') { res.end(); return; }
+    const stream = fs.createReadStream(file);
+    stream.on('error', () => { try { res.destroy(); } catch { /* already gone */ } });
+    stream.pipe(res);
+  } catch {
+    notFound();
+  }
+}
+
 // outcome/by -> the lifecycle event that models the decision (the audit's own first-wins rule does
 // the actual refusing; this only names the move for the model).
 const lifecycleEvent = (outcome, by) => {
@@ -173,6 +227,13 @@ export function createRelay(opts = {}) {
   const pusher = opts.push === false ? null : (opts.push || createPusher({ log: (...a) => log.log(...a), now: Date.now }));
   const pushDelayMs = Number.isFinite(opts.pushDelayMs) ? Math.max(0, opts.pushDelayMs) : 1500;
   const rpcTimeoutMs = Number.isFinite(opts.rpcTimeoutMs) ? Math.max(1, opts.rpcTimeoutMs) : RPC_TIMEOUT_MS;   // tests shorten it; the deadline stays one for everything
+  // The static web client's folder: opt-in, absolute, and it must exist as a directory. Absent or
+  // wrong -> null and the relay serves nothing but /health and /pair, as before.
+  const webDir = (() => {
+    const d = opts.webDir;
+    if (typeof d !== 'string' || !path.isAbsolute(d)) return null;
+    try { return fs.statSync(d).isDirectory() ? d : null; } catch { return null; }
+  })();
   const log = opts.log ?? console;
   // The audit instance is the host's; every call it receives from the relay replays through the
   // lifecycle statechart, and a move the model calls illegal (a second decided, say) is logged once
@@ -645,6 +706,7 @@ export function createRelay(opts = {}) {
         });
         return;
       }
+      if ((req.method === 'GET' || req.method === 'HEAD') && webDir) return serveWeb(webDir, req, res);
       res.writeHead(404).end();
     };
     // One shared WebSocketServer and one shared /pair handler behind every listener: each server hands

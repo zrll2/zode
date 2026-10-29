@@ -172,6 +172,16 @@ async function start() {
       return ips.length ? ips : ['127.0.0.1'];
     };
     const publicUrlsFor = (list = addresses) => hostIps(list).map(ip => `ws://${ip}:${settings.port}`);
+    // The browser client's folder: packaged builds ship it in Resources/web, dev builds look beside
+    // the bundle. Off, or the folder missing: the relay serves nothing but its own routes.
+    const webRoot = () => {
+      if (settings.webClient !== true) return null;
+      const candidates = [process.resourcesPath ? path.join(process.resourcesPath, 'web') : null, import.meta.dirname ? path.join(import.meta.dirname, 'web') : null];
+      for (const dir of candidates) {
+        try { if (dir && fs.statSync(dir).isDirectory()) return dir; } catch { /* try the next */ }
+      }
+      return null;
+    };
     const save = () => { settings = saveSettings(SETTINGS_FILE, settings); };
     const audit = createAuditLog({ file: AUDIT_FILE });   // the approval audit log, shared by the relay and every answer below
     const relayLog = {
@@ -278,7 +288,7 @@ async function start() {
       if (settings.relayEnabled) {
         const ips = hostIps();                                    // concrete addresses only, never 0.0.0.0
         relayHostSig = ips.join(',');
-        relay = createRelay({ hosts: ips, port: settings.port, publicUrls: publicUrlsFor(), autoAllow: () => settings.autoAllow === true, askRisky: () => settings.askRisky === true, log: relayLog, stt: sttAdapter, audit });
+        relay = createRelay({ hosts: ips, port: settings.port, publicUrls: publicUrlsFor(), autoAllow: () => settings.autoAllow === true, askRisky: () => settings.askRisky === true, webDir: webRoot(), log: relayLog, stt: sttAdapter, audit });
         relay.on('status', refresh);
         try { await relay.start(); } catch (err) { error = startError(err); }
       }
@@ -900,6 +910,7 @@ async function start() {
       toggleKeepAwake: () => { settings.keepAwake = !(settings.keepAwake === true); save(); updatePowerBlocker(); refresh(); },
       toggleNotify: () => { settings.notify = !(settings.notify === true); save(); refresh(); },
       toggleClaudeCode: () => { settings.claudeCode = !(settings.claudeCode === true); save(); syncClaudeCode(); refresh(); },
+      toggleWebClient: async () => { settings.webClient = !(settings.webClient === true); save(); await applyRelay(); },   // the relay restarts so the folder set applies
       setup: () => showSetupWindow(),
       openEngine: async () => {
         const p = enginePath || await findEngine().catch(() => null);
@@ -1004,6 +1015,7 @@ async function start() {
           askRisky: settings.askRisky === true,
           notify: settings.notify !== false,
           claudeCode: settings.claudeCode !== false,
+          webClient: settings.webClient === true,
           setupDone: settings.setupDone,
           foldFinished: settings.foldFinished === true,
           tapAlive: tapUp === true,
@@ -1164,6 +1176,7 @@ async function start() {
         else if (p.key === 'launchAtLogin') actions.toggleLaunchAtLogin();
         else if (p.key === 'notify') actions.toggleNotify();
         else if (p.key === 'claudeCode') actions.toggleClaudeCode();
+        else if (p.key === 'webClient') actions.toggleWebClient().catch(() => {});
       } else if (name === 'removePhone') {
         if (typeof p.id === 'string' && p.id) actions.revoke(p.id);       // the popover's two-click remove
       } else if (name === 'foldFinished') {

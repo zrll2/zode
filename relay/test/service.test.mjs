@@ -2,6 +2,7 @@
 // Port 0 is not supported (the pairing payload embeds the port), so each test asks the OS for a free port first.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import http from 'node:http';
 import net from 'node:net';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -1340,5 +1341,77 @@ test('audit: a request that vanishes from the wrapper without an answer is cance
     const lines = auditLines(auditFile).filter(l => l.includes(':van-1"'));
     assert.equal(lines.length, 2);                                      // one asked, exactly one decided
     assert.equal(lines.filter(l => JSON.parse(l).outcome === 'cancelled').length, 1);
+  } finally { await relay.stop(); await up.close(); }
+});
+
+// ---- the static web client (opts.webDir) -------------------------------------------------------
+
+// Raw node:http: the path reaches the relay byte for byte — fetch would normalize `..` and `\`
+// client-side, and these tests exist to prove the RELAY rejects them.
+const get = (port, file, method = 'GET') => new Promise((resolve, reject) => {
+  const req = http.request({ host: '127.0.0.1', port, path: file, method }, (res) => {
+    let text = '';
+    res.setEncoding('utf8');
+    res.on('data', d => { text += d; });
+    res.on('end', () => resolve({ status: res.statusCode, headers: { get: k => res.headers[String(k).toLowerCase()] ?? null }, text }));
+  });
+  req.on('error', reject);
+  req.end();
+});
+
+test('web client: index at / and on extension-less routes, files by type, 404s, headers, no CORS', async () => {
+  const web = fs.mkdtempSync(path.join('/tmp', 'zode-web-'));
+  fs.mkdirSync(path.join(web, '_expo'), { recursive: true });
+  fs.writeFileSync(path.join(web, 'index.html'), '<html>zode</html>');
+  fs.writeFileSync(path.join(web, 'app.js'), 'console.log(1)');
+  fs.writeFileSync(path.join(web, '_expo', 'chunk-abc.js'), 'export 1');
+  const port = await freePort();
+  const up = fakeUpstream();
+  const relay = createRelay({ port, stateDir: path.join(up.home, 'state'), tapDir: up.tapDir, log: silent, webDir: web });
+  await relay.start();
+  try {
+    const home = await get(port, '/');
+    assert.equal(home.status, 200);
+    assert.equal(home.text, '<html>zode</html>');
+    assert.equal(home.headers.get('content-type'), 'text/html; charset=utf-8');
+    assert.equal(home.headers.get('x-content-type-options'), 'nosniff');
+    assert.equal(home.headers.get('referrer-policy'), 'no-referrer');
+    assert.equal(home.headers.get('x-frame-options'), 'DENY');
+    assert.match(home.headers.get('content-security-policy'), /frame-ancestors 'none'/);
+    assert.equal(home.headers.get('cache-control'), 'no-cache');
+    assert.equal(home.headers.get('access-control-allow-origin'), null);
+    const spa = await get(port, '/conversations');                     // no extension: the app handles it
+    assert.equal(spa.status, 200);
+    assert.equal(spa.text, '<html>zode</html>');
+    const js = await get(port, '/app.js');
+    assert.equal(js.status, 200);
+    assert.equal(js.headers.get('content-type'), 'text/javascript; charset=utf-8');
+    const hashed = await get(port, '/_expo/chunk-abc.js');
+    assert.equal(hashed.status, 200);
+    assert.equal(hashed.headers.get('cache-control'), 'public, max-age=3600');
+    assert.equal((await get(port, '/missing.png')).status, 404);        // extension: no fallback
+    for (const bad of ['/../x', '/%2e%2e/x', '/a/..%2f..%2fx', '/x%00.html', '/a%5C..%5Cx']) {
+      assert.equal((await get(port, bad)).status, 404, bad);            // %5C = the backslash case
+    }
+    const head = await get(port, '/', 'HEAD');
+    assert.equal(head.status, 200);
+    assert.equal(head.text, '');
+    assert.equal(head.headers.get('content-type'), 'text/html; charset=utf-8');
+    // /health and /pair are untouched
+    assert.equal((await get(port, '/health')).status, 200);
+    const pairRes = await fetch(`http://127.0.0.1:${port}/pair`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: 'nope', name: 'x' }) });
+    assert.equal(pairRes.status, 403);
+  } finally { await relay.stop(); await up.close(); fs.rmSync(web, { recursive: true, force: true }); }
+});
+
+test('web client: without webDir everything but /health and /pair stays 404', async () => {
+  const port = await freePort();
+  const up = fakeUpstream();
+  const relay = createRelay({ port, stateDir: path.join(up.home, 'state'), tapDir: up.tapDir, log: silent });
+  await relay.start();
+  try {
+    assert.equal((await get(port, '/')).status, 404);
+    assert.equal((await get(port, '/app.js')).status, 404);
+    assert.equal((await get(port, '/health')).status, 200);
   } finally { await relay.stop(); await up.close(); }
 });
