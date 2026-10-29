@@ -11,7 +11,7 @@
         "title": "Zode for ZCode",
         "subtitle": "Phone companion for ZCode",
         "promoText": "Check on ZCode from the couch. See what needs your answer, read what it wrote, and reply from your phone. Works with ZCode on your Mac.",
-        "description": "Zode is the phone companion for ZCode, the AI coding app. Start a task in ZCode on your Mac, then keep an eye on it from the couch, the kitchen, or the train.\n\nWHAT YOU CAN DO\n• See what needs you. Sessions waiting for your answer sit at the top. Running ones come next. Finished ones are grouped by day.\n• Read the work like a document. Text, code and tables look clean, and tool steps fold into one quiet line.\n• Reply, stop, or start. Answer a question, stop a task that went the wrong way, or start a new one in the folder you choose.\n• Catch up after a bad connection. Zode shows what you missed.\n• Light and dark look that follow your phone.\n\nHOW IT CONNECTS\nZode is a companion, so ZCode keeps running on your Mac. A small free relay on the same Mac passes messages between your phone and ZCode:\nPhone  ->  Zode relay on your Mac  ->  ZCode\nInstall the relay with one command, then pair once by scanning a QR code. At home Zode uses your Wi-Fi. Away from home, use a private network such as Tailscale.\n\nBEFORE YOU START\nYou need ZCode on a Mac and the free, open-source Zode relay: https://github.com/zrll2/zode\n\nNO MAC NEARBY?\nTap \"Try the demo\" on the first screen to explore everything with sample data. No account or network needed.\n\nPRIVATE BY DESIGN\nNo account, no ads, no analytics, no tracking. Your messages go between your phone and your Mac only. We have no servers.\n\nZode is an independent project. It is not affiliated with, endorsed by, or sponsored by Z.AI or Anthropic. ZCode and Claude Code are trademarks of their respective owners.",
+        "description": "Zode is the phone companion for ZCode, the AI coding app. Start a task in ZCode on your Mac, then keep an eye on it from the couch, the kitchen, or the train.\n\nWHAT YOU CAN DO\n• See what needs you. Sessions waiting for your answer sit at the top. Running ones come next. Finished ones are grouped by day.\n• Read the work like a document. Text, code and tables look clean, and tool steps fold into one quiet line.\n• Reply, stop, or start. Answer a question, stop a task that went the wrong way, or start a new one in the folder you choose.\n• Catch up after a bad connection. Zode shows what you missed.\n• Get a notification when ZCode needs you or finishes, and answer from your Apple Watch or by voice.\n• Light and dark look that follow your phone.\n\nHOW IT CONNECTS\nZode is a companion, so ZCode keeps running on your Mac. A small free relay on the same Mac passes messages between your phone and ZCode:\nPhone  ->  Zode relay on your Mac  ->  ZCode\nInstall the relay with one command, then pair once by scanning a QR code. At home Zode uses your Wi-Fi. Away from home, use a private network such as Tailscale.\n\nBEFORE YOU START\nYou need ZCode on a Mac and the free, open-source Zode relay: https://github.com/zrll2/zode\n\nNO MAC NEARBY?\nTap \"Try the demo\" on the first screen to explore everything with sample data. No account or network needed.\n\nPRIVATE BY DESIGN\nNo account, no ads, no analytics, no tracking. Your conversations go between your phone and your Mac only. Optional notifications pass through a small Zode push service that sees only encrypted alerts.\n\nZode is an independent project. It is not affiliated with, endorsed by, or sponsored by Z.AI or Anthropic. ZCode and Claude Code are trademarks of their respective owners.",
         "keywords": [
           "coding",
           "agent",
@@ -25,7 +25,7 @@
           "monitor",
           "terminal"
         ],
-        "releaseNotes": "First release. Pair your Mac, follow your sessions, read the agent's work, and start new sessions. Includes a demo mode with sample data.",
+        "releaseNotes": "First release. Pair your Mac, follow your sessions, read the agent's work, answer approvals and questions, start new sessions, and get notified on your phone and Apple Watch. Includes a demo mode with sample data.",
         "privacyPolicyUrl": "https://github.com/zrll2/zode/blob/main/docs/PRIVACY.md",
         "supportUrl": "https://github.com/zrll2/zode/issues",
         "marketingUrl": "https://github.com/zrll2/zode"
@@ -34,7 +34,7 @@
         "title": "Zode for ZCode",
         "subtitle": "ZCode 的手机伴侣",
         "promoText": "躺在沙发上也能看 ZCode：哪些会话在等你回复一目了然，随时读它写的内容，直接用手机回复。需配合你 Mac 上的 ZCode 使用。",
-        "description": "Zode 是 ZCode（AI 编程应用）的手机伴侣。在 Mac 上的 ZCode 里开始任务，然后在沙发上、厨房里或地铁上随时查看进度。\n\n你可以做什么\n• 一眼看出谁在等你。等你回复的会话排在最上面，运行中的其次，已完成的按日期分组。\n• 像读文档一样读工作成果。文字、代码和表格清爽易读，工具步骤折叠成安静的一行。\n• 回复、停止、新建。回答问题，叫停跑偏的任务，或在你选的文件夹里新建任务。\n• 断线后自动补上错过的内容。\n• 浅色和深色外观，跟随手机设置。\n\n连接方式\nZode 是伴侣应用，ZCode 仍然运行在你的 Mac 上。同一台 Mac 上的一个免费小型中继，在手机和 ZCode 之间传递消息：\n手机  ->  你 Mac 上的 Zode 中继  ->  ZCode\n一条命令安装中继，扫一次二维码配对。在家用 Wi-Fi；外出时请使用 Tailscale 等私有网络。\n\n开始之前\n你需要一台装有 ZCode 的 Mac，以及免费开源的 Zode 中继：https://github.com/zrll2/zode\n\n手边没有 Mac？\n在首屏点 \"Try the demo\"，用示例数据体验全部功能，无需账号和网络。\n\n隐私优先\n无账号、无广告、无统计、无追踪。消息只在你的手机和你的 Mac 之间传递。我们没有服务器。\n\nZode 是独立项目，与 Z.AI、Anthropic 无隶属、认可或赞助关系。ZCode 和 Claude Code 是各自所有者的商标。",
+        "description": "Zode 是 ZCode（AI 编程应用）的手机伴侣。在 Mac 上的 ZCode 里开始任务，然后在沙发上、厨房里或地铁上随时查看进度。\n\n你可以做什么\n• 一眼看出谁在等你。等你回复的会话排在最上面，运行中的其次，已完成的按日期分组。\n• 像读文档一样读工作成果。文字、代码和表格清爽易读，工具步骤折叠成安静的一行。\n• 回复、停止、新建。回答问题，叫停跑偏的任务，或在你选的文件夹里新建任务。\n• 断线后自动补上错过的内容。\n• ZCode 需要你或完成时收到通知，并可在 Apple Watch 上或用语音回复。\n• 浅色和深色外观，跟随手机设置。\n\n连接方式\nZode 是伴侣应用，ZCode 仍然运行在你的 Mac 上。同一台 Mac 上的一个免费小型中继，在手机和 ZCode 之间传递消息：\n手机  ->  你 Mac 上的 Zode 中继  ->  ZCode\n一条命令安装中继，扫一次二维码配对。在家用 Wi-Fi；外出时请使用 Tailscale 等私有网络。\n\n开始之前\n你需要一台装有 ZCode 的 Mac，以及免费开源的 Zode 中继：https://github.com/zrll2/zode\n\n手边没有 Mac？\n在首屏点 \"Try the demo\"，用示例数据体验全部功能，无需账号和网络。\n\n隐私优先\n无账号、无广告、无统计、无追踪。对话只在你的手机和你的 Mac 之间传递。可选的通知会经过 Zode 的小型推送服务，该服务只能看到加密后的提醒。\n\nZode 是独立项目，与 Z.AI、Anthropic 无隶属、认可或赞助关系。ZCode 和 Claude Code 是各自所有者的商标。",
         "keywords": [
           "编程",
           "代理",
@@ -47,7 +47,7 @@
           "监控",
           "终端"
         ],
-        "releaseNotes": "首个版本。配对你的 Mac，跟进会话，阅读 Agent 的工作，新建会话。内置示例数据的演示模式。",
+        "releaseNotes": "首个版本。配对你的 Mac，跟进会话，阅读 Agent 的工作，处理审批和提问，新建会话，并在手机和 Apple Watch 上收到通知。内置示例数据的演示模式。",
         "privacyPolicyUrl": "https://github.com/zrll2/zode/blob/main/docs/PRIVACY.md",
         "supportUrl": "https://github.com/zrll2/zode/issues",
         "marketingUrl": "https://github.com/zrll2/zode"
@@ -59,7 +59,7 @@
       "email": "replace-me@example.com",
       "phone": "REPLACE_ME",
       "demoRequired": false,
-      "notes": "Zode is a companion app for a Mac. It talks to an open-source relay that runs on the user's own Mac, so a reviewer normally cannot reach one. To review the full app without a Mac: open the app and tap \"Try the demo\" on the first screen. Demo mode uses built-in sample data and needs no account, login or network. Sessions list, chat, markdown, tool rows, the composer and light/dark appearance can all be reviewed there. The camera is used only to scan the pairing QR code that the relay prints on the user's Mac. The local network permission is requested when the app connects to the user's Mac (an IP address or .local name). The app does not use ATS exceptions beyond NSAllowsLocalNetworking, collects no data, and has no accounts or in-app purchases."
+      "notes": "Zode is a companion app for a Mac. It talks to an open-source relay that runs on the user's own Mac, so a reviewer normally cannot reach one. To review the full app without a Mac: open the app and tap \"Try the demo\" on the first screen. Demo mode uses built-in sample data and needs no account, login or network. Sessions list, chat, markdown, tool rows, the composer and light/dark appearance can all be reviewed there. The camera is used only to scan the pairing QR code that the relay prints on the user's Mac. The local network permission is requested when the app connects to the user's Mac (an IP address or .local name). The app does not use ATS exceptions beyond NSAllowsLocalNetworking, has no accounts or in-app purchases. Optional push notifications use Apple's push service through a small stateless relay (source: https://github.com/zrll2/zode/tree/main/push-service); alerts are end-to-end encrypted and no personal data is collected. The microphone is used only for optional voice replies, sent to the user's own Mac."
     }
   }
 }
