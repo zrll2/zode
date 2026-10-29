@@ -1,5 +1,9 @@
 # Zode for Mac
 
+## 1.5.6
+- **Answer ZCode's questions from the panel.** A question card now shows what ZCode asks and its options; pick one and send it without opening ZCode.
+- Repeated or conflicting answers to one approval are noticed and logged, and never change the first decision.
+
 ## 1.5.5
 - **One Permissions choice.** The two switches for automatic approval are now a single control in Settings: Ask, Auto (the default) or Careful (automatic, except risky commands).
 - **Approvals history.** Settings lists the last 30 permission requests: what was asked, whether it was allowed or denied, and whether Zode, your phone or the Mac answered. If ZCode cannot be reached, a request is never allowed by accident.
