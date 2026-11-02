@@ -90,3 +90,16 @@ test('mac/main.mjs wires the web client folder and the Browser access toggle', (
   assert.match(src, /toggleWebClient: async \(\) => \{ settings\.webClient = !\(settings\.webClient === true\); save\(\); await applyRelay\(\); \}/);   // the same restart path an address change uses
   assert.match(src, /p\.key === ["']webClient["']/);                          // the toggle key is dispatched
 });
+
+test('mac/main.mjs wires the event inbox, off by default, stopped on quit', () => {
+  const src = fs.readFileSync(path.join(root, 'main.mjs'), 'utf8');
+  assert.match(src, /eventRules: settings\.eventRules === true/);             // the panel gets the flag
+  assert.match(src, /toggleEventRules: \(\) => \{ settings\.eventRules = !\(settings\.eventRules === true\); save\(\); applyEventRules\(\); refresh\(\); \}/);
+  assert.match(src, /p\.key === ["']eventRules["']/);                          // the toggle key is dispatched
+  assert.match(src, /const want = settings\.eventRules === true;/);            // only on when the setting says so
+  assert.match(src, /startEventInbox\(\{ dir: EVENTS_DIR, onEvent: e => eventDispatcher\.handle\(e\) \}\)/);
+  assert.match(src, /loadRules: \(\) => \{ try \{ return fs\.readFileSync\(TRIGGERS_FILE/);   // rules come from ~/.zode/triggers.json
+  assert.ok(src.includes("catch { return '[]'; }"));                          // a missing rules file is no rules
+  assert.match(src, /sendToSession\(\{ sock, sessionId, content \}\)/);        // the same send path the retry action uses
+  assert.match(src, /eventInbox\?\.stop\(\)/);                                 // stopped with the app
+});
