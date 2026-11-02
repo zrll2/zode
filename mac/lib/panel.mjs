@@ -239,6 +239,7 @@ export function buildPanelModel(input, now = Date.now()) {
         webClient: s.webClient === true,                      // the browser client defaults off
         rememberAnswers: s.rememberAnswers === true,          // remembered answers default off
         rememberCount: Number.isInteger(s.rememberCount) && s.rememberCount > 0 ? Math.floor(s.rememberCount) : 0,
+        eventRules: s.eventRules === true,                    // event rules default off
         relayEnabled: s.running === true,
         launchAtLogin: s.launchAtLogin === true,
         foldFinished: s.foldFinished === true,
@@ -262,7 +263,7 @@ export function buildPanelModel(input, now = Date.now()) {
       usage: null, usageLabel: null, flow: null,
       connected: false,
       settings: {
-        keepAwake: false, autoAllow: true, askRisky: false, preset: 'auto', notify: true, claudeCode: true, webClient: false, rememberAnswers: false, rememberCount: 0, relayEnabled: false, launchAtLogin: false, foldFinished: false,
+        keepAwake: false, autoAllow: true, askRisky: false, preset: 'auto', notify: true, claudeCode: true, webClient: false, rememberAnswers: false, rememberCount: 0, eventRules: false, relayEnabled: false, launchAtLogin: false, foldFinished: false,
         addressId: '', addresses: [], version: '', selfUpdate: 'idle',
       },
       voice: voiceOf(null),

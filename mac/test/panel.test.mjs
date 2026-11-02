@@ -35,7 +35,7 @@ test('quiet: idle glyph, no banner, empty lists, settings pass through, no headl
   assert.equal('summary' in m, false);                                // the headline is gone from the model
   assert.equal(m.usageLabel, null);                                   // usage unknown: hidden
   assert.deepEqual(m.settings, {
-    keepAwake: true, autoAllow: true, askRisky: false, preset: 'auto', notify: true, claudeCode: true, webClient: false, rememberAnswers: false, rememberCount: 0, relayEnabled: true, launchAtLogin: false, foldFinished: false,
+    keepAwake: true, autoAllow: true, askRisky: false, preset: 'auto', notify: true, claudeCode: true, webClient: false, rememberAnswers: false, rememberCount: 0, eventRules: false, relayEnabled: true, launchAtLogin: false, foldFinished: false,
     addressId: 'lan',
     addresses: [{ id: 'lan', label: 'Wi-Fi / local network (192.168.1.5)' }, { id: 'local', label: 'This Mac only' }],
     version: '1.0.1', selfUpdate: 'idle',
@@ -375,6 +375,10 @@ test('settings switches: the auto-allow default is on, the risky gate and notify
   assert.equal(buildPanelModel(input({ webClient: false }), NOW).settings.webClient, false);
   assert.equal(buildPanelModel(input({}), NOW).settings.webClient, false);           // the browser client defaults off
   assert.equal(buildPanelModel(input({ webClient: 'yes' }), NOW).settings.webClient, false);
+  assert.equal(buildPanelModel(input({ eventRules: true }), NOW).settings.eventRules, true);
+  assert.equal(buildPanelModel(input({ eventRules: false }), NOW).settings.eventRules, false);
+  assert.equal(buildPanelModel(input({}), NOW).settings.eventRules, false);          // event rules default off
+  assert.equal(buildPanelModel(input({ eventRules: 'yes' }), NOW).settings.eventRules, false);
 });
 
 test('the settings payload carries the derived Permissions preset', () => {

@@ -424,6 +424,7 @@ function renderSettings(s, voice) {
   setSwitch('swWebClient', s.webClient === true);
   setSwitch('swRemember', s.rememberAnswers === true);
   $('forgetAnswers').hidden = !(s.rememberCount > 0);
+  setSwitch('swEventRules', s.eventRules === true);
   setSwitch('swAwake', s.keepAwake === true);
   setSwitch('swLogin', s.launchAtLogin === true);
   renderAddressSeg(s.addresses ?? [], s.addressId);
@@ -508,6 +509,7 @@ $('swRelay').addEventListener('click', () => flip('swRelay', 'relayEnabled'));
 $('swWebClient').addEventListener('click', () => flip('swWebClient', 'webClient'));
 $('swRemember').addEventListener('click', () => flip('swRemember', 'rememberAnswers'));
 $('forgetAnswers').addEventListener('click', () => { $('forgetAnswers').hidden = true; act('forgetAnswers'); });
+$('swEventRules').addEventListener('click', () => flip('swEventRules', 'eventRules'));
 $('swNotify').addEventListener('click', () => flip('swNotify', 'notify'));
 $('swClaudeCode').addEventListener('click', () => flip('swClaudeCode', 'claudeCode'));
 $('swLogin').addEventListener('click', () => flip('swLogin', 'launchAtLogin'));

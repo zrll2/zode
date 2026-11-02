@@ -25,6 +25,9 @@ import { lineStates, notificationsFor } from './lib/notify.mjs';
 import { createEventFeed } from './lib/events.mjs';
 import { installSkill, removeSkill } from './lib/claudeCode.mjs';
 import { startBannerInbox } from './lib/bannerInbox.mjs';
+import { startEventInbox } from './lib/eventInbox.mjs';
+import { createDispatcher } from './lib/dispatch.mjs';
+import { createLimiter } from './lib/triggers.mjs';
 import { createSelfUpdater } from './lib/selfupdate.mjs';
 import { createStt } from './lib/stt.mjs';
 import { createDecisions } from './lib/decisions.mjs';
@@ -36,6 +39,8 @@ const SETTINGS_FILE = path.join(HOME, '.zode', 'settings.json');
 const AUDIT_FILE = path.join(HOME, '.zode', 'approvals.jsonl');
 const DECISIONS_FILE = path.join(HOME, '.zode', 'decisions.json');
 const LOG_FILE = path.join(HOME, '.zode', 'mac-app.log');
+const TRIGGERS_FILE = path.join(HOME, '.zode', 'triggers.json');
+const EVENTS_DIR = path.join(HOME, '.zode', 'events');
 const DOWNLOAD_URL = 'https://zcode.z.ai';
 const UPDATE_LOG = path.join(HOME, '.zode', 'update.log');
 const REBUILD_LOG = path.join(HOME, '.zode', 'rebuild.log');
@@ -154,6 +159,33 @@ async function start() {
         bannerInbox = startBannerInbox({ dir: path.join(HOME, '.zode', 'banners'), onBanner: showDropBanner });
         appendLog('zode: banner inbox watching ~/.zode/banners');
       } catch (err) { appendLog(`zode: banner inbox: ${err?.stack || err}`); }
+    };
+    // Event rules: tools drop one JSON event into ~/.zode/events and the matching rule wakes a
+    // ZCode session (see mac/lib/triggers.mjs + dispatch.mjs). Off by default; toggling stops the
+    // watcher. The dispatcher finds the session the same way the panel rows do: from the last
+    // listing's lines, which carry each session's socket.
+    const eventDispatcher = createDispatcher({
+      loadRules: () => { try { return fs.readFileSync(TRIGGERS_FILE, 'utf8'); } catch { return '[]'; } },
+      limiter: createLimiter(),
+      findSession: sessionId => {
+        const line = (Array.isArray(work?.lines) ? work.lines : []).find(l => l?.id === sessionId);
+        return line && typeof line.sock === 'string' && line.sock ? { sock: line.sock, sessionId } : null;
+      },
+      send: ({ sock, sessionId, content }) => sendToSession({ sock, sessionId, content }),
+      log: m => appendLog(`zode: ${m}`),
+    });
+    let eventInbox = null;
+    const applyEventRules = () => {
+      try {
+        const want = settings.eventRules === true;
+        if (want && !eventInbox) {
+          eventInbox = startEventInbox({ dir: EVENTS_DIR, onEvent: e => { eventDispatcher.handle(e).catch(() => {}); } });
+          appendLog('zode: event inbox watching ~/.zode/events');
+        } else if (!want && eventInbox) {
+          eventInbox.stop();
+          eventInbox = null;
+        }
+      } catch (err) { appendLog(`zode: event inbox: ${err?.stack || err}`); }
     };
     let workActive = 0;                                // the active count last logged, so a change logs once
     let workRefresh = null;
@@ -946,6 +978,7 @@ async function start() {
       toggleWebClient: async () => { settings.webClient = !(settings.webClient === true); save(); await applyRelay(); },   // the relay restarts so the folder set applies
       toggleRememberAnswers: () => { settings.rememberAnswers = !(settings.rememberAnswers === true); save(); refresh(); },
       forgetAnswers: () => { try { decisions.forget(); } catch (err) { appendLog(`zode: forget answers: ${err?.stack || err}`); } pushPanel(); },
+      toggleEventRules: () => { settings.eventRules = !(settings.eventRules === true); save(); applyEventRules(); refresh(); },
       setup: () => showSetupWindow(),
       openEngine: async () => {
         const p = enginePath || await findEngine().catch(() => null);
@@ -1053,6 +1086,7 @@ async function start() {
           webClient: settings.webClient === true,
           rememberAnswers: settings.rememberAnswers === true,
           rememberCount: decisions.size(),
+          eventRules: settings.eventRules === true,
           setupDone: settings.setupDone,
           foldFinished: settings.foldFinished === true,
           tapAlive: tapUp === true,
@@ -1215,6 +1249,7 @@ async function start() {
         else if (p.key === 'claudeCode') actions.toggleClaudeCode();
         else if (p.key === 'webClient') actions.toggleWebClient().catch(() => {});
         else if (p.key === 'rememberAnswers') actions.toggleRememberAnswers();
+        else if (p.key === 'eventRules') actions.toggleEventRules();
       } else if (name === 'forgetAnswers') {
         actions.forgetAnswers();
       } else if (name === 'removePhone') {
@@ -1462,7 +1497,7 @@ async function start() {
 
     app.setLoginItemSettings({ openAtLogin: settings.launchAtLogin });
     app.on('second-instance', () => showPairWindow());              // a second launch asks this one to show the pairing window
-    app.on('before-quit', () => { quitting = true; relay?.stop().catch(() => {}); bannerInbox?.stop(); });
+    app.on('before-quit', () => { quitting = true; relay?.stop().catch(() => {}); bannerInbox?.stop(); try { eventInbox?.stop(); } catch { /* already stopped */ } });
 
     // The old integrated copy holds the phone connection for itself (same settings, same paired
     // phones, same port). Ask before the relay starts, so the user never sees a port error first.
@@ -1488,6 +1523,7 @@ async function start() {
     await applyRelay();
     syncClaudeCode();                                 // refresh (or remove) the Claude Code skill for this launch
     startBannerInboxOnce();
+    applyEventRules();
 
     checkUpdate();
     setInterval(checkUpdate, UPDATE_CHECK_MS);
