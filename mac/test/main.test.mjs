@@ -83,6 +83,21 @@ test('mac/main.mjs wires the question answer action end to end', () => {
   assert.match(src, /respondQuestion\(\{ sock: listed\.sock, requestId: listed\.requestId, result \}\)/);   // and sent by tap/respond
 });
 
+test('mac/main.mjs wires remembered answers: store, remember on answer, auto-answer poll, panel actions', () => {
+  const src = fs.readFileSync(path.join(root, 'main.mjs'), 'utf8');
+  assert.match(src, /decisions\.json/);                                     // the store lives in ~/.zode
+  assert.match(src, /createDecisions\(\{ file: DECISIONS_FILE \}\)/);
+  assert.match(src, /rememberPick\(questions, picks\)/);                    // a panel answer is remembered
+  assert.match(src, /settings\.rememberAnswers === true/);                  // auto-answer only with the setting on
+  assert.match(src, /decisions\.lookup\(q\)/);
+  assert.match(src, /auto-answered question: /);
+  assert.match(src, /toggleRememberAnswers: \(\) => \{ settings\.rememberAnswers = !\(settings\.rememberAnswers === true\); save\(\); refresh\(\); \}/);
+  assert.match(src, /p\.key === ["']rememberAnswers["']/);                  // the toggle key is dispatched
+  assert.match(src, /name === ["']forgetAnswers["']/);                      // and the forget action
+  assert.match(src, /rememberAnswers: settings\.rememberAnswers === true/); // the panel model carries the flag
+  assert.match(src, /rememberCount: decisions\.size\(\)/);                  // and the stored count
+});
+
 test('mac/main.mjs wires the web client folder and the Browser access toggle', () => {
   const src = fs.readFileSync(path.join(root, 'main.mjs'), 'utf8');
   assert.match(src, /webDir: webRoot\(\)/);                                  // the relay gets the folder

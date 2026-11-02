@@ -35,7 +35,7 @@ test('quiet: idle glyph, no banner, empty lists, settings pass through, no headl
   assert.equal('summary' in m, false);                                // the headline is gone from the model
   assert.equal(m.usageLabel, null);                                   // usage unknown: hidden
   assert.deepEqual(m.settings, {
-    keepAwake: true, autoAllow: true, askRisky: false, preset: 'auto', notify: true, claudeCode: true, webClient: false, relayEnabled: true, launchAtLogin: false, foldFinished: false,
+    keepAwake: true, autoAllow: true, askRisky: false, preset: 'auto', notify: true, claudeCode: true, webClient: false, rememberAnswers: false, rememberCount: 0, relayEnabled: true, launchAtLogin: false, foldFinished: false,
     addressId: 'lan',
     addresses: [{ id: 'lan', label: 'Wi-Fi / local network (192.168.1.5)' }, { id: 'local', label: 'This Mac only' }],
     version: '1.0.1', selfUpdate: 'idle',
@@ -112,6 +112,18 @@ test('busy: every need kind, red before amber, working rows with run start, fini
   ]);
   assert.deepEqual(m.earlier, [{ id: 'e1', project: 'web', doing: '', t: '2 h ago', took: '' }]);
   assert.equal(m.glyph, 'needs');
+});
+
+test('rememberAnswers and the stored count ride the settings payload; junk counts stay 0', () => {
+  const on = buildPanelModel(input({ rememberAnswers: true, rememberCount: 4 }), NOW);
+  assert.equal(on.settings.rememberAnswers, true);
+  assert.equal(on.settings.rememberCount, 4);
+  const off = buildPanelModel(input({ rememberAnswers: false, rememberCount: 0 }), NOW);
+  assert.equal(off.settings.rememberAnswers, false);
+  assert.equal(off.settings.rememberCount, 0);
+  const junk = buildPanelModel(input({ rememberAnswers: 'yes', rememberCount: 'many' }), NOW);
+  assert.equal(junk.settings.rememberAnswers, false);
+  assert.equal(junk.settings.rememberCount, 0);
 });
 
 test('a waiting session with only a question — or nothing pending — still asks to be answered in ZCode', () => {

@@ -27,12 +27,14 @@ import { installSkill, removeSkill } from './lib/claudeCode.mjs';
 import { startBannerInbox } from './lib/bannerInbox.mjs';
 import { createSelfUpdater } from './lib/selfupdate.mjs';
 import { createStt } from './lib/stt.mjs';
+import { createDecisions } from './lib/decisions.mjs';
 import { buildPrompt } from './lib/vocab.mjs';
 import { voiceHint } from './lib/voiceHint.mjs';
 
 const HOME = os.homedir();
 const SETTINGS_FILE = path.join(HOME, '.zode', 'settings.json');
 const AUDIT_FILE = path.join(HOME, '.zode', 'approvals.jsonl');
+const DECISIONS_FILE = path.join(HOME, '.zode', 'decisions.json');
 const LOG_FILE = path.join(HOME, '.zode', 'mac-app.log');
 const DOWNLOAD_URL = 'https://zcode.z.ai';
 const UPDATE_LOG = path.join(HOME, '.zode', 'update.log');
@@ -184,6 +186,18 @@ async function start() {
     };
     const save = () => { settings = saveSettings(SETTINGS_FILE, settings); };
     const audit = createAuditLog({ file: AUDIT_FILE });   // the approval audit log, shared by the relay and every answer below
+    const decisions = createDecisions({ file: DECISIONS_FILE });   // remembered answers to ZCode questions
+    // Remember one pick for a single-option question: the shape both answer paths arrive with
+    // (panel picks and a relay answer alike), validated against the question that was actually asked.
+    const rememberPick = (questions, picks) => {
+      try {
+        if (!Array.isArray(questions) || questions.length !== 1) return;
+        const q = questions[0];
+        if (!Array.isArray(q.options) || !q.options.length) return;
+        const pick = picks && typeof picks === 'object' && !Array.isArray(picks) ? picks[q.question] : undefined;
+        if (typeof pick === 'string' || Array.isArray(pick)) decisions.remember(q, pick);
+      } catch (err) { appendLog(`zode: remember answer: ${err?.stack || err}`); }
+    };
     const relayLog = {
       log: (...a) => appendLog('relay: ' + a.join(' ')),
       warn: (...a) => appendLog('relay warn: ' + a.join(' ')),
@@ -452,6 +466,24 @@ async function start() {
             for (const request of autoAllowList) {
               const list = pending[request.sessionId];
               if (list) pending[request.sessionId] = list.filter(r => r.requestId !== request.requestId);
+            }
+          }
+          // Remembered answers: with the setting on, a pending request of exactly one question block
+          // that was answered before — with all its labels still offered — is answered here and never
+          // becomes a need card. Multi-question and free-text requests always wait for a human.
+          if (settings.rememberAnswers === true) {
+            for (const request of Object.values(pending).flat()) {
+              if (request.kind !== 'question' || !Array.isArray(request.questions) || request.questions.length !== 1) continue;
+              const q = request.questions[0];
+              if (!Array.isArray(q.options) || !q.options.length) continue;
+              const answer = decisions.lookup(q);
+              if (answer == null) continue;
+              try {
+                await respondQuestion({ sock: request.sock, requestId: request.requestId, result: answerResult(request.questions, { [q.question]: answer }) });
+                appendLog(`zode: auto-answered question: ${(q.header || q.question).slice(0, 40)}`);
+                const list = pending[request.sessionId];
+                if (list) pending[request.sessionId] = list.filter(r => r.requestId !== request.requestId);
+              } catch { /* stayed pending; the user still sees the card */ }
             }
           }
           const usage = await readUsageCached();
@@ -902,6 +934,7 @@ async function start() {
         const questions = Array.isArray(listed.questions) ? listed.questions : [];
         if (!questions.length) return;
         const result = answerResult(questions, picks && typeof picks === 'object' && !Array.isArray(picks) ? picks : {});
+        rememberPick(questions, picks);
         respondQuestion({ sock: listed.sock, requestId: listed.requestId, result }).catch(() => {});
         refresh();
       },
@@ -911,6 +944,8 @@ async function start() {
       toggleNotify: () => { settings.notify = !(settings.notify === true); save(); refresh(); },
       toggleClaudeCode: () => { settings.claudeCode = !(settings.claudeCode === true); save(); syncClaudeCode(); refresh(); },
       toggleWebClient: async () => { settings.webClient = !(settings.webClient === true); save(); await applyRelay(); },   // the relay restarts so the folder set applies
+      toggleRememberAnswers: () => { settings.rememberAnswers = !(settings.rememberAnswers === true); save(); refresh(); },
+      forgetAnswers: () => { try { decisions.forget(); } catch (err) { appendLog(`zode: forget answers: ${err?.stack || err}`); } pushPanel(); },
       setup: () => showSetupWindow(),
       openEngine: async () => {
         const p = enginePath || await findEngine().catch(() => null);
@@ -1016,6 +1051,8 @@ async function start() {
           notify: settings.notify !== false,
           claudeCode: settings.claudeCode !== false,
           webClient: settings.webClient === true,
+          rememberAnswers: settings.rememberAnswers === true,
+          rememberCount: decisions.size(),
           setupDone: settings.setupDone,
           foldFinished: settings.foldFinished === true,
           tapAlive: tapUp === true,
@@ -1177,6 +1214,9 @@ async function start() {
         else if (p.key === 'notify') actions.toggleNotify();
         else if (p.key === 'claudeCode') actions.toggleClaudeCode();
         else if (p.key === 'webClient') actions.toggleWebClient().catch(() => {});
+        else if (p.key === 'rememberAnswers') actions.toggleRememberAnswers();
+      } else if (name === 'forgetAnswers') {
+        actions.forgetAnswers();
       } else if (name === 'removePhone') {
         if (typeof p.id === 'string' && p.id) actions.revoke(p.id);       // the popover's two-click remove
       } else if (name === 'foldFinished') {

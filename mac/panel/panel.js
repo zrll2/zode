@@ -422,6 +422,8 @@ function renderSettings(s, voice) {
   setSwitch('swClaudeCode', s.claudeCode !== false);
   setSwitch('swRelay', s.relayEnabled === true);
   setSwitch('swWebClient', s.webClient === true);
+  setSwitch('swRemember', s.rememberAnswers === true);
+  $('forgetAnswers').hidden = !(s.rememberCount > 0);
   setSwitch('swAwake', s.keepAwake === true);
   setSwitch('swLogin', s.launchAtLogin === true);
   renderAddressSeg(s.addresses ?? [], s.addressId);
@@ -504,6 +506,8 @@ document.addEventListener('click', e => {
 $('swAwake').addEventListener('click', () => flip('swAwake', 'keepAwake'));
 $('swRelay').addEventListener('click', () => flip('swRelay', 'relayEnabled'));
 $('swWebClient').addEventListener('click', () => flip('swWebClient', 'webClient'));
+$('swRemember').addEventListener('click', () => flip('swRemember', 'rememberAnswers'));
+$('forgetAnswers').addEventListener('click', () => { $('forgetAnswers').hidden = true; act('forgetAnswers'); });
 $('swNotify').addEventListener('click', () => flip('swNotify', 'notify'));
 $('swClaudeCode').addEventListener('click', () => flip('swClaudeCode', 'claudeCode'));
 $('swLogin').addEventListener('click', () => flip('swLogin', 'launchAtLogin'));
