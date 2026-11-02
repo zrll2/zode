@@ -126,6 +126,8 @@ const ALLOWED = new Set(['session/list', 'session/create', 'session/resume', 'se
   'push/register', 'push/unregister']);
 const SAFE_MODES = new Set(['plan', 'edit', 'guarded']);       // never yolo / build from a phone
 const DECISIONS = new Set(['allow', 'deny']);   // a phone may only allow or deny; never modify, escalate or add rules
+const MAX_QUESTION_ANSWERS = 4;                 // one entry per pending question, and never more than 4 questions
+const MAX_QUESTION_LABELS = 8;                  // a multiSelect answer picks at most this many options
 // session/rename and session/send (with attachments) are the phone methods that become agent commands: the relay builds
 // the whole v4/command envelope itself, so a phone can never send v4/command or inject fields into it.
 const COMMANDS = {
@@ -199,6 +201,37 @@ export function checkPolicy(method, params) {
   return null;
 }
 
+// A phone's answer to a pending question: `{ answers: { [question text]: label | label[] } }` or
+// `{ decision: 'decline' }`. Returns null when the frame matches the pending questions, else a short
+// reason for the -32011 error. Free text is not accepted; a question without options takes nothing.
+function checkQuestionAnswers(params, m) {
+  if (m.decision !== undefined) return m.decision === 'decline' ? null : 'decision must be decline';
+  const answers = m.answers;
+  if (!answers || typeof answers !== 'object' || Array.isArray(answers)) return 'answers must be an object of question text to label';
+  const questions = (Array.isArray(params?.questions) ? params.questions : []).filter(q => q && typeof q.question === 'string');
+  const keys = Object.keys(answers);
+  if (!keys.length || keys.length !== questions.length || keys.length > MAX_QUESTION_ANSWERS) return 'answers must have exactly one entry per question';
+  for (const key of keys) {
+    const q = questions.find(x => x.question === key);
+    if (!q) return 'every answer must name a pending question';
+    const labels = new Set((Array.isArray(q.options) ? q.options : []).map(o => (o && typeof o.label === 'string' ? o.label : '')).filter(Boolean));
+    if (!labels.size) return 'that question takes no option answer';
+    const notAnOption = l => typeof l !== 'string' || !labels.has(l);
+    const v = answers[key];
+    if (Array.isArray(v)) {
+      if (q.multiSelect !== true) return 'that question takes one answer, not a list';
+      if (!v.length || v.length > MAX_QUESTION_LABELS || new Set(v).size !== v.length || v.some(notAnOption)) return 'answers must be distinct options of the question';
+    } else if (notAnOption(v)) return 'the answer must be one of the question options';
+  }
+  return null;
+}
+
+// The tap/respond result for accepted answers, the exact shape ZCode records; the keys and labels
+// are already validated against the pending questions.
+function questionResult(answers) {
+  return { action: 'accept', content: { answers: { ...answers } } };
+}
+
 // Bumped when the phone can rely on new relay methods. 2 = rename, usage/stats, attachments, send with attachments.
 // The speech engine rides alongside without a bump: the phone reads features.stt from the ready frame.
 export const PROTOCOL = 2;
@@ -221,6 +254,9 @@ export function createRelay(opts = {}) {
   const pendingSyncMs = Number.isFinite(opts.pendingSyncMs) ? Math.max(0, opts.pendingSyncMs) : 10_000;   // how often the pending list is reconciled with the wrapper's truth; 0 disables
   const autoAllow = typeof opts.autoAllow === 'function' ? opts.autoAllow : () => false;   // the host decides; the relay on its own never answers
   const askRisky = typeof opts.askRisky === 'function' ? opts.askRisky : () => false;      // true: risky commands wait for a human even with auto-allow on
+  // Called after a phone's answer to a question went upstream: { params, answers }. The host uses it
+  // to remember the answer; a throwing hook never breaks the response.
+  const onQuestionAnswered = typeof opts.onQuestionAnswered === 'function' ? opts.onQuestionAnswered : null;
   // Push: a pusher (relay/push.mjs) forwarded to the host, `push: false` to switch pushes off, or
   // the default real pusher on the global fetch. pushDelayMs is how long a pending request waits
   // before its push goes out — a desktop answer or an auto-allow inside that window cancels it.
@@ -727,7 +763,7 @@ export function createRelay(opts = {}) {
           if (!d) { fail(ip); return ws.close(4003, 'bad token'); }
           c.authed = true; c.device = d; clients.add(c); clearTimeout(authTimer); emitStatus();
           log.log(`device ${d.id} connected from ${ip}`);
-          send(c, { type: 'ready', protocol: PROTOCOL, device: d.id, servers: [...upstream.values()].map(u => ({ pid: u.meta.pid, cwd: u.meta.cwd })), seq, pending: [...pendingReq.values()], features: { stt: !!stt, push: true }, addresses: [...publicUrls] });
+          send(c, { type: 'ready', protocol: PROTOCOL, device: d.id, servers: [...upstream.values()].map(u => ({ pid: u.meta.pid, cwd: u.meta.cwd })), seq, pending: [...pendingReq.values()], features: { stt: !!stt, push: true, answers: true }, addresses: [...publicUrls] });
           if (typeof m.since === 'number') for (const e of replay) if (e.seq > m.since) send(c, { type: 'event', ...e });
           return;
         }
@@ -737,6 +773,18 @@ export function createRelay(opts = {}) {
           const key = `${m.server}:${m.id}`; const u = upstream.get(m.server); const p = pendingReq.get(key);
           const fail = message => send(c, { type: 'rpc-result', id: m.rid, error: { code: -32011, message } });
           if (!u || !p) return fail('request is not pending (already answered?)');
+          if (p.method === 'interaction/requestUserInput') {          // a question: answers or a decline, never allow/deny
+            const bad = checkQuestionAnswers(p.params, m);
+            if (bad) return fail(bad);
+            const decline = m.decision === 'decline';
+            const result = decline ? { action: 'decline' } : questionResult(m.answers);
+            const id = clientRoute(c, m.rid, m.server, 'tap/respond');
+            log.log(`answer ${c.device.id} -> ${m.server}`);
+            try { u.sock.write(JSON.stringify({ id, method: 'tap/respond', params: { id: m.id, result } }) + '\n'); }
+            catch { clearTimeout(routes.get(id)?.timer); routes.delete(id); fail('the server just went away'); return; }   // a dead socket must not throw out of the message handler
+            try { onQuestionAnswered?.({ params: p.params, answers: decline ? null : m.answers }); } catch { /* the hook never blocks an answer */ }
+            return;
+          }
           if (p.method !== 'interaction/requestPermission') return fail('only permission requests can be answered from mobile');
           if (!DECISIONS.has(m.decision)) return fail('decision must be allow or deny');
           const id = clientRoute(c, m.rid, m.server, 'tap/respond');

@@ -20,7 +20,7 @@ import { setupSteps, parseBuildProgress, friendlySetupError, kitDir } from './li
 import { isRunning, quitApp, tapAlive, findOriginal, findEngine, findOldIntegrated, runBuild, migrateEngine, enginePathFor } from './lib/system.mjs';
 import { readVersion, compareVersions, checkRelease, engineRebuildScript } from './lib/updates.mjs';
 import { readFlow } from './lib/tokenflow.mjs';
-import { listSessions, listPending, readTapServers, summarize, withLiveStatus, readUsage, respondPermission, respondQuestion, answerResult, pendingToAutoAllow, AUTO_ALLOW_RESULT, stopSession, sendToSession, nudgeSession, RETRY_MESSAGE } from './lib/sessions.mjs';
+import { listSessions, listPending, readTapServers, summarize, withLiveStatus, readUsage, respondPermission, respondQuestion, answerResult, questionsOf, pendingToAutoAllow, AUTO_ALLOW_RESULT, stopSession, sendToSession, nudgeSession, RETRY_MESSAGE } from './lib/sessions.mjs';
 import { lineStates, notificationsFor } from './lib/notify.mjs';
 import { createEventFeed } from './lib/events.mjs';
 import { installSkill, removeSkill } from './lib/claudeCode.mjs';
@@ -302,7 +302,7 @@ async function start() {
       if (settings.relayEnabled) {
         const ips = hostIps();                                    // concrete addresses only, never 0.0.0.0
         relayHostSig = ips.join(',');
-        relay = createRelay({ hosts: ips, port: settings.port, publicUrls: publicUrlsFor(), autoAllow: () => settings.autoAllow === true, askRisky: () => settings.askRisky === true, webDir: webRoot(), log: relayLog, stt: sttAdapter, audit });
+        relay = createRelay({ hosts: ips, port: settings.port, publicUrls: publicUrlsFor(), autoAllow: () => settings.autoAllow === true, askRisky: () => settings.askRisky === true, webDir: webRoot(), log: relayLog, onQuestionAnswered: ({ params, answers }) => rememberPick(questionsOf(params), answers), stt: sttAdapter, audit });   // a phone's answer is remembered like a panel one
         relay.on('status', refresh);
         try { await relay.start(); } catch (err) { error = startError(err); }
       }

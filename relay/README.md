@@ -43,7 +43,7 @@ Every option is optional: `hosts` `['127.0.0.1']` (one http listener per host on
 |---|---|
 | phone to relay (HTTP) | `POST /pair {code, name}` returns `{id, token, pushKey}` — every listener answers it |
 | phone to relay | `{type:"auth", token, since?}` must be the first frame (10 s limit) |
-| relay to phone | `{type:"ready", device, servers:[{pid,cwd}], seq, pending, features:{stt, push}, addresses:[<every ws url>]}` — a paired phone learns all addresses on each connection |
+| relay to phone | `{type:"ready", device, servers:[{pid,cwd}], seq, pending, features:{stt, push, answers}, addresses:[<every ws url>]}` — a paired phone learns all addresses on each connection |
 | phone to relay | `{type:"rpc", id, method, params, server?}` |
 | relay to phone | `{type:"rpc-result", id, result|error}` |
 | relay to phone | `{type:"event", seq, server, msg}` (ring buffer of 5000; reconnect with `since`) |
@@ -105,8 +105,12 @@ stt = {
 - `stt/status` takes `{}` and answers `{ available, language, model: 'small', modelState: 'missing'|'partial'|'ready' }`.
 - The transcript and the audio are never logged; each attempt logs one line with the device id, bytes, language, ms and ok.
 
+## Answering questions (`features.answers`)
+
+With `ready.features.answers` true, a paired phone may answer a pending ZCode question (`interaction/requestUserInput`) with a second `respond` shape: `{type:"respond", rid, server, id, answers:{[question text]: label | label[]}}` — one entry per pending question, at most 4; a list only on a `multiSelect` question, at most 8 distinct labels, every label one of that question's options — or `{type:"respond", rid, server, id, decision:"decline"}`. The relay validates against the pending questions and answers `-32011` otherwise; free text is not accepted. It forwards the shape ZCode records (`{action:"accept", content:{answers}}` / `{action:"decline"}`) as `tap/respond`, logs `answer <device> -> <server>` (never the answer text), and writes no audit row — an answer is not an approval. The host's `onQuestionAnswered({params, answers})` hook runs after a successful write.
+
 ## Known limits
 
-- Permission **questions** (`interaction/requestUserInput`) go to the desktop window only. Permission requests (`guarded` mode) can be answered from the phone with `{type:"respond"}`; a typed question cannot.
+- Permission requests (`guarded` mode) are answered from the phone with `{type:"respond", decision:"allow"|"deny"}` as before; the question shape above works only for `interaction/requestUserInput`.
 - Turn end: watch for a `session/event` whose `payload.response` is set. Telemetry events are filtered out.
 - The relay needs a live ZCode server (a running Engine or Zode copy with a project open). Without one, `rpc` returns `no ZCode server`.

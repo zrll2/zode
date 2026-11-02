@@ -614,7 +614,7 @@ test('push: pairing hands out a key, the phone registers, and notifyDevices foll
     assert.equal('push' in devs[0], false);
     const conn = await authed(`ws://127.0.0.1:${port}`, paired.token);
     ws = conn.ws;
-    assert.deepEqual(conn.ready.features, { stt: false, push: true });
+    assert.deepEqual(conn.ready.features, { stt: false, push: true, answers: true });
 
     ws.send(JSON.stringify({ type: 'rpc', id: 200, method: 'push/register', params: { pushId: 'P'.repeat(30), secret: 'S'.repeat(30), env: 'production' } }));
     assert.deepEqual((await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === 200)).result, { ok: true });
@@ -1056,7 +1056,7 @@ test('stt/transcribe: the relay answers itself, the host gets the exact bytes, n
     await waitFor(() => relay.status().upstreams === 1);
     const { id: device, token } = await (await pair(port, relay.createPairing().code, 'phone')).json();
     const { ws, ready } = await authed(`ws://127.0.0.1:${port}`, token);
-    assert.deepEqual(ready.features, { stt: true, push: true });
+    assert.deepEqual(ready.features, { stt: true, push: true, answers: true });
 
     const raw = Buffer.from('watch aac bytes \u00e9\u4e2d', 'utf8');
     const long = 'x'.repeat(100);
@@ -1120,7 +1120,7 @@ test('stt without a host engine: features.stt is false and both methods answer v
   try {
     const { token } = await (await pair(port, relay.createPairing().code, 'phone')).json();
     const { ws, ready } = await authed(`ws://127.0.0.1:${port}`, token);
-    assert.deepEqual(ready.features, { stt: false, push: true });
+    assert.deepEqual(ready.features, { stt: false, push: true, answers: true });
     ws.send(JSON.stringify({ type: 'rpc', id: 71, method: 'stt/transcribe', params: { audio: goodAudio, format: 'wav' } }));
     const res = await nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === 71);
     assert.equal(res.error.code, -32020);
@@ -1314,6 +1314,170 @@ test('audit: a dead socket records unavailable and the request stays pending, ne
     ws.send(JSON.stringify({ type: 'pending' }));
     assert.ok((await resP).pending.some(p => p.id === 'dead-1'));       // still pending, waiting for a human
     assert.deepEqual(up.received.filter(m => m.method === 'tap/respond'), []);   // and never allowed
+  } finally {
+    net.connect = realConnect;
+    try { ws?.close(); } catch {}
+    await relay.stop();
+    await up.close();
+  }
+});
+
+// ---- question answers from the phone (features.answers) --------------------------------------
+
+const QUESTION_PARAMS = { sessionId: 'sess_q', questions: [
+  { header: 'DB', question: 'Which database?', multiSelect: false, options: [{ label: 'Postgres' }, { label: 'SQLite' }, { label: 'MySQL' }] },
+  { header: 'Extras', question: 'Which extras?', multiSelect: true, options: [{ label: 'Docker' }, { label: 'Redis' }] },
+] };
+
+test('question answers: a phone answers single, multi and decline; the hook fires once; no audit row', async () => {
+  const port = await freePort();
+  const up = fakeUpstream();
+  const lines = [];
+  const log = { log: (...a) => lines.push(a.join(' ')), warn() {}, error() {} };
+  const audit = createAuditLog({ file: path.join(up.home, 'approvals.jsonl') });
+  const hooks = [];
+  const relay = createRelay({ port, stateDir: path.join(up.home, 'state'), tapDir: up.tapDir, log, audit, onQuestionAnswered: (x) => hooks.push(x) });
+  await relay.start();
+  let ws = null;
+  try {
+    await waitFor(() => relay.status().upstreams === 1);
+    const { token } = await (await pair(port, relay.createPairing().code, 'phone')).json();
+    const { ws: phone, ready } = await authed(`ws://127.0.0.1:${port}`, token);
+    ws = phone;
+    assert.equal(ready.features.answers, true);                          // the flag rides the ready frame
+
+    up.send({ id: 'q-1', method: 'interaction/requestUserInput', params: QUESTION_PARAMS });
+    const askPending = async () => {
+      const resP = nextMessage(ws, (m) => m.type === 'pending');
+      ws.send(JSON.stringify({ type: 'pending' }));
+      return (await resP).pending;
+    };
+    const until = async (fn, ms = 3000) => { const end = Date.now() + ms; while (Date.now() < end) { const v = await fn(); if (v) return v; await sleep(25); } throw new Error('condition not met in time'); };
+    await until(async () => (await askPending()).some(p => p.id === 'q-1'));
+
+    ws.send(JSON.stringify({ type: 'respond', rid: 1, server: process.pid, id: 'q-1',
+      answers: { 'Which database?': 'Postgres', 'Which extras?': ['Docker', 'Redis'] } }));
+    await waitFor(() => up.received.some(m => m.method === 'tap/respond' && m.params.id === 'q-1'));
+    assert.deepEqual(up.received.find(m => m.method === 'tap/respond' && m.params.id === 'q-1').params, {
+      id: 'q-1', result: { action: 'accept', content: { answers: { 'Which database?': 'Postgres', 'Which extras?': ['Docker', 'Redis'] } } },
+    });
+    assert.equal(hooks.length, 1);                                       // the host learns what was answered
+    assert.deepEqual({ params: hooks[0].params, answers: hooks[0].answers }, { params: QUESTION_PARAMS, answers: { 'Which database?': 'Postgres', 'Which extras?': ['Docker', 'Redis'] } });
+    assert.ok(lines.some(l => /^answer \S+ -> \d+$/.test(l)));           // logged once, never the answer text
+    assert.ok(!lines.some(l => l.includes('Postgres')));
+    assert.ok(!audit.recent(20).some(r => r.id.endsWith(':q-1')));       // an answer is not an approval
+
+    up.respond(up.received.find(m => m.method === 'tap/respond' && m.params.id === 'q-1'), { ok: true });
+    up.send({ method: 'tap/resolved', params: { id: 'q-1' } });          // ZCode's own resolution wins the id
+    await sleep(100);
+    const second = nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === 2 && m.error);
+    ws.send(JSON.stringify({ type: 'respond', rid: 2, server: process.pid, id: 'q-1', answers: { 'Which database?': 'Postgres', 'Which extras?': ['Docker'] } }));
+    assert.match((await second).error.message, /not pending/);           // the same answer twice fails as answered
+
+    // decline, and a new question: the accept/decline shapes go out verbatim
+    up.send({ id: 'q-2', method: 'interaction/requestUserInput', params: { sessionId: 'sess_q', questions: QUESTION_PARAMS.questions.slice(0, 1) } });
+    await sleep(100);
+    ws.send(JSON.stringify({ type: 'respond', rid: 3, server: process.pid, id: 'q-2', decision: 'decline' }));
+    await waitFor(() => up.received.some(m => m.method === 'tap/respond' && m.params.id === 'q-2'));
+    assert.deepEqual(up.received.find(m => m.method === 'tap/respond' && m.params.id === 'q-2').params.result, { action: 'decline' });
+    assert.equal(hooks.length, 2);
+    assert.equal(hooks[1].answers, null);                                // a decline carries nothing to remember
+  } finally {
+    try { ws?.close(); } catch {}
+    await relay.stop();
+    await up.close();
+  }
+});
+
+test('question answers are validated: bad shapes get -32011 and nothing is forwarded', async () => {
+  const port = await freePort();
+  const up = fakeUpstream();
+  const relay = createRelay({ port, stateDir: path.join(up.home, 'state'), tapDir: up.tapDir, log: silent });
+  await relay.start();
+  let ws = null;
+  try {
+    await waitFor(() => relay.status().upstreams === 1);
+    const { token } = await (await pair(port, relay.createPairing().code, 'phone')).json();
+    ({ ws } = await authed(`ws://127.0.0.1:${port}`, token));
+    const five = { sessionId: 'sess_q', questions: [1, 2, 3, 4, 5].map(i => ({ question: `Q${i}`, options: [{ label: 'a' }] })) };
+    const cases = [
+      // [pending params, respond frame, expected message fragment]
+      [QUESTION_PARAMS, { answers: { 'Which storage?': 'Postgres', 'Which extras?': ['Docker'] } }, 'pending question'],
+      [QUESTION_PARAMS, { answers: { 'Which database?': 'Mongo', 'Which extras?': ['Docker'] } }, 'options'],
+      [QUESTION_PARAMS, { answers: { 'Which database?': ['Postgres'], 'Which extras?': ['Docker'] } }, 'not a list'],
+      [QUESTION_PARAMS, { answers: { 'Which database?': 'Postgres', 'Which extras?': [] } }, 'distinct options'],
+      [QUESTION_PARAMS, { answers: { 'Which database?': 'Postgres' } }, 'one entry per question'],
+      [five, { answers: { Q1: 'a', Q2: 'a', Q3: 'a', Q4: 'a', Q5: 'a' } }, 'one entry per question'],
+      [{ sessionId: 'sess_q', questions: [{ question: 'Free?', multiSelect: false, options: [] }] }, { answers: { 'Free?': 'x' } }, 'no option answer'],
+      [QUESTION_PARAMS, { decision: 'allow' }, 'decline'],
+      [{ sessionId: 'sess_p', toolName: 'Bash' }, { answers: { 'Which database?': 'Postgres' } }, 'decision must be allow or deny'],   // a permission request still needs a decision
+    ];
+    let rid = 10;
+    for (const [params, frame, message] of cases) {
+      const id = `bad-${rid}`;
+      up.send({ id, method: params.questions ? 'interaction/requestUserInput' : 'interaction/requestPermission', params });
+      await sleep(60);                                                    // the request lands in pendingReq
+      const resP = nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === rid && m.error);
+      ws.send(JSON.stringify({ type: 'respond', rid, server: process.pid, id, ...frame }));
+      const res = await resP;
+      assert.equal(res.error.code, -32011, message);
+      assert.match(res.error.message, new RegExp(message));
+      rid += 1;
+    }
+    await sleep(100);
+    assert.deepEqual(up.received.filter(m => m.method === 'tap/respond'), []);   // nothing reached ZCode
+  } finally {
+    try { ws?.close(); } catch {}
+    await relay.stop();
+    await up.close();
+  }
+});
+
+test('question answers: a throwing onQuestionAnswered hook is swallowed and the answer still goes out', async () => {
+  const port = await freePort();
+  const up = fakeUpstream();
+  const relay = createRelay({ port, stateDir: path.join(up.home, 'state'), tapDir: up.tapDir, log: silent, onQuestionAnswered: () => { throw new Error('hook exploded'); } });
+  await relay.start();
+  let ws = null;
+  try {
+    await waitFor(() => relay.status().upstreams === 1);
+    const { token } = await (await pair(port, relay.createPairing().code, 'phone')).json();
+    ({ ws } = await authed(`ws://127.0.0.1:${port}`, token));
+    up.send({ id: 'q-9', method: 'interaction/requestUserInput', params: { sessionId: 'sess_q', questions: QUESTION_PARAMS.questions.slice(0, 1) } });
+    await sleep(60);
+    ws.send(JSON.stringify({ type: 'respond', rid: 1, server: process.pid, id: 'q-9', answers: { 'Which database?': 'SQLite' } }));
+    await waitFor(() => up.received.some(m => m.method === 'tap/respond' && m.params.id === 'q-9'));
+    assert.deepEqual(up.received.find(m => m.method === 'tap/respond' && m.params.id === 'q-9').params.result,
+      { action: 'accept', content: { answers: { 'Which database?': 'SQLite' } } });
+  } finally {
+    try { ws?.close(); } catch {}
+    await relay.stop();
+    await up.close();
+  }
+});
+
+test('question answers: a dead upstream socket fails the phone once and the question stays pending', async () => {
+  const port = await freePort();
+  const up = fakeUpstream();
+  const realConnect = net.connect.bind(net);
+  let relaySock = null;
+  net.connect = (...args) => { const s = realConnect(...args); relaySock = s; return s; };
+  const relay = createRelay({ port, stateDir: path.join(up.home, 'state'), tapDir: up.tapDir, log: silent });
+  await relay.start();
+  let ws = null;
+  try {
+    await waitFor(() => relay.status().upstreams === 1 && relaySock);
+    relaySock.write = () => { throw new Error('socket gone'); };
+    const { token } = await (await pair(port, relay.createPairing().code, 'phone')).json();
+    ({ ws } = await authed(`ws://127.0.0.1:${port}`, token));
+    up.send({ id: 'q-dead', method: 'interaction/requestUserInput', params: { sessionId: 'sess_q', questions: QUESTION_PARAMS.questions.slice(0, 1) } });
+    await sleep(100);
+    const resP = nextMessage(ws, (m) => m.type === 'rpc-result' && m.id === 1 && m.error);
+    ws.send(JSON.stringify({ type: 'respond', rid: 1, server: process.pid, id: 'q-dead', answers: { 'Which database?': 'Postgres' } }));
+    assert.match((await resP).error.message, /went away/);
+    const pendP = nextMessage(ws, (m) => m.type === 'pending');
+    ws.send(JSON.stringify({ type: 'pending' }));
+    assert.ok((await pendP).pending.some(p => p.id === 'q-dead'));       // still there for the desktop
   } finally {
     net.connect = realConnect;
     try { ws?.close(); } catch {}

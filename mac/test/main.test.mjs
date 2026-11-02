@@ -96,6 +96,7 @@ test('mac/main.mjs wires remembered answers: store, remember on answer, auto-ans
   assert.match(src, /name === ["']forgetAnswers["']/);                      // and the forget action
   assert.match(src, /rememberAnswers: settings\.rememberAnswers === true/); // the panel model carries the flag
   assert.match(src, /rememberCount: decisions\.size\(\)/);                  // and the stored count
+  assert.match(src, /onQuestionAnswered: \(\{ params, answers \}\) => rememberPick\(questionsOf\(params\), answers\)/);   // a relayed phone answer reaches the same memory
 });
 
 test('mac/main.mjs wires the web client folder and the Browser access toggle', () => {
