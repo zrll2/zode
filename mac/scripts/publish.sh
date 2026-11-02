@@ -13,4 +13,11 @@ FILES=("$DMG" "release/Zode-$VERSION-arm64-mac.zip" "release/Zode-$VERSION-arm64
 for f in "${FILES[@]}"; do [ -f "$f" ] || { echo "Missing $f" >&2; exit 1; }; done
 if gh release view "$TAG" >/dev/null 2>&1; then echo "Release $TAG exists; uploading files."; gh release upload "$TAG" "${FILES[@]}" --clobber
 else gh release create "$TAG" "${FILES[@]}" --draft --title "Zode for Mac $VERSION" --notes-file ../docs/RELEASE_NOTES.md; fi
-if [ "${1:-}" = "--publish" ]; then gh release edit "$TAG" --draft=false; echo "Published $TAG"; else echo "Draft created. Review it on GitHub, then: bash scripts/publish.sh --publish"; fi
+if [ "${1:-}" = "--publish" ]; then
+  gh release edit "$TAG" --draft=false
+  echo "Published $TAG"
+  VERIFY_ARGS=(--no-hash)
+  [ "${ZODE_VERIFY_HASH:-0}" = "1" ] && VERIFY_ARGS=()
+  echo "Verifying the release is live..."
+  node scripts/verify-release.mjs "${VERIFY_ARGS[@]}"
+else echo "Draft created. Review it on GitHub, then: bash scripts/publish.sh --publish"; fi
