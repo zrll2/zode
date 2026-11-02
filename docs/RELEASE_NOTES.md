@@ -1,5 +1,11 @@
 # Zode for Mac
 
+## 1.5.8
+- **Remember answers.** Turn it on in Settings and Zode answers a ZCode question you already answered the same way once, so you are not asked twice. "Forget answers" empties it.
+- **Answer questions from your phone.** The Mac now accepts answers to ZCode's questions from a paired phone (needs the newest phone build).
+- **Event rules.** Tools on this Mac can wake a ZCode conversation by dropping a small file into `~/.zode/events/`; rules in `~/.zode/triggers.json` decide which conversation gets which prompt. Off by default.
+- Publishing a release now checks that the release, the update feed, the download and the privacy page are really live.
+
 ## 1.5.7
 - **Browser access.** Turn it on in Settings and open this Mac's address in any browser (on Linux, say) over Tailscale or your network. Pair with a one-time code and use your ZCode conversations, approvals and prompts from there.
 
