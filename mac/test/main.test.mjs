@@ -97,7 +97,7 @@ test('mac/main.mjs wires the event inbox, off by default, stopped on quit', () =
   assert.match(src, /toggleEventRules: \(\) => \{ settings\.eventRules = !\(settings\.eventRules === true\); save\(\); applyEventRules\(\); refresh\(\); \}/);
   assert.match(src, /p\.key === ["']eventRules["']/);                          // the toggle key is dispatched
   assert.match(src, /const want = settings\.eventRules === true;/);            // only on when the setting says so
-  assert.match(src, /startEventInbox\(\{ dir: EVENTS_DIR, onEvent: e => eventDispatcher\.handle\(e\) \}\)/);
+  assert.match(src, /startEventInbox\(\{ dir: EVENTS_DIR, onEvent: e => \{ eventDispatcher\.handle\(e\)\.catch\(\(\) => \{\}\); \} \}\)/);
   assert.match(src, /loadRules: \(\) => \{ try \{ return fs\.readFileSync\(TRIGGERS_FILE/);   // rules come from ~/.zode/triggers.json
   assert.ok(src.includes("catch { return '[]'; }"));                          // a missing rules file is no rules
   assert.match(src, /sendToSession\(\{ sock, sessionId, content \}\)/);        // the same send path the retry action uses
