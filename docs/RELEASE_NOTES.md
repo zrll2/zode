@@ -1,5 +1,8 @@
 # Zode for Mac
 
+## 1.5.9
+- **Restart now works.** Clicking "Restart" after an update could hang and leave the old version running. Fixed.
+
 ## 1.5.8
 - **Remember answers.** Turn it on in Settings and Zode answers a ZCode question you already answered the same way once, so you are not asked twice. "Forget answers" empties it.
 - **Answer questions from your phone.** The Mac now accepts answers to ZCode's questions from a paired phone (needs the newest phone build).
