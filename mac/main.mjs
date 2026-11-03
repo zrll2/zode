@@ -314,6 +314,7 @@ async function start() {
     const selfUpdater = createSelfUpdater({
       updater: autoUpdater,
       isPackaged: app.isPackaged === true,
+      onBeforeInstall: () => { quitting = true; },
       log: {
         info: m => appendLog(`selfupdate: ${m}`),
         warn: m => appendLog(`selfupdate warn: ${m}`),

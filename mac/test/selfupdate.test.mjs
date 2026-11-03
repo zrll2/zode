@@ -131,6 +131,24 @@ test('install calls quitAndInstall only when an update is ready', () => {
   assert.equal(u.installs(), 1);
 });
 
+test('install marks the app as quitting before quitAndInstall closes the windows', () => {
+  const order = [];
+  const u = fakeUpdater();
+  u.quitAndInstall = () => order.push('install');
+  const s = createSelfUpdater({ updater: u, isPackaged: true, onBeforeInstall: () => order.push('before') });
+  u.emit('update-downloaded', { version: '3.0.0' });
+  s.install();
+  assert.deepEqual(order, ['before', 'install']);
+});
+
+test('install still runs when the before-install hook throws', () => {
+  const u = fakeUpdater();
+  const s = createSelfUpdater({ updater: u, isPackaged: true, onBeforeInstall: () => { throw new Error('x'); } });
+  u.emit('update-downloaded', { version: '3.0.0' });
+  s.install();
+  assert.equal(u.installs(), 1);
+});
+
 test('the ready callback fires once per version', () => {
   const seen = [];
   const u = fakeUpdater();

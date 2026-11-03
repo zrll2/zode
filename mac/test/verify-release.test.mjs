@@ -119,7 +119,11 @@ test('homebrewMatches fails on a wrong sha256', async () => {
 });
 
 test('homebrewMatches skips with --no-hash', async () => {
-  const r = await checks.homebrewMatches(ctx({ noHash: true }));
+  const dir = await mkdtemp(path.join(tmpdir(), 'cask-'));
+  const cask = path.join(dir, 'zode.rb');
+  await writeFile(cask, `cask "zode" do\n  version "${VERSION}"\n  sha256 "${'a'.repeat(64)}"\nend\n`);   // not the real cask: it moves on every release
+  const r = await checks.homebrewMatches(ctx({ noHash: true, caskPath: cask }));
+  await rm(dir, { recursive: true, force: true });
   assert.equal(r.ok, true);
   assert.equal(r.detail, 'skipped (--no-hash)');
 });

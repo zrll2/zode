@@ -15,7 +15,7 @@ export function shortError(text) {
   return 'Something went wrong while looking for updates.';
 }
 
-export function createSelfUpdater({ updater, isPackaged = false, log = {}, now = Date.now, timers = {}, onReady } = {}) {
+export function createSelfUpdater({ updater, isPackaged = false, log = {}, now = Date.now, timers = {}, onReady, onBeforeInstall } = {}) {
   const setTimeoutFn = timers.setTimeout ?? ((fn, ms) => globalThis.setTimeout(fn, ms));
   const setIntervalFn = timers.setInterval ?? ((fn, ms) => globalThis.setInterval(fn, ms));
   const state = { phase: 'idle', version: null, percent: null, checkedAt: null, error: null };
@@ -74,6 +74,9 @@ export function createSelfUpdater({ updater, isPackaged = false, log = {}, now =
 
   function install() {
     if (state.phase !== 'ready') return;
+    // quitAndInstall closes every window BEFORE it emits before-quit, so the app must already know it is quitting:
+    // otherwise a window that only hides when closed keeps the app alive and the updater waits forever.
+    try { onBeforeInstall?.(); } catch { /* never block the install */ }
     try { updater.quitAndInstall(); } catch (err) { try { log.error?.(`selfupdate: install: ${err?.message ?? err}`); } catch { /* never */ } }
   }
 
